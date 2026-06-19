@@ -1,0 +1,99 @@
+import { z } from "zod"
+
+// ---------------------------------------------------------------------------
+// Run lifecycle (CONTRACT §3, §5)
+
+export const RunStatus = z.enum([
+  "queued",
+  "running",
+  "interrupted",
+  "ready_for_review",
+  "blocked",
+  "failed",
+  "accepted",
+])
+export type RunStatus = z.infer<typeof RunStatus>
+
+export const BlockedReason = z.enum([
+  "human_decision",
+  "scope_expansion",
+  "stop_condition",
+  // A harness-detected stall: ladder, rotation bounce, consecutive turn
+  // failures, or the run watchdog (§5 R10). Recoverable — auto-requeued up to
+  // `maxStallRetries` before escalating to Max.
+  "wedged",
+  // A driver-level failure: executeRun itself threw (worktree/server/IO). NOT
+  // auto-retried — a systemic fault would hot-loop on the same packet (§5 R10).
+  "crashed",
+])
+export type BlockedReason = z.infer<typeof BlockedReason>
+
+export const RunMeta = z.object({
+  runId: z.string(),
+  status: RunStatus,
+  attempt: z.number().int().min(1),
+  repo: z.string(),
+  base: z.string(),
+  branch: z.string(),
+  worktree: z.string(),
+  // Copied from the packet at run start so `meridian tail` can show it without
+  // re-parsing the packet (the run slug is the fallback when absent).
+  summary: z.string().optional(),
+  babySessionId: z.string().optional(),
+  daddySessionId: z.string().optional(),
+  blockedReason: BlockedReason.optional(),
+  blockedQuestion: z.string().optional(),
+  // P6: count of automatic post-stall requeues spent on this run (§5 R10).
+  // Carried across resumes; reset to 0 when Max answers a park (a human looked).
+  stallRetries: z.number().int().min(0).default(0),
+  // Count of consecutive reorients (hallucination recoveries) spent without an
+  // intervening accepted planner decision — the misfire tripwire. Reset to 0 on
+  // any accepted consult (the reseeded Baby recovered); at maxReorientRetries the
+  // driver stops rotating and parks for Max.
+  reorientRetries: z.number().int().min(0).default(0),
+  startedAt: z.string().optional(),
+  endedAt: z.string().optional(),
+  updatedAt: z.string(),
+})
+export type RunMeta = z.infer<typeof RunMeta>
+
+// ---------------------------------------------------------------------------
+// Review obligations (CONTRACT M5 — replacement semantics)
+
+export const ReviewState = z.object({
+  runId: z.string(),
+  obligations: z.array(z.string()),
+  lastDecisionAt: z.string().optional(),
+  updatedAt: z.string(),
+})
+export type ReviewState = z.infer<typeof ReviewState>
+
+// ---------------------------------------------------------------------------
+// Active run pointer (driver-written, plugin-read)
+
+export const ActiveRun = z.object({
+  runId: z.string(),
+  runDir: z.string(),
+  worktree: z.string(),
+  babySessionId: z.string(),
+  startedAt: z.string(),
+})
+export type ActiveRun = z.infer<typeof ActiveRun>
+
+// ---------------------------------------------------------------------------
+// Decision (CONTRACT §9)
+
+export const Decision = z.object({
+  timestamp: z.string(),
+  source: z.enum(["daddy", "max"]),
+  questionType: z.string(),
+  currentSlice: z.string().optional(),
+  question: z.string(),
+  approach: z.string().optional(),
+  evidence: z.array(z.string()).default([]),
+  status: z.string(),
+  answer: z.string(),
+  constraints: z.array(z.string()).default([]),
+  messageId: z.string().optional(),
+})
+export type Decision = z.infer<typeof Decision>

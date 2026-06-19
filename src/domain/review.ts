@@ -1,0 +1,219 @@
+import { z } from "zod"
+
+// ---------------------------------------------------------------------------
+// Planner (CONTRACT §9) — ask_repo_first is deleted in v2 (M3)
+
+export const PlannerStatus = z.enum([
+  "proceed",
+  "proceed_with_constraints",
+  "revise_slice",
+  // Baby has drifted/hallucinated (inventing files, paths, or projects that
+  // don't exist; acting on a confabulated premise) but the correct fix is clear
+  // and needs no human. The driver discards Baby's session and reseeds a fresh
+  // one handed the fix from safe_next_action — NOT a terminal park. Bounded by
+  // maxReorientRetries, then falls through to a human_decision park.
+  "reorient",
+  "human_required",
+  "stop",
+])
+export type PlannerStatus = z.infer<typeof PlannerStatus>
+
+export const ACCEPTED_STATUSES: readonly PlannerStatus[] = [
+  "proceed",
+  "proceed_with_constraints",
+]
+
+export const QuestionType = z.enum([
+  "repo_procedure",
+  "architecture_discoverable",
+  "handoff_interpretation",
+  "stop_condition",
+  "diff_audit",
+  "reconciliation",
+  "other",
+])
+export type QuestionType = z.infer<typeof QuestionType>
+
+export const PlannerResponse = z.object({
+  status: PlannerStatus,
+  answer: z.string(),
+  constraints: z.array(z.string()).default([]),
+  evidence_used: z.array(z.string()).default([]),
+  safe_next_action: z.string(),
+  human_decision_needed: z.string().nullable().default(null),
+})
+export type PlannerResponse = z.infer<typeof PlannerResponse>
+
+// The executor's ask_planner submission. The bridge captures this and hands it
+// to the driver, which runs the Daddy consult OFF the MCP request path: a
+// synchronous Daddy call held across the tool result is cancelled by opencode's
+// MCP client at ~5min (a multi-minute consult then reads as "planner
+// unavailable" and crashes the run). The driver runs it on its own 1h budget.
+export type AskPlannerInput = {
+  questionType: QuestionType
+  currentSlice: string
+  question: string
+  approach: string
+  evidence: string[]
+}
+
+// Final review (CONTRACT V7) — Daddy's one non-mechanical acceptance check.
+// A purpose-built verdict: the mid-run slice statuses (proceed_with_constraints,
+// revise_slice) don't map to a terminal judgement, so overloading them would
+// muddy both.
+export const FinalReviewVerdict = z.enum(["accept", "request_changes", "escalate"])
+export type FinalReviewVerdict = z.infer<typeof FinalReviewVerdict>
+
+export const FinalReview = z.object({
+  verdict: FinalReviewVerdict,
+  findings: z.array(z.string()).default([]),
+  notes: z.string().default(""),
+  human_decision_needed: z.string().nullable().default(null),
+})
+export type FinalReview = z.infer<typeof FinalReview>
+
+// ---------------------------------------------------------------------------
+// Fail-closed parsers (CONTRACT §18 S11, §9 M9)
+// Each parser's candidate-extraction strategy is unique — they guard different scars.
+
+// Balanced top-level objects, ignoring braces inside JSON strings.
+// Used by parsePlannerResponse (reference/src/planner.ts:146-173).
+const extractBalancedObjects = (text: string): string[] => {
+  const objects: string[] = []
+  let depth = 0
+  let start = -1
+  let inString = false
+  let escape = false
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (inString) {
+      if (escape) escape = false
+      else if (ch === "\\") escape = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') inString = true
+    else if (ch === "{") {
+      if (depth === 0) start = i
+      depth += 1
+    } else if (ch === "}" && depth > 0) {
+      depth -= 1
+      if (depth === 0 && start !== -1) {
+        objects.push(text.slice(start, i + 1))
+        start = -1
+      }
+    }
+  }
+  return objects
+}
+
+// Candidate JSON substrings to try, best-first: fenced blocks then every
+// balanced object (last-first, since reasoning models trail the real verdict),
+// then the legacy whole-string fallbacks.
+// Reference: reference/src/planner.ts:178-195
+const plannerResponseCandidates = (raw: string): string[] => {
+  const cleaned = raw.trim()
+  const candidates: string[] = []
+
+  const fences = [...cleaned.matchAll(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/g)]
+    .map((m) => m[1]?.trim())
+    .filter((s): s is string => Boolean(s))
+  candidates.push(...fences.reverse())
+
+  candidates.push(...extractBalancedObjects(cleaned).reverse())
+
+  const start = cleaned.indexOf("{")
+  const end = cleaned.lastIndexOf("}")
+  if (start !== -1 && end > start) candidates.push(cleaned.slice(start, end + 1))
+  candidates.push(cleaned)
+
+  return candidates
+}
+
+// Parse a planner response, or null if nothing validates. Robust to verbose
+// reasoning models that bury the verdict in prose or fenced blocks.
+// Reference: reference/src/planner.ts:199-209
+export const tryParsePlannerResponse = (raw: string): PlannerResponse | null => {
+  for (const candidate of plannerResponseCandidates(raw)) {
+    try {
+      const parsed = PlannerResponse.safeParse(JSON.parse(candidate))
+      if (parsed.success) return parsed.data
+    } catch {
+      /* try next candidate */
+    }
+  }
+  return null
+}
+
+// Fail closed: a planner whose reply still won't parse becomes a hard stop.
+// Reference: reference/src/planner.ts:213-221
+export const parsePlannerResponse = (raw: string): PlannerResponse =>
+  tryParsePlannerResponse(raw) ?? {
+    status: "stop",
+    answer: "Planner returned invalid or malformed JSON; treating as stop.",
+    constraints: [],
+    evidence_used: [],
+    safe_next_action: "Re-ask with a narrower question, or park for Max.",
+    human_decision_needed: null,
+  }
+
+// Why the last reply could not be accepted, phrased for Daddy. Prefers a schema
+// error (valid JSON, wrong shape — directly actionable) over a JSON syntax error
+// (usually a truncated or prose-wrapped reply). Fed verbatim into the re-ask so
+// Daddy is told exactly what to fix, not just "try again".
+// Reference: reference/src/planner.ts:227-244
+export const diagnosePlannerParse = (raw: string): string => {
+  let syntaxError: string | null = null
+  for (const candidate of plannerResponseCandidates(raw)) {
+    let value: unknown
+    try {
+      value = JSON.parse(candidate)
+    } catch (err) {
+      syntaxError ??= err instanceof Error ? err.message : String(err)
+      continue
+    }
+    const parsed = PlannerResponse.safeParse(value)
+    if (parsed.success) continue // a valid candidate exists — caller would not be here
+    return parsed.error.issues
+      .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+      .join("; ")
+  }
+  return syntaxError ?? "no JSON object found in the reply"
+}
+
+// Sent back to Daddy on the same session when his reply did not parse, carrying
+// the concrete reason: most misses are a verbose model burying or truncating the
+// JSON, recoverable in one re-ask (Baby recovered exactly this way live).
+// Reference: reference/src/planner.ts:249-250
+export const jsonReaskNudge = (reason: string): string =>
+  `Your previous reply could not be accepted: ${reason}. Reply again with ONLY the JSON verdict object in the response shape above — no reasoning, no markdown fences, nothing before the opening { or after the closing }.`
+
+// parseFinalReview: try fenced JSON block first, then outermost braces slice.
+// NOT a balanced-object scan — the scar it guards is different from parseSuperReview.
+// Reference: reference/src/final-review.ts:82-107
+export const parseFinalReview = (raw: string): FinalReview => {
+  let cleaned = raw.trim()
+  const fenceMatch = cleaned.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/)
+  if (fenceMatch && fenceMatch[1] !== undefined) cleaned = fenceMatch[1].trim()
+
+  const candidates: string[] = [cleaned]
+  const start = cleaned.indexOf("{")
+  const end = cleaned.lastIndexOf("}")
+  if (start !== -1 && end > start) candidates.push(cleaned.slice(start, end + 1))
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = FinalReview.safeParse(JSON.parse(candidate))
+      if (parsed.success) return parsed.data
+    } catch {
+      /* try next candidate */
+    }
+  }
+
+  return {
+    verdict: "request_changes",
+    findings: ["Daddy's final-review response was not valid JSON; failing closed to request_changes."],
+    notes: "unparseable verdict",
+    human_decision_needed: null,
+  }
+}

@@ -4,6 +4,13 @@ import type { FinalReview } from "./review.js";
 import { BlockedReason } from "./run.js";
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+export const isTestPath = (path: string): boolean =>
+  path.startsWith("tests/") || path.endsWith(".test.ts");
+
+// ---------------------------------------------------------------------------
 // Report (CONTRACT §11, V4)
 
 export const FileClassification = z.enum([
@@ -42,6 +49,20 @@ export const SubmitReport = z.object({
     .default([]),
   escalations: z.array(z.string()).default([]),
   remainingUncertainty: z.array(z.string()).default([]),
+  regressionGuard: z
+    .object({
+      tests: z
+        .array(
+          z.object({
+            name: z.string(),
+            file: z.string(),
+            covers: z.string(),
+          }),
+        )
+        .default([]),
+      noTestJustification: z.string().optional(),
+    })
+    .default({ tests: [] }),
 });
 export type SubmitReport = z.infer<typeof SubmitReport>;
 
@@ -104,6 +125,18 @@ export const renderReportMarkdown = (
       ...report.remainingUncertainty.map((u) => `- ${u}`),
       "",
     );
+  }
+  if (report.regressionGuard.tests.length > 0 || report.regressionGuard.noTestJustification) {
+    lines.push(`## Regression guard`, "");
+    if (report.regressionGuard.tests.length > 0) {
+      lines.push(`Regression tests that would have caught the failure:`);
+      for (const t of report.regressionGuard.tests) {
+        lines.push(`- \`${t.name}\` (\`${t.file}\`): ${t.covers}`);
+      }
+    }
+    if (report.regressionGuard.noTestJustification) {
+      lines.push(`No regression test (justification):`, "", report.regressionGuard.noTestJustification, "");
+    }
   }
   if (finalReview) {
     lines.push(

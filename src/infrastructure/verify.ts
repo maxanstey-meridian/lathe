@@ -36,9 +36,9 @@ export const createVerify = (): Verify => ({
   runAutoFix: async (commands: VerificationCommand[], expectedSurface: string[], worktree: string, timeoutMs: number): Promise<void> => {
     if (commands.length === 0 || expectedSurface.length === 0) return
     const wt = resolve(worktree)
-    // Append surface entries as quoted arguments to each command.
-    // The command's own tooling handles glob expansion.
-    const args = expectedSurface.map((s) => `'${s}'`).join(" ")
+    // Shell-escape each surface entry for safe interpolation into /bin/zsh.
+    const shellEscape = (s: string): string => `'${s.replace(/'/g, "'\\''")}'`
+    const args = expectedSurface.map(shellEscape).join(" ")
     for (const cmd of commands) {
       try {
         execSync(`${cmd.command} ${args}`, {

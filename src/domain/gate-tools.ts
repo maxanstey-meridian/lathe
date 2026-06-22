@@ -2,6 +2,8 @@
 // No fs, no child_process, no Date. These are importable by
 // both the driver and the gate plugin.
 
+import { normalize } from "node:path/posix"
+
 export const isBridgeTool = (tool: string): boolean => {
   const t = tool.toLowerCase()
   return (
@@ -33,7 +35,7 @@ export const commandFromArgs = (args: unknown): string => {
 }
 
 // R4: Baby never mutates git state; the driver owns commits and branches.
-export const FORBIDDEN_GIT = /\bgit\b[^|;&]*\b(commit|push|reset|checkout|rebase|stash|clean|merge|cherry-pick|worktree)\b/
+export const FORBIDDEN_GIT = /\bgit\b[^|;&]*\b(commit|push|reset|checkout|rebase|stash|clean|merge|cherry-pick|worktree|switch|restore|add|branch|tag)\b/
 
 export const isForbiddenGitCommand = (command: string): boolean => FORBIDDEN_GIT.test(command)
 
@@ -76,9 +78,20 @@ export const editTargetOutOfSurface = (
   const raw = typeof record.filePath === "string" ? record.filePath : typeof record.path === "string" ? record.path : undefined
   if (!raw) return undefined
   const prefix = worktree.endsWith("/") ? worktree : `${worktree}/`
-  const relative = raw.startsWith(prefix) ? raw.slice(prefix.length) : raw
+  if (raw.startsWith(prefix)) {
+    const afterPrefix = raw.slice(prefix.length)
+    const normalized = normalize(afterPrefix)
+    // An absolute path whose remainder climbs out of the worktree is invisible
+    // to the run's diff — denying here is the ONLY net for it. Never fail open.
+    if (normalized === ".." || normalized.startsWith("../")) return raw
+    // Empty string (path resolves to worktree root itself) is allowed.
+    return undefined
+  }
   // An absolute path outside the worktree is invisible to the run's diff —
   // denying here is the ONLY net for it. Never fail open.
-  if (relative.startsWith("/")) return raw
+  if (raw.startsWith("/")) return raw
+  // Relative path: normalize and check for parent-dir escapes.
+  const normalized = normalize(raw)
+  if (normalized === ".." || normalized.startsWith("../")) return raw
   return undefined
 }

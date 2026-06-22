@@ -214,6 +214,11 @@ test("isForbiddenGitCommand: git mutations blocked", () => {
   assert.ok(isForbiddenGitCommand("git merge origin/main"))
   assert.ok(isForbiddenGitCommand("git cherry-pick abc123"))
   assert.ok(isForbiddenGitCommand("git worktree add ../other"))
+  assert.ok(isForbiddenGitCommand("git switch main"))
+  assert.ok(isForbiddenGitCommand("git restore src/file.ts"))
+  assert.ok(isForbiddenGitCommand("git add src/file.ts"))
+  assert.ok(isForbiddenGitCommand("git branch feature"))
+  assert.ok(isForbiddenGitCommand("git tag v1.0"))
   assert.ok(!isForbiddenGitCommand("git status"))
   assert.ok(!isForbiddenGitCommand("git diff HEAD"))
   assert.ok(!isForbiddenGitCommand("git log --oneline"))
@@ -268,14 +273,42 @@ test("editTargetOutOfSurface: absolute path outside worktree is blocked", () => 
   assert.strictEqual(target, "/etc/passwd")
 })
 
+test("editTargetOutOfSurface: absolute path climbing out via .. is blocked", () => {
+  const target = editTargetOutOfSurface(
+    "edit",
+    { filePath: "/home/user/worktree/../../etc/passwd" },
+    "/home/user/worktree",
+  )
+  assert.strictEqual(target, "/home/user/worktree/../../etc/passwd")
+})
+
 test("editTargetOutOfSurface: in-worktree paths are NOT blocked", () => {
   const safe = editTargetOutOfSurface("edit", { filePath: "/home/user/worktree/src/file.ts" }, "/home/user/worktree")
   assert.strictEqual(safe, undefined)
 })
 
-test("editTargetOutOfSurface: relative paths are NOT blocked (file-surface gate removed)", () => {
-  const relative = editTargetOutOfSurface("edit", { filePath: "../other/file.ts" }, "/home/user/worktree")
-  assert.strictEqual(relative, undefined)
+test("editTargetOutOfSurface: in-worktree path containing .. that stays inside is NOT blocked", () => {
+  const safe = editTargetOutOfSurface(
+    "edit",
+    { filePath: "/home/user/worktree/a/../b" },
+    "/home/user/worktree",
+  )
+  assert.strictEqual(safe, undefined)
+})
+
+test("editTargetOutOfSurface: relative path climbing out is blocked", () => {
+  const escaped = editTargetOutOfSurface("edit", { filePath: "../other/file.ts" }, "/home/user/worktree")
+  assert.strictEqual(escaped, "../other/file.ts")
+})
+
+test("editTargetOutOfSurface: relative path that resolves to worktree root is NOT blocked", () => {
+  const safe = editTargetOutOfSurface("edit", { filePath: "." }, "/home/user/worktree")
+  assert.strictEqual(safe, undefined)
+})
+
+test("editTargetOutOfSurface: relative dotted filename like ..foo is NOT blocked", () => {
+  const safe = editTargetOutOfSurface("edit", { filePath: "..foo" }, "/home/user/worktree")
+  assert.strictEqual(safe, undefined)
 })
 
 test("editTargetOutOfSurface: non-edit tools return undefined", () => {

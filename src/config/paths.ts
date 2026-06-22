@@ -1,44 +1,44 @@
-import { homedir } from "node:os"
-import { join } from "node:path"
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 export const expandHome = (p: string): string =>
-  p.startsWith("~") ? join(homedir(), p.slice(1)) : p
+  p.startsWith("~") ? join(homedir(), p.slice(1)) : p;
 
 export type Paths = {
-  root: string
-  configFile: string
-  queueDir: string
-  rejectedDir: string
-  stagedDir: string
-  stagedFile: (runId: string) => string
-  runsDir: string
-  activeRunFile: string
-  xdgConfigHome: string
-  opencodeConfigFile: string
-  serveLogFile: string
-  runDir: (runId: string) => string
-  packetFile: (runId: string) => string
-  metaFile: (runId: string) => string
-  journalFile: (runId: string) => string
-  decisionsFile: (runId: string) => string
-  reviewStateFile: (runId: string) => string
-  outcomesFile: (runId: string) => string
-  gateStateFile: (runId: string) => string
-  checkpointsDir: (runId: string) => string
-  reportFile: (runId: string) => string
-  nitsFile: (runId: string) => string
-  convergenceFile: (runId: string) => string
-  campaignsDir: string
-  campaignDir: (campaignId: string) => string
-  campaignFile: (campaignId: string) => string
-}
+  root: string;
+  configFile: string;
+  queueDir: string;
+  rejectedDir: string;
+  stagedDir: string;
+  stagedFile: (runId: string) => string;
+  runsDir: string;
+  activeRunFile: string;
+  xdgConfigHome: string;
+  opencodeConfigFile: string;
+  serveLogFile: string;
+  runDir: (runId: string) => string;
+  packetFile: (runId: string) => string;
+  metaFile: (runId: string) => string;
+  journalFile: (runId: string) => string;
+  decisionsFile: (runId: string) => string;
+  reviewStateFile: (runId: string) => string;
+  outcomesFile: (runId: string) => string;
+  gateStateFile: (runId: string) => string;
+  checkpointsDir: (runId: string) => string;
+  reportFile: (runId: string) => string;
+  nitsFile: (runId: string) => string;
+  convergenceFile: (runId: string) => string;
+  campaignsDir: string;
+  campaignDir: (campaignId: string) => string;
+  campaignFile: (campaignId: string) => string;
+};
 
 export const makePaths = (stateRoot: string): Paths => {
-  const root = expandHome(stateRoot)
-  const runsDir = join(root, "runs")
-  const runDir = (runId: string) => join(runsDir, runId)
-  const campaignsDir = join(root, "campaigns")
-  const campaignDir = (campaignId: string) => join(campaignsDir, campaignId)
+  const root = expandHome(stateRoot);
+  const runsDir = join(root, "runs");
+  const runDir = (runId: string) => join(runsDir, runId);
+  const campaignsDir = join(root, "campaigns");
+  const campaignDir = (campaignId: string) => join(campaignsDir, campaignId);
   return {
     root,
     configFile: join(root, "config.json"),
@@ -66,5 +66,5 @@ export const makePaths = (stateRoot: string): Paths => {
     campaignsDir,
     campaignDir,
     campaignFile: (campaignId) => join(campaignDir(campaignId), "campaign.json"),
-  }
-}
+  };
+};

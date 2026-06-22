@@ -4,14 +4,14 @@
 // These are no-ops: they do nothing at runtime and are never imported by
 // production code. They exist solely to satisfy the type system.
 
-import type { Clock } from "./application/ports/clock.js"
-import type { Executor } from "./application/ports/executor.js"
-import type { Repo } from "./application/ports/repo.js"
-import type { Store } from "./application/ports/store.js"
-import type { Planner } from "./application/ports/planner.js"
-import type { Reviewer } from "./application/ports/reviewer.js"
-import type { Verify } from "./application/ports/verify.js"
-import type { Caffeinate } from "./application/ports/caffeinate.js"
+import type { Caffeinate } from "./application/ports/caffeinate.js";
+import type { Clock } from "./application/ports/clock.js";
+import type { Executor } from "./application/ports/executor.js";
+import type { Planner } from "./application/ports/planner.js";
+import type { Repo } from "./application/ports/repo.js";
+import type { Reviewer } from "./application/ports/reviewer.js";
+import type { Store } from "./application/ports/store.js";
+import type { Verify } from "./application/ports/verify.js";
 
 // ---------------------------------------------------------------------------
 // Clock fake
@@ -19,7 +19,7 @@ import type { Caffeinate } from "./application/ports/caffeinate.js"
 const fakeClock: Clock = {
   now: () => 0,
   nowIso: () => "00000000-00:00:00.000Z",
-}
+};
 
 // ---------------------------------------------------------------------------
 // Executor fake
@@ -29,7 +29,7 @@ const fakeExecutor: Executor = {
   sendMessage: async () => ({ info: { id: "msg", sessionID: "sid" }, parts: [] }),
   listMessages: async () => [],
   deleteSession: async () => {},
-}
+};
 
 // ---------------------------------------------------------------------------
 // Repo fake
@@ -50,7 +50,7 @@ const fakeRepo: Repo = {
   isCloneSandbox: () => false,
   repoValid: () => true,
   mergeAccept: () => {},
-}
+};
 
 // ---------------------------------------------------------------------------
 // Store fake
@@ -74,9 +74,17 @@ const fakeStore: Store = {
   initialLedger: () => ({ runId: "fake", outcomes: [], updatedAt: "00000000-00:00:00.000Z" }),
   readLedger: () => ({ runId: "fake", outcomes: [], updatedAt: "00000000-00:00:00.000Z" }),
   writeLedger: () => {},
-  initialReviewState: () => ({ runId: "fake", obligations: [], updatedAt: "00000000-00:00:00.000Z" }),
+  initialReviewState: () => ({
+    runId: "fake",
+    obligations: [],
+    updatedAt: "00000000-00:00:00.000Z",
+  }),
   readReviewState: () => ({ runId: "fake", obligations: [], updatedAt: "00000000-00:00:00.000Z" }),
-  replaceObligations: () => ({ runId: "fake", obligations: [], updatedAt: "00000000-00:00:00.000Z" }),
+  replaceObligations: () => ({
+    runId: "fake",
+    obligations: [],
+    updatedAt: "00000000-00:00:00.000Z",
+  }),
   appendDecision: () => {},
   readDecisions: () => [],
   latestCheckpoint: () => undefined,
@@ -119,7 +127,7 @@ const fakeStore: Store = {
   removeStaged: () => {},
   appendJournal: () => {},
   readJournal: () => [],
-}
+};
 
 // ---------------------------------------------------------------------------
 // Planner fake
@@ -127,9 +135,21 @@ const fakeStore: Store = {
 const fakePlanner: Planner = {
   handshake: async () => "PLANNER_OK",
   resumeSession: async () => "PLANNER_OK",
-  consult: async () => ({ status: "proceed", answer: "proceed", constraints: [], evidence_used: [], safe_next_action: "continue", human_decision_needed: null }),
-  finalReview: async () => ({ verdict: "accept", findings: [], notes: "accept", human_decision_needed: null }),
-}
+  consult: async () => ({
+    status: "proceed",
+    answer: "proceed",
+    constraints: [],
+    evidence_used: [],
+    safe_next_action: "continue",
+    human_decision_needed: null,
+  }),
+  finalReview: async () => ({
+    verdict: "accept",
+    findings: [],
+    notes: "accept",
+    human_decision_needed: null,
+  }),
+};
 
 // ---------------------------------------------------------------------------
 // Reviewer fake
@@ -146,7 +166,7 @@ const fakeReviewer: Reviewer = {
     },
     raw: "",
   }),
-}
+};
 
 // ---------------------------------------------------------------------------
 // Verify fake
@@ -154,11 +174,11 @@ const fakeReviewer: Reviewer = {
 const fakeVerify: Verify = {
   run: async () => [],
   runAutoFix: async () => {},
-}
+};
 
 // ---------------------------------------------------------------------------
 // Caffeinate fake
 
 const fakeCaffeinate: Caffeinate = {
   holdPowerAssertion: async () => {},
-}
+};

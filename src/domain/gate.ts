@@ -1,9 +1,9 @@
-import { z } from "zod"
+import { z } from "zod";
 
 // ---------------------------------------------------------------------------
 // Gate state (CONTRACT §10) — driver-written, plugin-read
 
-export const DiffStat = z.object({ added: z.number(), removed: z.number() })
+export const DiffStat = z.object({ added: z.number(), removed: z.number() });
 
 export const GateState = z.object({
   runId: z.string(),
@@ -30,8 +30,8 @@ export const GateState = z.object({
   checkpointLoc: z.number().int().optional(),
   mutationCommandPatterns: z.array(z.string()).default([]),
   updatedAt: z.string(),
-})
-export type GateState = z.infer<typeof GateState>
+});
+export type GateState = z.infer<typeof GateState>;
 
 // The gate a fresh run starts with (R2/G5): first-edit is unapproved (the first
 // edit demands an accepted planner decision), nothing is reconciling, and the
@@ -43,11 +43,11 @@ export const initialGateState = (
   expectedGlobs: string[],
   suspiciousGlobs: string[],
   limits: {
-    checkpointNudgeMs: number
-    checkpointToolCalls: number
-    checkpointFiles: number
-    checkpointLoc: number
-    mutationCommandPatterns: string[]
+    checkpointNudgeMs: number;
+    checkpointToolCalls: number;
+    checkpointFiles: number;
+    checkpointLoc: number;
+    mutationCommandPatterns: string[];
   },
   nowIso: string,
 ): GateState => ({
@@ -64,4 +64,4 @@ export const initialGateState = (
   checkpointLoc: limits.checkpointLoc,
   mutationCommandPatterns: limits.mutationCommandPatterns,
   updatedAt: nowIso,
-})
+});

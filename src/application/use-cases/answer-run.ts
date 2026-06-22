@@ -8,24 +8,25 @@
 // Only a blocked run is answerable; anything else is refused (no-op).
 // ---------------------------------------------------------------------------
 
-import type { Store } from "../ports/store.js"
-import type { Repo } from "../ports/repo.js"
-import type { Clock } from "../ports/clock.js"
+import { clearedGateState } from "../../domain/index.js";
+import type { Clock } from "../ports/clock.js";
+import type { Repo } from "../ports/repo.js";
+import type { Store } from "../ports/store.js";
 
-import { clearedGateState } from "../../domain/index.js"
-
-export type AnswerResult = {
-  ok: true
-  checkpoint?: number
-  decision: {
-    source: "max"
-    status: "proceed"
-    questionType: "stop_condition"
-  }
-} | {
-  ok: false
-  reason: string
-}
+export type AnswerResult =
+  | {
+      ok: true;
+      checkpoint?: number;
+      decision: {
+        source: "max";
+        status: "proceed";
+        questionType: "stop_condition";
+      };
+    }
+  | {
+      ok: false;
+      reason: string;
+    };
 
 // Answer a parked run with Max's decision. The run must be blocked; otherwise
 // this is a no-op refusal (only a blocked run is answerable — R7).
@@ -43,14 +44,14 @@ export const answerRun = (
   worktree: string,
   clock: Clock,
 ): AnswerResult => {
-  const meta = store.readMetaIfExists(runId)
+  const meta = store.readMetaIfExists(runId);
   if (!meta || meta.status !== "blocked") {
     return {
       ok: false,
       reason: meta
         ? `run ${runId} is not parked (status: ${meta.status})`
         : `run ${runId} not found`,
-    }
+    };
   }
 
   store.appendDecision(runId, {
@@ -62,20 +63,20 @@ export const answerRun = (
     status: "proceed",
     answer,
     constraints: [],
-  })
+  });
 
-  const g = store.readGateState(runId)
-  store.writeGateState(runId, clearedGateState(g, repo.readDiffStats(worktree), clock.nowIso()))
+  const g = store.readGateState(runId);
+  store.writeGateState(runId, clearedGateState(g, repo.readDiffStats(worktree), clock.nowIso()));
 
-  const { blockedReason: _br, blockedQuestion: _bq, ...rest } = meta
+  const { blockedReason: _br, blockedQuestion: _bq, ...rest } = meta;
   store.writeMeta({
     ...rest,
     status: "queued",
     stallRetries: 0,
     updatedAt: clock.nowIso(),
-  })
+  });
 
-  const checkpoint = store.latestCheckpoint(runId)
+  const checkpoint = store.latestCheckpoint(runId);
 
   return {
     ok: true,
@@ -85,5 +86,5 @@ export const answerRun = (
       status: "proceed",
       questionType: "stop_condition",
     },
-  }
-}
+  };
+};

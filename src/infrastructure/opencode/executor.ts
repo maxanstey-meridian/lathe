@@ -2,10 +2,10 @@
 // sendMessage uses node:http.request (NOT fetch — the >300s turn-death scar).
 // createSession/listMessages/deleteSession use fetch (short calls only).
 
-import { request as httpRequest } from "node:http"
-import type { Config } from "../../config/schemas.js"
-import type { TurnResponse } from "../../domain/agent-response.js"
-import type { Executor, ModelConfig } from "../../application/ports/executor.js"
+import { request as httpRequest } from "node:http";
+import type { Executor, ModelConfig } from "../../application/ports/executor.js";
+import type { Config } from "../../config/schemas.js";
+import type { TurnResponse } from "../../domain/agent-response.js";
 
 // ---------------------------------------------------------------------------
 // Streaming body parser (reference/src/opencode.ts:312-333)
@@ -13,28 +13,27 @@ import type { Executor, ModelConfig } from "../../application/ports/executor.js"
 // the complete message (info + parts) is among the payloads.
 
 const parseStreamingBody = (body: string): TurnResponse => {
-  const payloads: unknown[] = []
+  const payloads: unknown[] = [];
   for (const line of body.split("\n")) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed === "[DONE]") continue
-    const data = trimmed.startsWith("data: ") ? trimmed.slice(6).trim() : trimmed
-    if (data === "[DONE]") continue
+    const trimmed = line.trim();
+    if (!trimmed || trimmed === "[DONE]") continue;
+    const data = trimmed.startsWith("data: ") ? trimmed.slice(6).trim() : trimmed;
+    if (data === "[DONE]") continue;
     try {
-      payloads.push(JSON.parse(data))
+      payloads.push(JSON.parse(data));
     } catch {
       /* skip unparseable */
     }
   }
   const complete = payloads.find(
-    (p): p is TurnResponse =>
-      typeof p === "object" && p !== null && "info" in p && "parts" in p,
-  )
-  if (!complete) throw new Error("streaming response contained no complete message payload")
-  return complete
-}
+    (p): p is TurnResponse => typeof p === "object" && p !== null && "info" in p && "parts" in p,
+  );
+  if (!complete) throw new Error("streaming response contained no complete message payload");
+  return complete;
+};
 
 export const createOpencodeClient = (config: Config): Executor => {
-  const base = `http://127.0.0.1:${config.opencode.port}`
+  const base = `http://127.0.0.1:${config.opencode.port}`;
 
   // Sessions are scoped to a directory via the query param (proven live):
   // Baby and Daddy both live in the run's worktree, so file access inside it
@@ -44,105 +43,120 @@ export const createOpencodeClient = (config: Config): Executor => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ title }),
-    })
-    if (!res.ok) throw new Error(`session create failed: ${res.status} ${await res.text()}`)
-    const data = (await res.json()) as { id?: string }
-    if (!data.id) throw new Error(`session create returned no id: ${JSON.stringify(data)}`)
-    return data.id
-  }
+    });
+    if (!res.ok) throw new Error(`session create failed: ${res.status} ${await res.text()}`);
+    const data = (await res.json()) as { id?: string };
+    if (!data.id) throw new Error(`session create returned no id: ${JSON.stringify(data)}`);
+    return data.id;
+  };
 
   // node:http, not fetch: a turn's response can take as long as the model
   // takes (30-min default for a local 35B). undici's fetch kills any request
   // whose headers/body stall past ~300s — learned live when every Baby turn
   // longer than 5 minutes died with "fetch failed". The only timeout here is
   // ours.
-  const sendMessage = (sessionId: string, text: string, model: ModelConfig, timeoutMs: number, signal?: AbortSignal): Promise<TurnResponse> =>
+  const sendMessage = (
+    sessionId: string,
+    text: string,
+    model: ModelConfig,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<TurnResponse> =>
     new Promise<TurnResponse>((resolve, reject) => {
       const payload = JSON.stringify({
         model: { providerID: model.providerId, modelID: model.modelId },
         agent: model.agent,
         parts: [{ type: "text", text }],
-      })
-      let idleTimer: ReturnType<typeof setTimeout> | undefined
-      const idleMs = config.idleTimeoutMs
+      });
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      const idleMs = config.idleTimeoutMs;
       const armIdle = (): void => {
-        if (idleMs === false) return
-        if (idleTimer) clearTimeout(idleTimer)
+        if (idleMs === false) return;
+        if (idleTimer) clearTimeout(idleTimer);
         idleTimer = setTimeout(() => {
-          req.destroy(new Error(`no data for ${idleMs}ms — connection stalled`))
-        }, idleMs)
-      }
+          req.destroy(new Error(`no data for ${idleMs}ms — connection stalled`));
+        }, idleMs);
+      };
       const req = httpRequest(
         `${base}/session/${sessionId}/message`,
-        { method: "POST", headers: { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } },
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "content-length": Buffer.byteLength(payload),
+          },
+        },
         (res) => {
-          const chunks: Buffer[] = []
+          const chunks: Buffer[] = [];
           // Arm the idle timer when the response starts (headers received).
           // It resets on each data chunk. If silence exceeds idleTimeoutMs,
           // the request is destroyed.
-          armIdle()
+          armIdle();
           res.on("data", (c: Buffer) => {
             // Reset the idle timer on every chunk of data.
-            armIdle()
-            chunks.push(c)
-          })
+            armIdle();
+            chunks.push(c);
+          });
           res.on("end", () => {
-            cleanup()
-            const body = Buffer.concat(chunks).toString("utf-8")
+            cleanup();
+            const body = Buffer.concat(chunks).toString("utf-8");
             if ((res.statusCode ?? 500) >= 400) {
-              reject(new Error(`message send failed: ${res.statusCode} ${body.slice(0, 500)}`))
-              return
+              reject(new Error(`message send failed: ${res.statusCode} ${body.slice(0, 500)}`));
+              return;
             }
             try {
-              const contentType = res.headers["content-type"] ?? ""
+              const contentType = res.headers["content-type"] ?? "";
               if (contentType.includes("application/json") || contentType.includes("text/plain")) {
-                resolve(JSON.parse(body) as TurnResponse)
+                resolve(JSON.parse(body) as TurnResponse);
               } else {
-                resolve(parseStreamingBody(body))
+                resolve(parseStreamingBody(body));
               }
             } catch (err) {
-              reject(err instanceof Error ? err : new Error(String(err)))
+              reject(err instanceof Error ? err : new Error(String(err)));
             }
-          })
+          });
           res.on("error", (err) => {
-            cleanup()
-            reject(err)
-          })
+            cleanup();
+            reject(err);
+          });
         },
-      )
+      );
       // Two ways the request settles early: our own deadline, or the caller
       // aborting (MCP request cancelled). Both destroy the socket, which surfaces
       // as a req 'error' → reject, which the caller's catch then handles.
-      const timer = setTimeout(() => req.destroy(new Error(`turn exceeded ${timeoutMs}ms`)), timeoutMs)
+      const timer = setTimeout(
+        () => req.destroy(new Error(`turn exceeded ${timeoutMs}ms`)),
+        timeoutMs,
+      );
       const onAbort = (): void => {
-        req.destroy(new Error("request cancelled by caller (abandoned)"))
-      }
+        req.destroy(new Error("request cancelled by caller (abandoned)"));
+      };
       const cleanup = (): void => {
-        clearTimeout(timer)
-        if (idleTimer) clearTimeout(idleTimer)
-        signal?.removeEventListener("abort", onAbort)
-      }
+        clearTimeout(timer);
+        if (idleTimer) clearTimeout(idleTimer);
+        signal?.removeEventListener("abort", onAbort);
+      };
       req.on("error", (err) => {
-        cleanup()
-        reject(err)
-      })
+        cleanup();
+        reject(err);
+      });
       if (signal?.aborted === true) {
-        req.destroy(new Error("request cancelled by caller (abandoned)"))
+        req.destroy(new Error("request cancelled by caller (abandoned)"));
       } else {
-        signal?.addEventListener("abort", onAbort, { once: true })
+        signal?.addEventListener("abort", onAbort, { once: true });
       }
-      req.end(payload)
-    })
+      req.end(payload);
+    });
 
   const listMessages = async (sessionId: string): Promise<TurnResponse[]> => {
-    const res = await fetch(`${base}/session/${sessionId}/message`)
-    if (!res.ok) throw new Error(`message list failed: ${res.status} ${await res.text()}`)
-    return (await res.json()) as TurnResponse[]
-  }
+    const res = await fetch(`${base}/session/${sessionId}/message`);
+    if (!res.ok) throw new Error(`message list failed: ${res.status} ${await res.text()}`);
+    return (await res.json()) as TurnResponse[];
+  };
 
   const deleteSession = async (sessionId: string): Promise<void> => {
-    await fetch(`${base}/session/${sessionId}`, { method: "DELETE" })
-  }
+    await fetch(`${base}/session/${sessionId}`, { method: "DELETE" });
+  };
 
-  return { createSession, sendMessage, listMessages, deleteSession }
-}
+  return { createSession, sendMessage, listMessages, deleteSession };
+};

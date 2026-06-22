@@ -3,10 +3,10 @@
 // itself never depends on it (turns are awaited POSTs). Interfaces only — zero
 // runtime. Generic event shape so the port does not pull in opencode specifics.
 
-export type OpencodeEvent = { type: string; properties?: Record<string, unknown> }
+export type OpencodeEvent = { type: string; properties?: Record<string, unknown> };
 
-export type EventSubscription = { close: () => void }
+export type EventSubscription = { close: () => void };
 
 export type Events = {
-  subscribe(directory: string, onEvent: (event: OpencodeEvent) => void): EventSubscription
-}
+  subscribe(directory: string, onEvent: (event: OpencodeEvent) => void): EventSubscription;
+};

@@ -1,20 +1,20 @@
 {
   "name": "lathe",
   "version": "0.0.0",
-  "description": "Meridian v3 — sequential overnight executor of human-written specs.",
-  "type": "module",
   "private": true,
-  "packageManager": "pnpm@11.5.2",
-  "engines": {
-    "node": ">=22"
-  },
+  "description": "Meridian v3 — sequential overnight executor of human-written specs.",
   "bin": {
     "meridian": "dist/interfaces/cli/index.js"
   },
+  "type": "module",
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/*.test.ts",
+    "lint": "oxlint src tests",
+    "lint:fix": "oxlint --fix src tests",
+    "fmt": "oxfmt src tests",
+    "fmt:check": "oxfmt --check src tests"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
@@ -26,7 +26,13 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",
+    "oxfmt": "^0.55.0",
+    "oxlint": "^1.70.0",
     "tsx": "^4.20.0",
     "typescript": "^5.7.0"
-  }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.5.2"
 }

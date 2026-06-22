@@ -1,0 +1,10 @@
+{
+  "categories": {
+    "correctness": "warn"
+  },
+  "rules": {
+    "no-unused-vars": "warn",
+    "curly": "off"
+  },
+  "ignorePatterns": ["reference/**", "dist/**", "node_modules/**"]
+}

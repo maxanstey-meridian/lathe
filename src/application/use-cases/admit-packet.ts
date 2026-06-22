@@ -8,11 +8,11 @@
 // its problems — never deletes it (F3).
 // ---------------------------------------------------------------------------
 
-import type { Store } from "../ports/store.js"
+import type { Store } from "../ports/store.js";
 
 // Admit a packet file (identified by runId) into the queue. The raw packet
 // content is validated at every layer: YAML parse → schema validate → repo
 // check → base resolve → queue write. Any failure archives the packet (F3).
 export const admitPacket = (store: Store, runId: string, raw: string): void => {
-  store.admitQueue(runId, raw)
-}
+  store.admitQueue(runId, raw);
+};

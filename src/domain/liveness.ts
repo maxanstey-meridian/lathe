@@ -13,17 +13,13 @@
 // never rotate forever — the backstop is the guarantee (R10/R3 scar).
 // ---------------------------------------------------------------------------
 
-export type StallAction = "park" | "rotate" | "nudge"
+export type StallAction = "park" | "rotate" | "nudge";
 
-export const stallAction = (
-  ladder: number,
-  rotateAt: number,
-  parkAt: number,
-): StallAction => {
-  if (ladder >= parkAt) return "park"
-  if (rotateAt > 0 && ladder % rotateAt === 0) return "rotate"
-  return "nudge"
-}
+export const stallAction = (ladder: number, rotateAt: number, parkAt: number): StallAction => {
+  if (ladder >= parkAt) return "park";
+  if (rotateAt > 0 && ladder % rotateAt === 0) return "rotate";
+  return "nudge";
+};
 
 // ---------------------------------------------------------------------------
 // Stall recovery — bounded auto-requeue for wedged parks (CONTRACT §5 R10)
@@ -37,19 +33,18 @@ export const stallAction = (
 export type StallRecoveryDecision =
   | { action: "requeue"; stallRetries: number }
   | { action: "escalate"; stallRetries: number }
-  | { action: "none" }
+  | { action: "none" };
 
 export const decideStallRecovery = (
   meta: { status: string; blockedReason?: string; stallRetries: number },
   maxStallRetries: number,
 ): StallRecoveryDecision => {
-  if (meta.status !== "blocked" || meta.blockedReason !== "wedged")
-    return { action: "none" }
-  const used = meta.stallRetries ?? 0
+  if (meta.status !== "blocked" || meta.blockedReason !== "wedged") return { action: "none" };
+  const used = meta.stallRetries ?? 0;
   return used < maxStallRetries
     ? { action: "requeue", stallRetries: used + 1 }
-    : { action: "escalate", stallRetries: used }
-}
+    : { action: "escalate", stallRetries: used };
+};
 
 // ---------------------------------------------------------------------------
 // Reorient bound — consecutive hallucination recoveries (CONTRACT §5 R11)
@@ -61,12 +56,9 @@ export const decideStallRecovery = (
 
 export type ReorientBound =
   | { allowed: true; escalating: false }
-  | { allowed: false; escalating: true }
+  | { allowed: false; escalating: true };
 
-export const checkReorientBound = (
-  used: number,
-  maxReorientRetries: number,
-): ReorientBound => {
-  if (used >= maxReorientRetries) return { allowed: false, escalating: true }
-  return { allowed: true, escalating: false }
-}
+export const checkReorientBound = (used: number, maxReorientRetries: number): ReorientBound => {
+  if (used >= maxReorientRetries) return { allowed: false, escalating: true };
+  return { allowed: true, escalating: false };
+};

@@ -6,7 +6,7 @@
 // check does not see an infrastructure import from application code.
 
 export type BridgePort<Ref = unknown> = {
-  bind(): Promise<Ref>
-  clearActive(ref: Ref): void
-  close(): void
-}
+  bind(): Promise<Ref>;
+  clearActive(ref: Ref): void;
+  close(): void;
+};

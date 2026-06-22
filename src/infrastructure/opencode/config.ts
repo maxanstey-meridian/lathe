@@ -2,12 +2,20 @@
 // Generates the isolated XDG config, spawns the serve process, and waits for readiness.
 // The gate plugin, the custom agents, and the off-MCP transport are all wired here.
 
-import { spawn, execSync, type ChildProcess } from "node:child_process"
-import { writeFileSync, mkdirSync, createWriteStream, existsSync, copyFileSync, cpSync, rmSync } from "node:fs"
-import { homedir } from "node:os"
-import { dirname, join } from "node:path"
-import type { Config } from "../../config/schemas.js"
-import type { Paths } from "../../config/paths.js"
+import { spawn, execSync, type ChildProcess } from "node:child_process";
+import {
+  writeFileSync,
+  mkdirSync,
+  createWriteStream,
+  existsSync,
+  copyFileSync,
+  cpSync,
+  rmSync,
+} from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import type { Paths } from "../../config/paths.js";
+import type { Config } from "../../config/schemas.js";
 
 // ---------------------------------------------------------------------------
 // Generated config: the driver's serve instance loads ONLY this — our gate
@@ -16,9 +24,14 @@ import type { Paths } from "../../config/paths.js"
 // D5: a missing plugin file would mean an UNGATED executor — opencode skips
 // absent plugins without a sound. Refuse to start instead.
 
-export const writeOpencodeConfig = (config: Config, paths: Paths, pluginPath: string, globalConfigDir: string = join(homedir(), ".config", "opencode")): string => {
+export const writeOpencodeConfig = (
+  config: Config,
+  paths: Paths,
+  pluginPath: string,
+  globalConfigDir: string = join(homedir(), ".config", "opencode"),
+): string => {
   if (!existsSync(pluginPath)) {
-    throw new Error(`gate plugin not found at ${pluginPath} — refusing to run an ungated executor`)
+    throw new Error(`gate plugin not found at ${pluginPath} — refusing to run an ungated executor`);
   }
   const oc = {
     $schema: "https://opencode.ai/config.json",
@@ -83,7 +96,9 @@ export const writeOpencodeConfig = (config: Config, paths: Paths, pluginPath: st
                 headerTimeout: config.superdaddy.headerTimeoutMs,
                 // Present only for a local proxy provider (e.g. claude-max-proxy);
                 // openai/codex omits it and uses opencode's ChatGPT-OAuth instead.
-                ...(typeof config.superdaddy.apiKey === "string" ? { apiKey: config.superdaddy.apiKey } : {}),
+                ...(typeof config.superdaddy.apiKey === "string"
+                  ? { apiKey: config.superdaddy.apiKey }
+                  : {}),
               },
             },
           }
@@ -143,7 +158,8 @@ export const writeOpencodeConfig = (config: Config, paths: Paths, pluginPath: st
       // grounded blocker (§5). Still NO write/edit/patch (it reviews, never fixes)
       // and NO bridge tools (it must never answer itself, same rule as daddy).
       superdaddy: {
-        description: "Meridian convergence reviewer — judges delivered work against the packet and doctrine; executes verification, never edits",
+        description:
+          "Meridian convergence reviewer — judges delivered work against the packet and doctrine; executes verification, never edits",
         mode: "primary",
         steps: config.superdaddy.turnSteps,
         tools: {
@@ -166,9 +182,9 @@ export const writeOpencodeConfig = (config: Config, paths: Paths, pluginPath: st
         },
       },
     },
-  }
-  mkdirSync(dirname(paths.opencodeConfigFile), { recursive: true })
-  writeFileSync(paths.opencodeConfigFile, JSON.stringify(oc, null, 2), "utf-8")
+  };
+  mkdirSync(dirname(paths.opencodeConfigFile), { recursive: true });
+  writeFileSync(paths.opencodeConfigFile, JSON.stringify(oc, null, 2), "utf-8");
 
   // OpenCode auto-installs @opencode-ai/plugin into its config home before
   // loading ANY plugin, and a bare dir makes that install fail against its
@@ -176,27 +192,27 @@ export const writeOpencodeConfig = (config: Config, paths: Paths, pluginPath: st
   // (found live: an unanswered permission ask froze a run for 25 minutes
   // because the gate plugin never loaded). Seed from the global config dir,
   // which has a working install.
-  const configHome = dirname(paths.opencodeConfigFile)
-  const globalDir = globalConfigDir
+  const configHome = dirname(paths.opencodeConfigFile);
+  const globalDir = globalConfigDir;
   if (!existsSync(join(configHome, "node_modules", "@opencode-ai", "plugin"))) {
     if (!existsSync(join(globalDir, "node_modules", "@opencode-ai", "plugin"))) {
       throw new Error(
         `cannot seed ${configHome}: ${globalDir}/node_modules/@opencode-ai/plugin missing — run npm install in ${globalDir} first (an unseeded config home means the gate plugin silently fails to load)`,
-      )
+      );
     }
     // A REAL copy of the package.json/lockfile/node_modules trio — a symlink
     // gets deleted by opencode's background installer before it fails against
     // its pinned registry (found live, twice). With a consistent trio present
     // the failure stays a harmless WARN, same as the global dir.
-    rmSync(join(configHome, "node_modules"), { recursive: true, force: true })
-    cpSync(join(globalDir, "node_modules"), join(configHome, "node_modules"), { recursive: true })
-    copyFileSync(join(globalDir, "package.json"), join(configHome, "package.json"))
+    rmSync(join(configHome, "node_modules"), { recursive: true, force: true });
+    cpSync(join(globalDir, "node_modules"), join(configHome, "node_modules"), { recursive: true });
+    copyFileSync(join(globalDir, "package.json"), join(configHome, "package.json"));
     if (existsSync(join(globalDir, "package-lock.json"))) {
-      copyFileSync(join(globalDir, "package-lock.json"), join(configHome, "package-lock.json"))
+      copyFileSync(join(globalDir, "package-lock.json"), join(configHome, "package-lock.json"));
     }
   }
-  return paths.opencodeConfigFile
-}
+  return paths.opencodeConfigFile;
+};
 
 // ---------------------------------------------------------------------------
 // Server supervision
@@ -218,50 +234,52 @@ export const spawnOpencodeServer = (config: Config, paths: Paths): ChildProcess 
       },
       stdio: ["ignore", "ignore", "pipe"],
     },
-  )
+  );
   // Serve logs are the first place to look when a provider hangs instead of
   // erroring (learned the hard way on build day).
-  const logFile = createWriteStream(paths.serveLogFile, { flags: "a" })
-  child.stderr?.pipe(logFile)
-  return child
-}
+  const logFile = createWriteStream(paths.serveLogFile, { flags: "a" });
+  child.stderr?.pipe(logFile);
+  return child;
+};
 
 // §18: the opencode version is pinned by expectation, not hope — a silent
 // upgrade changes plugin hooks, session APIs, and event shapes under us.
 export const warnOnVersionDrift = (config: Config): void => {
-  if (!config.opencode.expectedVersion) return
+  if (!config.opencode.expectedVersion) return;
   try {
-    const version = execSync(`${config.opencode.binary} --version`, { encoding: "utf-8" }).trim()
+    const version = execSync(`${config.opencode.binary} --version`, { encoding: "utf-8" }).trim();
     if (!version.includes(config.opencode.expectedVersion)) {
       console.error(
         `WARNING: opencode is ${version}, expected ${config.opencode.expectedVersion} — harness behavior is only proven against the pinned version`,
-      )
+      );
     }
   } catch {
     /* version probe is advisory */
   }
-}
+};
 
 export const waitForServer = async (config: Config, timeoutMs = 30_000): Promise<void> => {
-  const url = `http://127.0.0.1:${config.opencode.port}/session`
-  const deadline = Date.now() + timeoutMs
+  const url = `http://127.0.0.1:${config.opencode.port}/session`;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(url)
-      if (res.ok) return
+      const res = await fetch(url);
+      if (res.ok) return;
     } catch {
       /* not up yet */
     }
-    await new Promise((r) => setTimeout(r, 500))
+    await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error(`opencode server did not become ready on port ${config.opencode.port} within ${timeoutMs}ms`)
-}
+  throw new Error(
+    `opencode server did not become ready on port ${config.opencode.port} within ${timeoutMs}ms`,
+  );
+};
 
 // The plugin path: ships with this repo at reference/plugin/gate-plugin.ts.
 // This file lives at src/infrastructure/opencode/config.ts — three levels from
 // repo root. tsx runs from source (no compilation); import.meta.url resolves to
 // the source path, so THREE '..' lands at the repo root.
 export const pluginPath = (): string => {
-  const here = dirname(new URL(import.meta.url).pathname)
-  return join(here, "..", "..", "..", "reference", "plugin", "gate-plugin.ts")
-}
+  const here = dirname(new URL(import.meta.url).pathname);
+  return join(here, "..", "..", "..", "reference", "plugin", "gate-plugin.ts");
+};

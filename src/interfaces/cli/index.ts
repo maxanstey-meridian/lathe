@@ -8,16 +8,23 @@
 // parsing lives in dispatch.ts.
 // ---------------------------------------------------------------------------
 
-import { loadConfig } from "../../config/config.js"
-import { systemClock } from "../../infrastructure/clock.js"
-import { StoreAdapter } from "../../infrastructure/store.js"
-import { buildRepo, runDriver, convergeOnce, superReviewOnce, openPlanner, openTail } from "./composition.js"
-import { dispatch, type CliDeps } from "./dispatch.js"
+import { loadConfig } from "../../config/config.js";
+import { systemClock } from "../../infrastructure/clock.js";
+import { StoreAdapter } from "../../infrastructure/store.js";
+import {
+  buildRepo,
+  runDriver,
+  convergeOnce,
+  superReviewOnce,
+  openPlanner,
+  openTail,
+} from "./composition.js";
+import { dispatch, type CliDeps } from "./dispatch.js";
 
-const { config, paths } = loadConfig()
-const clock = systemClock
-const repo = buildRepo()
-const store = StoreAdapter.create(paths, repo, clock)
+const { config, paths } = loadConfig();
+const clock = systemClock;
+const repo = buildRepo();
+const store = StoreAdapter.create(paths, repo, clock);
 
 const deps: CliDeps = {
   config,
@@ -30,13 +37,13 @@ const deps: CliDeps = {
   convergeOnce: (runId) => convergeOnce(config, paths, runId),
   superReviewOnce: (runId) => superReviewOnce(config, paths, runId),
   openTail: (runId) => openTail(config, paths, runId),
-}
+};
 
 dispatch(process.argv.slice(2), deps)
   .then((code) => {
-    if (code >= 0) process.exit(code)
+    if (code >= 0) process.exit(code);
   })
   .catch((err) => {
-    console.error(err instanceof Error ? err.message : String(err))
-    process.exit(1)
-  })
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });

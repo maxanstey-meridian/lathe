@@ -1,27 +1,27 @@
-import { test } from "node:test"
-import { equal, ok, deepEqual } from "node:assert"
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from "node:fs"
-import { join } from "node:path"
-import { tmpdir } from "node:os"
-import { execSync } from "node:child_process"
-import { convergeRun } from "../src/application/use-cases/converge-run.js"
-import type { Store } from "../src/application/ports/store.js"
-import type { Repo } from "../src/application/ports/repo.js"
-import type { Reviewer, SuperReviewResult } from "../src/application/ports/reviewer.js"
-import type { Verify, VerificationResult } from "../src/application/ports/verify.js"
-import type { Clock } from "../src/application/ports/clock.js"
-import type { Config } from "../src/config/schemas.js"
-import type { Paths } from "../src/config/paths.js"
-import type { RunMeta } from "../src/domain/run.js"
-import type { Campaign } from "../src/domain/campaign.js"
-import { parsePacketShape } from "../src/domain/packet.js"
-import { makePaths } from "../src/config/paths.js"
+import { equal, ok, deepEqual } from "node:assert";
+import { execSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+import type { Clock } from "../src/application/ports/clock.js";
+import type { Repo } from "../src/application/ports/repo.js";
+import type { Reviewer, SuperReviewResult } from "../src/application/ports/reviewer.js";
+import type { Store } from "../src/application/ports/store.js";
+import type { Verify, VerificationResult } from "../src/application/ports/verify.js";
+import { convergeRun } from "../src/application/use-cases/converge-run.js";
+import type { Paths } from "../src/config/paths.js";
+import { makePaths } from "../src/config/paths.js";
+import type { Config } from "../src/config/schemas.js";
+import type { Campaign } from "../src/domain/campaign.js";
+import { parsePacketShape } from "../src/domain/packet.js";
+import type { RunMeta } from "../src/domain/run.js";
 
 // ---------------------------------------------------------------------------
 // Shared fixture setup
 
-const RUN_ID = "20260101-000000-converge"
-const CAMPAIGN_ID = "converge"
+const RUN_ID = "20260101-000000-converge";
+const CAMPAIGN_ID = "converge";
 
 const PACKET_RAW = `---
 repo: /tmp/test-repo
@@ -43,7 +43,7 @@ regression_outcomes:
 ---
 
 body
-`
+`;
 
 const makeMeta = (overrides: Partial<RunMeta> = {}): RunMeta => ({
   runId: RUN_ID,
@@ -56,36 +56,37 @@ const makeMeta = (overrides: Partial<RunMeta> = {}): RunMeta => ({
   summary: "converge-run fixture",
   updatedAt: "2026-01-01T00:00:00.000Z",
   ...overrides,
-})
+});
 
-let TS_N = 0
+let TS_N = 0;
 const fixedClock = (): Clock => ({
   now: () => 1_700_000_000_000 + TS_N++,
   nowIso: () => `2026-01-01T00:00:${String(TS_N++ % 60).padStart(2, "0")}.000Z`,
-})
+});
 
 // Create a real temp skill file so readFileSync doesn't throw ENOENT inside
 // the try block of convergeRun (line 161). Each test suite gets its own file.
 const createSkillFile = (): string => {
-  const skillPath = join(tmpdir(), `test-skill-${Date.now()}-${TS_N++}.md`)
-  writeFileSync(skillPath, "# Test rubric\n", "utf-8")
-  return skillPath
-}
+  const skillPath = join(tmpdir(), `test-skill-${Date.now()}-${TS_N++}.md`);
+  writeFileSync(skillPath, "# Test rubric\n", "utf-8");
+  return skillPath;
+};
 
-const defaultConfig = (skillPath: string): Config => ({
-  stateRoot: "~/.meridian/v2",
-  opencode: {},
-  daddy: {},
-  baby: {},
-  superdaddy: {
-    skillPath,
-    diffCapBytes: 131_072,
-  },
-  thresholds: { maxPasses: 3, verificationTimeoutMs: 600_000 },
-  mutationCommandPatterns: [],
-} as unknown as Config)
+const defaultConfig = (skillPath: string): Config =>
+  ({
+    stateRoot: "~/.meridian/v2",
+    opencode: {},
+    daddy: {},
+    baby: {},
+    superdaddy: {
+      skillPath,
+      diffCapBytes: 131_072,
+    },
+    thresholds: { maxPasses: 3, verificationTimeoutMs: 600_000 },
+    mutationCommandPatterns: [],
+  }) as unknown as Config;
 
-const defaultPaths = (root: string): Paths => makePaths(root)
+const defaultPaths = (root: string): Paths => makePaths(root);
 
 // ---------------------------------------------------------------------------
 // Fake ports factory
@@ -101,13 +102,13 @@ const makeFakePorts = (
   onAppendConvergence?: (runId: string, entry: unknown) => void,
   onWriteNits?: (runId: string, md: string) => void,
 ) => {
-  let metaStore: RunMeta = makeMeta(metaOverrides)
-  const nitsStore = new Map<string, string>()
-  const convergenceStore = new Array<unknown>()
-  let campaign: Campaign | undefined = campaignOverride
+  let metaStore: RunMeta = makeMeta(metaOverrides);
+  const nitsStore = new Map<string, string>();
+  const convergenceStore = new Array<unknown>();
+  let campaign: Campaign | undefined = campaignOverride;
 
-  const clock = fixedClock()
-  const paths = defaultPaths(tmpdir())
+  const clock = fixedClock();
+  const paths = defaultPaths(tmpdir());
 
   return {
     clock,
@@ -115,26 +116,28 @@ const makeFakePorts = (
     config: defaultConfig(skillPath),
     store: {
       readMeta: (runId: string) => {
-        if (runId !== RUN_ID) throw new Error(`unknown runId: ${runId}`)
-        return metaStore
+        if (runId !== RUN_ID) throw new Error(`unknown runId: ${runId}`);
+        return metaStore;
       },
-      writeMeta: (m: RunMeta) => { metaStore = m },
+      writeMeta: (m: RunMeta) => {
+        metaStore = m;
+      },
       readFrozenPacket: (_runId: string) => PACKET_RAW,
       readCampaign: (_campaignId: string) => campaign,
       writeCampaign: (c: Campaign) => {
-        campaign = c
-        onWriteCampaign?.(c)
+        campaign = c;
+        onWriteCampaign?.(c);
       },
       admitQueue: (runId: string, content: string) => {
-        onAdmitQueue?.(runId, content)
+        onAdmitQueue?.(runId, content);
       },
       appendConvergence: (runId: string, entry: unknown) => {
-        convergenceStore.push(entry)
-        onAppendConvergence?.(runId, entry)
+        convergenceStore.push(entry);
+        onAppendConvergence?.(runId, entry);
       },
       writeNits: (runId: string, md: string) => {
-        nitsStore.set(runId, md)
-        onWriteNits?.(runId, md)
+        nitsStore.set(runId, md);
+        onWriteNits?.(runId, md);
       },
     } as unknown as Store,
     repo: {
@@ -143,17 +146,22 @@ const makeFakePorts = (
       fetchBranchFromClone: () => {},
     } as unknown as Repo,
     reviewer: {
-      superReview: async () => reviewOverride ?? {
-        review: {
-          verdict: "accept",
-          findings: [],
-          convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
-          commit_message: { subject: "feat: converged", body: "all good" },
-          notes: "",
-          human_decision_needed: null,
+      superReview: async () =>
+        reviewOverride ?? {
+          review: {
+            verdict: "accept",
+            findings: [],
+            convergence: {
+              recommend_stop: true,
+              profile: { p0: 0, p1: 0, p2: 0, p3: 0 },
+              rationale: "",
+            },
+            commit_message: { subject: "feat: converged", body: "all good" },
+            notes: "",
+            human_decision_needed: null,
+          },
+          raw: "ok",
         },
-        raw: "ok",
-      },
     } as Reviewer,
     verify: {
       run: async () => verifyOverride ?? [{ command: "echo ok", exitCode: 0, outputTail: "" }],
@@ -163,27 +171,43 @@ const makeFakePorts = (
     convergenceStore,
     getMeta: () => metaStore,
     getCampaign: () => campaign,
-  }
-}
+  };
+};
 
 // ---------------------------------------------------------------------------
 // Test: stop — campaign converged, commit amended, campaign status converged
 
 test("convergeRun: stop — amend commit, campaign converged, meta un-parked", async () => {
-  let admittedQueue: [string, string][] = []
-  let campaignWritten: Campaign | undefined
-  let nitsWritten: string | undefined
+  let admittedQueue: [string, string][] = [];
+  let campaignWritten: Campaign | undefined;
+  let nitsWritten: string | undefined;
 
-  const skillPath = createSkillFile()
+  const skillPath = createSkillFile();
   const ports = makeFakePorts(
     skillPath,
-    { status: "blocked" as const, blockedReason: "human_decision" as const, blockedQuestion: "why?" },
+    {
+      status: "blocked" as const,
+      blockedReason: "human_decision" as const,
+      blockedQuestion: "why?",
+    },
     undefined,
     {
       review: {
         verdict: "accept",
-        findings: [{ id: "nit-1", severity: "P2", title: "style", evidence: [], grounding: { kind: "none", ref: "" } }],
-        convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 1, p3: 0 }, rationale: "ok" },
+        findings: [
+          {
+            id: "nit-1",
+            severity: "P2",
+            title: "style",
+            evidence: [],
+            grounding: { kind: "none", ref: "" },
+          },
+        ],
+        convergence: {
+          recommend_stop: true,
+          profile: { p0: 0, p1: 0, p2: 1, p3: 0 },
+          rationale: "ok",
+        },
         commit_message: { subject: "feat: converged", body: "done" },
         notes: "",
         human_decision_needed: null,
@@ -191,11 +215,17 @@ test("convergeRun: stop — amend commit, campaign converged, meta un-parked", a
       raw: "accept",
     },
     undefined,
-    (runId, content) => { admittedQueue.push([runId, content]) },
-    (c) => { campaignWritten = c },
+    (runId, content) => {
+      admittedQueue.push([runId, content]);
+    },
+    (c) => {
+      campaignWritten = c;
+    },
     undefined,
-    (runId, md) => { nitsWritten = md },
-  )
+    (runId, md) => {
+      nitsWritten = md;
+    },
+  );
 
   const runner = convergeRun({
     store: ports.store,
@@ -205,57 +235,52 @@ test("convergeRun: stop — amend commit, campaign converged, meta un-parked", a
     clock: ports.clock,
     config: ports.config,
     paths: ports.paths,
-  })
+  });
 
-  await runner(RUN_ID)
+  await runner(RUN_ID);
 
   // Campaign should be converged
-  ok(campaignWritten, "campaign should be written")
-  equal(campaignWritten?.status, "converged")
-  equal(campaignWritten?.passes.length, 1)
-  equal(campaignWritten?.passes[0].runId, RUN_ID)
-  equal(campaignWritten?.passes[0].pass, 1)
+  ok(campaignWritten, "campaign should be written");
+  equal(campaignWritten?.status, "converged");
+  equal(campaignWritten?.passes.length, 1);
+  equal(campaignWritten?.passes[0].runId, RUN_ID);
+  equal(campaignWritten?.passes[0].pass, 1);
 
   // Meta should be un-parked from blocked → ready_for_review
-  const meta = ports.getMeta()
-  equal(meta.status, "ready_for_review")
-  equal(meta.blockedReason, undefined)
-  equal(meta.blockedQuestion, undefined)
+  const meta = ports.getMeta();
+  equal(meta.status, "ready_for_review");
+  equal(meta.blockedReason, undefined);
+  equal(meta.blockedQuestion, undefined);
 
   // No queue admission on stop
-  equal(admittedQueue.length, 0)
+  equal(admittedQueue.length, 0);
 
   // Nits should be written (stop → not author, so nits apply)
-  ok(nitsWritten, "nits should be written on stop")
-  ok(nitsWritten?.includes("nit-1"))
+  ok(nitsWritten, "nits should be written on stop");
+  ok(nitsWritten?.includes("nit-1"));
 
   // Convergence log should have one entry
-  equal(ports.convergenceStore.length, 1)
-})
+  equal(ports.convergenceStore.length, 1);
+});
 
 // ---------------------------------------------------------------------------
 // Test: stop without commit message — amend skipped, still converged
 
 test("convergeRun: stop without commit_message — amend skipped, still converged", async () => {
-  let campaignWritten: Campaign | undefined
+  let campaignWritten: Campaign | undefined;
 
-  const skillPath = createSkillFile()
-  const ports = makeFakePorts(
-    skillPath,
-    undefined,
-    undefined,
-    {
-      review: {
-        verdict: "accept",
-        findings: [],
-        convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
-        commit_message: null,
-        notes: "",
-        human_decision_needed: null,
-      },
-      raw: "accept",
+  const skillPath = createSkillFile();
+  const ports = makeFakePorts(skillPath, undefined, undefined, {
+    review: {
+      verdict: "accept",
+      findings: [],
+      convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
+      commit_message: null,
+      notes: "",
+      human_decision_needed: null,
     },
-  )
+    raw: "accept",
+  });
 
   const runner = convergeRun({
     store: ports.store,
@@ -265,25 +290,25 @@ test("convergeRun: stop without commit_message — amend skipped, still converge
     clock: ports.clock,
     config: ports.config,
     paths: ports.paths,
-  })
+  });
 
-  await runner(RUN_ID)
+  await runner(RUN_ID);
 
-  const meta = ports.getMeta()
-  equal(meta.status, "ready_for_review")
-  const campaign = ports.getCampaign()
-  ok(campaign, "campaign should be written")
-  equal(campaign?.status, "converged")
-})
+  const meta = ports.getMeta();
+  equal(meta.status, "ready_for_review");
+  const campaign = ports.getCampaign();
+  ok(campaign, "campaign should be written");
+  equal(campaign?.status, "converged");
+});
 
 // ---------------------------------------------------------------------------
 // Test: author — follow-up admitted, campaign open, priorOutcomes deduped union
 
 test("convergeRun: author — admit follow-up, campaign open, priorOutcomes deduped union", async () => {
-  let admittedQueue: [string, string][] = []
-  let campaignWritten: Campaign | undefined
+  let admittedQueue: [string, string][] = [];
+  let campaignWritten: Campaign | undefined;
 
-  const skillPath = createSkillFile()
+  const skillPath = createSkillFile();
   const ports = makeFakePorts(
     skillPath,
     undefined,
@@ -292,10 +317,27 @@ test("convergeRun: author — admit follow-up, campaign open, priorOutcomes dedu
       review: {
         verdict: "request_changes",
         findings: [
-          { id: "fix-a", severity: "P0", title: "fix a", evidence: ["a.ts:1"], grounding: { kind: "command_fail", ref: "pnpm test" }, suggested_outcome_id: "fix-a" },
-          { id: "fix-b", severity: "P1", title: "fix b", evidence: [], grounding: { kind: "none", ref: "" } },
+          {
+            id: "fix-a",
+            severity: "P0",
+            title: "fix a",
+            evidence: ["a.ts:1"],
+            grounding: { kind: "command_fail", ref: "pnpm test" },
+            suggested_outcome_id: "fix-a",
+          },
+          {
+            id: "fix-b",
+            severity: "P1",
+            title: "fix b",
+            evidence: [],
+            grounding: { kind: "none", ref: "" },
+          },
         ],
-        convergence: { recommend_stop: false, profile: { p0: 1, p1: 1, p2: 0, p3: 0 }, rationale: "" },
+        convergence: {
+          recommend_stop: false,
+          profile: { p0: 1, p1: 1, p2: 0, p3: 0 },
+          rationale: "",
+        },
         commit_message: null,
         notes: "",
         human_decision_needed: null,
@@ -303,9 +345,13 @@ test("convergeRun: author — admit follow-up, campaign open, priorOutcomes dedu
       raw: "request_changes",
     },
     undefined,
-    (runId, content) => { admittedQueue.push([runId, content]) },
-    (c) => { campaignWritten = c },
-  )
+    (runId, content) => {
+      admittedQueue.push([runId, content]);
+    },
+    (c) => {
+      campaignWritten = c;
+    },
+  );
 
   const runner = convergeRun({
     store: ports.store,
@@ -315,40 +361,40 @@ test("convergeRun: author — admit follow-up, campaign open, priorOutcomes dedu
     clock: ports.clock,
     config: ports.config,
     paths: ports.paths,
-  })
+  });
 
-  await runner(RUN_ID)
+  await runner(RUN_ID);
 
   // Campaign should be open
-  ok(campaignWritten, "campaign should be written")
-  equal(campaignWritten?.status, "open")
-  equal(campaignWritten?.passes.length, 1)
-  equal(campaignWritten?.passes[0].verdict, "request_changes")
+  ok(campaignWritten, "campaign should be written");
+  equal(campaignWritten?.status, "open");
+  equal(campaignWritten?.passes.length, 1);
+  equal(campaignWritten?.passes[0].verdict, "request_changes");
 
   // Should admit a follow-up packet
-  equal(admittedQueue.length, 1)
-  const [followUpId, followUpContent] = admittedQueue[0]
-  ok(followUpId.startsWith("20260101-"))
-  ok(followUpContent.includes("convergence pass 2"))
-  ok(followUpContent.includes("fix-a"))
-  ok(followUpContent.includes("fix-b"))
+  equal(admittedQueue.length, 1);
+  const [followUpId, followUpContent] = admittedQueue[0];
+  ok(followUpId.startsWith("20260101-"));
+  ok(followUpContent.includes("convergence pass 2"));
+  ok(followUpContent.includes("fix-a"));
+  ok(followUpContent.includes("fix-b"));
 
   // Nits should NOT be written on author path
   // (the fake store doesn't track nits writes separately, so we verify
   //  by checking the reviewer findings have grounded blockers)
-  equal(campaignWritten?.passes[0].groundedBlockers, 1) // only P0 is grounded
+  equal(campaignWritten?.passes[0].groundedBlockers, 1); // only P0 is grounded
 
   // No meta status change on author — stays ready_for_review
-  equal(ports.getMeta().status, "ready_for_review")
-})
+  equal(ports.getMeta().status, "ready_for_review");
+});
 
 // ---------------------------------------------------------------------------
 // Test: escalate — meta parked as blocked/human_decision
 
 test("convergeRun: escalate — meta blocked, campaign needs_max", async () => {
-  let campaignWritten: Campaign | undefined
+  let campaignWritten: Campaign | undefined;
 
-  const skillPath = createSkillFile()
+  const skillPath = createSkillFile();
   const ports = makeFakePorts(
     skillPath,
     undefined,
@@ -357,7 +403,11 @@ test("convergeRun: escalate — meta blocked, campaign needs_max", async () => {
       review: {
         verdict: "escalate",
         findings: [],
-        convergence: { recommend_stop: false, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
+        convergence: {
+          recommend_stop: false,
+          profile: { p0: 0, p1: 0, p2: 0, p3: 0 },
+          rationale: "",
+        },
         commit_message: null,
         notes: "",
         human_decision_needed: "needs a call",
@@ -366,8 +416,10 @@ test("convergeRun: escalate — meta blocked, campaign needs_max", async () => {
     },
     undefined,
     undefined,
-    (c) => { campaignWritten = c },
-  )
+    (c) => {
+      campaignWritten = c;
+    },
+  );
 
   const runner = convergeRun({
     store: ports.store,
@@ -377,18 +429,18 @@ test("convergeRun: escalate — meta blocked, campaign needs_max", async () => {
     clock: ports.clock,
     config: ports.config,
     paths: ports.paths,
-  })
+  });
 
-  await runner(RUN_ID)
+  await runner(RUN_ID);
 
-  const meta = ports.getMeta()
-  equal(meta.status, "blocked")
-  equal(meta.blockedReason, "human_decision")
-  ok(meta.blockedQuestion, "should have a question")
+  const meta = ports.getMeta();
+  equal(meta.status, "blocked");
+  equal(meta.blockedReason, "human_decision");
+  ok(meta.blockedQuestion, "should have a question");
 
-  ok(campaignWritten, "campaign should be written")
-  equal(campaignWritten?.status, "needs_max")
-})
+  ok(campaignWritten, "campaign should be written");
+  equal(campaignWritten?.status, "needs_max");
+});
 
 // ---------------------------------------------------------------------------
 // Test: alreadyReviewed — pure early return, zero side effects
@@ -400,12 +452,20 @@ test("convergeRun: alreadyReviewed — pure early return", async () => {
     originalIntent: "x",
     status: "converged",
     maxPasses: 3,
-    passes: [{ runId: RUN_ID, pass: 1, verdict: "accept", groundedBlockers: 0, atIso: "2026-01-01T00:00:00.000Z" }],
+    passes: [
+      {
+        runId: RUN_ID,
+        pass: 1,
+        verdict: "accept",
+        groundedBlockers: 0,
+        atIso: "2026-01-01T00:00:00.000Z",
+      },
+    ],
     updatedAt: "2026-01-01T00:00:00.000Z",
-  }
+  };
 
-  let writeCount = 0
-  const skillPath = createSkillFile()
+  let writeCount = 0;
+  const skillPath = createSkillFile();
   const ports = makeFakePorts(
     skillPath,
     undefined,
@@ -414,7 +474,11 @@ test("convergeRun: alreadyReviewed — pure early return", async () => {
       review: {
         verdict: "accept",
         findings: [],
-        convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
+        convergence: {
+          recommend_stop: true,
+          profile: { p0: 0, p1: 0, p2: 0, p3: 0 },
+          rationale: "",
+        },
         commit_message: { subject: "noop", body: "" },
         notes: "",
         human_decision_needed: null,
@@ -422,10 +486,16 @@ test("convergeRun: alreadyReviewed — pure early return", async () => {
       raw: "ok",
     },
     undefined,
-    () => { writeCount++ },
-    () => { writeCount++ },
-    () => { writeCount++ },
-  )
+    () => {
+      writeCount++;
+    },
+    () => {
+      writeCount++;
+    },
+    () => {
+      writeCount++;
+    },
+  );
 
   const runner = convergeRun({
     store: ports.store,
@@ -435,24 +505,24 @@ test("convergeRun: alreadyReviewed — pure early return", async () => {
     clock: ports.clock,
     config: ports.config,
     paths: ports.paths,
-  })
+  });
 
-  await runner(RUN_ID)
+  await runner(RUN_ID);
 
   // Zero side effects — no writes at all
-  equal(writeCount, 0)
+  equal(writeCount, 0);
 
   // Campaign unchanged
-  deepEqual(ports.getCampaign(), existingCampaign)
-})
+  deepEqual(ports.getCampaign(), existingCampaign);
+});
 
 // ---------------------------------------------------------------------------
 // Test: verification red + accept → escalate (under-reported)
 
 test("convergeRun: accept + red verification → escalate", async () => {
-  let campaignWritten: Campaign | undefined
+  let campaignWritten: Campaign | undefined;
 
-  const skillPath = createSkillFile()
+  const skillPath = createSkillFile();
   const ports = makeFakePorts(
     skillPath,
     undefined,
@@ -461,15 +531,22 @@ test("convergeRun: accept + red verification → escalate", async () => {
       review: {
         verdict: "accept",
         findings: [],
-        convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
+        convergence: {
+          recommend_stop: true,
+          profile: { p0: 0, p1: 0, p2: 0, p3: 0 },
+          rationale: "",
+        },
         commit_message: { subject: "ok", body: "" },
         notes: "",
         human_decision_needed: null,
       },
       raw: "accept",
     },
-    [{ command: "echo ok", exitCode: 0, outputTail: "" }, { command: "pnpm test", exitCode: 1, outputTail: "FAIL" }],
-  )
+    [
+      { command: "echo ok", exitCode: 0, outputTail: "" },
+      { command: "pnpm test", exitCode: 1, outputTail: "FAIL" },
+    ],
+  );
 
   const runner = convergeRun({
     store: ports.store,
@@ -479,45 +556,42 @@ test("convergeRun: accept + red verification → escalate", async () => {
     clock: ports.clock,
     config: ports.config,
     paths: ports.paths,
-  })
+  });
 
-  await runner(RUN_ID)
+  await runner(RUN_ID);
 
-  const meta = ports.getMeta()
-  equal(meta.status, "blocked")
-  ok(meta.blockedQuestion?.includes("under-reported"))
+  const meta = ports.getMeta();
+  equal(meta.status, "blocked");
+  ok(meta.blockedQuestion?.includes("under-reported"));
 
-  const campaign = ports.getCampaign()
-  ok(campaign, "campaign should be written")
-  equal(campaign?.status, "needs_max")
-})
+  const campaign = ports.getCampaign();
+  ok(campaign, "campaign should be written");
+  equal(campaign?.status, "needs_max");
+});
 
 // ---------------------------------------------------------------------------
 // Test: fail-safe — any error leaves ready_for_review
 
 test("convergeRun: failure → meta reset to ready_for_review", async () => {
-  const skillPath = createSkillFile()
-  const ports = makeFakePorts(
-    skillPath,
-    { status: "running" as const },
-    undefined,
-    {
-      review: {
-        verdict: "accept",
-        findings: [],
-        convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
-        commit_message: { subject: "ok", body: "" },
-        notes: "",
-        human_decision_needed: null,
-      },
-      raw: "ok",
+  const skillPath = createSkillFile();
+  const ports = makeFakePorts(skillPath, { status: "running" as const }, undefined, {
+    review: {
+      verdict: "accept",
+      findings: [],
+      convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
+      commit_message: { subject: "ok", body: "" },
+      notes: "",
+      human_decision_needed: null,
     },
-  )
+    raw: "ok",
+  });
 
   // Make the reviewer throw to trigger fail-safe
   const failingReviewer = {
-    superReview: async () => { throw new Error("reviewer crashed") },
-  }
+    superReview: async () => {
+      throw new Error("reviewer crashed");
+    },
+  };
 
   const runner = convergeRun({
     store: ports.store,
@@ -527,22 +601,22 @@ test("convergeRun: failure → meta reset to ready_for_review", async () => {
     clock: ports.clock,
     config: ports.config,
     paths: ports.paths,
-  })
+  });
 
-  await runner(RUN_ID)
+  await runner(RUN_ID);
 
   // Fail-safe: meta reset to ready_for_review
-  const meta = ports.getMeta()
-  equal(meta.status, "ready_for_review")
-})
+  const meta = ports.getMeta();
+  equal(meta.status, "ready_for_review");
+});
 
 // ---------------------------------------------------------------------------
 // Test: pass cap reached → escalate
 
 test("convergeRun: pass cap reached → escalate", async () => {
-  let campaignWritten: Campaign | undefined
+  let campaignWritten: Campaign | undefined;
 
-  const skillPath = createSkillFile()
+  const skillPath = createSkillFile();
   const ports = makeFakePorts(
     skillPath,
     { attempt: 5 }, // meta.attempt = 5, pass = 1 from frontmatter
@@ -550,8 +624,20 @@ test("convergeRun: pass cap reached → escalate", async () => {
     {
       review: {
         verdict: "request_changes",
-        findings: [{ id: "still-broken", severity: "P0", title: "still broken", evidence: [], grounding: { kind: "command_fail", ref: "t" } }],
-        convergence: { recommend_stop: false, profile: { p0: 1, p1: 0, p2: 0, p3: 0 }, rationale: "" },
+        findings: [
+          {
+            id: "still-broken",
+            severity: "P0",
+            title: "still broken",
+            evidence: [],
+            grounding: { kind: "command_fail", ref: "t" },
+          },
+        ],
+        convergence: {
+          recommend_stop: false,
+          profile: { p0: 1, p1: 0, p2: 0, p3: 0 },
+          rationale: "",
+        },
         commit_message: null,
         notes: "",
         human_decision_needed: null,
@@ -560,8 +646,10 @@ test("convergeRun: pass cap reached → escalate", async () => {
     },
     undefined,
     undefined,
-    (c) => { campaignWritten = c },
-  )
+    (c) => {
+      campaignWritten = c;
+    },
+  );
 
   const runner = convergeRun({
     store: ports.store,
@@ -571,37 +659,36 @@ test("convergeRun: pass cap reached → escalate", async () => {
     clock: ports.clock,
     config: ports.config,
     paths: ports.paths,
-  })
+  });
 
-  await runner(RUN_ID)
+  await runner(RUN_ID);
 
   // pass = 1 (from frontmatter), maxPasses = 3 → not capped, should author
-  ok(campaignWritten, "campaign should be written")
-  equal(campaignWritten?.status, "open")
-  equal(campaignWritten?.passes.length, 1)
-})
+  ok(campaignWritten, "campaign should be written");
+  equal(campaignWritten?.status, "open");
+  equal(campaignWritten?.passes.length, 1);
+});
 
 // ---------------------------------------------------------------------------
 // Test: request_changes with no findings → escalate
 
 test("convergeRun: request_changes but zero findings → escalate", async () => {
-  const skillPath = createSkillFile()
-  const ports = makeFakePorts(
-    skillPath,
-    undefined,
-    undefined,
-    {
-      review: {
-        verdict: "request_changes",
-        findings: [],
-        convergence: { recommend_stop: false, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
-        commit_message: null,
-        notes: "",
-        human_decision_needed: null,
+  const skillPath = createSkillFile();
+  const ports = makeFakePorts(skillPath, undefined, undefined, {
+    review: {
+      verdict: "request_changes",
+      findings: [],
+      convergence: {
+        recommend_stop: false,
+        profile: { p0: 0, p1: 0, p2: 0, p3: 0 },
+        rationale: "",
       },
-      raw: "rc",
+      commit_message: null,
+      notes: "",
+      human_decision_needed: null,
     },
-  )
+    raw: "rc",
+  });
 
   const runner = convergeRun({
     store: ports.store,
@@ -611,26 +698,26 @@ test("convergeRun: request_changes but zero findings → escalate", async () => 
     clock: ports.clock,
     config: ports.config,
     paths: ports.paths,
-  })
+  });
 
-  await runner(RUN_ID)
+  await runner(RUN_ID);
 
-  const meta = ports.getMeta()
-  equal(meta.status, "blocked")
-  ok(meta.blockedQuestion?.includes("named no findings"))
-})
+  const meta = ports.getMeta();
+  equal(meta.status, "blocked");
+  ok(meta.blockedQuestion?.includes("named no findings"));
+});
 
 // ---------------------------------------------------------------------------
 // Test: stop on meta already ready_for_review — no writeMeta call needed
 
 test("convergeRun: stop with meta already ready_for_review — no unnecessary write", async () => {
-  let metaWrites = 0
-  const originalMeta = makeMeta({ status: "ready_for_review" as const })
-  const storedMeta = { ...originalMeta }
+  let metaWrites = 0;
+  const originalMeta = makeMeta({ status: "ready_for_review" as const });
+  const storedMeta = { ...originalMeta };
 
-  const skillPath = createSkillFile()
-  const clock = fixedClock()
-  const paths = defaultPaths(tmpdir())
+  const skillPath = createSkillFile();
+  const clock = fixedClock();
+  const paths = defaultPaths(tmpdir());
 
   const ports = {
     clock,
@@ -638,7 +725,9 @@ test("convergeRun: stop with meta already ready_for_review — no unnecessary wr
     config: defaultConfig(skillPath),
     store: {
       readMeta: () => storedMeta,
-      writeMeta: () => { metaWrites++ },
+      writeMeta: () => {
+        metaWrites++;
+      },
       readFrozenPacket: () => PACKET_RAW,
       readCampaign: () => undefined,
       writeCampaign: () => {},
@@ -656,7 +745,11 @@ test("convergeRun: stop with meta already ready_for_review — no unnecessary wr
         review: {
           verdict: "accept",
           findings: [],
-          convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
+          convergence: {
+            recommend_stop: true,
+            profile: { p0: 0, p1: 0, p2: 0, p3: 0 },
+            rationale: "",
+          },
           commit_message: null,
           notes: "",
           human_decision_needed: null,
@@ -668,22 +761,22 @@ test("convergeRun: stop with meta already ready_for_review — no unnecessary wr
       run: async () => [{ command: "true", exitCode: 0, outputTail: "" }],
       runAutoFix: async () => {},
     } as unknown as Verify,
-  }
+  };
 
-  const runner = convergeRun(ports)
-  await runner(RUN_ID)
+  const runner = convergeRun(ports);
+  await runner(RUN_ID);
 
   // Should NOT have written meta when status was already ready_for_review
-  equal(metaWrites, 0)
-})
+  equal(metaWrites, 0);
+});
 
 // ---------------------------------------------------------------------------
 // Test: pass from packet.frontmatter.pass, not meta.attempt
 
 test("convergeRun: pass from packet.frontmatter.pass, not meta.attempt", async () => {
-  let campaignWritten: Campaign | undefined
+  let campaignWritten: Campaign | undefined;
 
-  const skillPath = createSkillFile()
+  const skillPath = createSkillFile();
   const ports = makeFakePorts(
     skillPath,
     { attempt: 5 }, // meta.attempt = 5, but pass = 1 from packet
@@ -692,14 +785,18 @@ test("convergeRun: pass from packet.frontmatter.pass, not meta.attempt", async (
       review: {
         verdict: "accept",
         findings: [],
-        convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
+        convergence: {
+          recommend_stop: true,
+          profile: { p0: 0, p1: 0, p2: 0, p3: 0 },
+          rationale: "",
+        },
         commit_message: { subject: "ok", body: "" },
         notes: "",
         human_decision_needed: null,
       },
       raw: "ok",
     },
-  )
+  );
 
   const runner = convergeRun({
     store: ports.store,
@@ -709,27 +806,27 @@ test("convergeRun: pass from packet.frontmatter.pass, not meta.attempt", async (
     clock: ports.clock,
     config: ports.config,
     paths: ports.paths,
-  })
+  });
 
-  await runner(RUN_ID)
+  await runner(RUN_ID);
 
   // Campaign should record pass=1, not attempt=5
-  const campaign = ports.getCampaign()
-  ok(campaign, "campaign should be written")
-  equal(campaign?.passes[0].pass, 1)
-})
+  const campaign = ports.getCampaign();
+  ok(campaign, "campaign should be written");
+  equal(campaign?.passes[0].pass, 1);
+});
 
 // ---------------------------------------------------------------------------
 // Test: stop with maxPasses: 1 and pass: 1 → capped, not stopped
 
 test("convergeRun: stop on pass cap (maxPasses=1, pass=1) → should stop if accept+green", async () => {
-  let campaignWritten: Campaign | undefined
+  let campaignWritten: Campaign | undefined;
 
-  const skillPath = createSkillFile()
+  const skillPath = createSkillFile();
   const config = {
     ...defaultConfig(skillPath),
     thresholds: { maxPasses: 1, verificationTimeoutMs: 600_000 },
-  } as unknown as Config
+  } as unknown as Config;
 
   const ports = makeFakePorts(
     skillPath,
@@ -739,7 +836,11 @@ test("convergeRun: stop on pass cap (maxPasses=1, pass=1) → should stop if acc
       review: {
         verdict: "accept",
         findings: [],
-        convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
+        convergence: {
+          recommend_stop: true,
+          profile: { p0: 0, p1: 0, p2: 0, p3: 0 },
+          rationale: "",
+        },
         commit_message: { subject: "ok", body: "" },
         notes: "",
         human_decision_needed: null,
@@ -748,12 +849,14 @@ test("convergeRun: stop on pass cap (maxPasses=1, pass=1) → should stop if acc
     },
     undefined,
     undefined,
-    (c) => { campaignWritten = c },
+    (c) => {
+      campaignWritten = c;
+    },
     undefined,
     undefined,
-  )
+  );
 
-  ports.config = config
+  ports.config = config;
 
   const runner = convergeRun({
     store: ports.store,
@@ -763,48 +866,43 @@ test("convergeRun: stop on pass cap (maxPasses=1, pass=1) → should stop if acc
     clock: ports.clock,
     config: ports.config,
     paths: ports.paths,
-  })
+  });
 
-  await runner(RUN_ID)
+  await runner(RUN_ID);
 
   // pass=1, maxPasses=1, accept+green → stop (cap is pass >= maxPasses,
   // but accept+green is stop before cap check in decideConvergence)
-  ok(campaignWritten, "campaign should be written")
-  equal(campaignWritten?.status, "converged")
-})
+  ok(campaignWritten, "campaign should be written");
+  equal(campaignWritten?.status, "converged");
+});
 
 // ---------------------------------------------------------------------------
 // Test: autofix runs with expected_surface, not repo-wide
 
 test("convergeRun: autofix is called with expected_surface, not repo-wide", async () => {
-  let autofixCalls: { commands: { command: string }[]; surface: string[] }[] = []
+  let autofixCalls: { commands: { command: string }[]; surface: string[] }[] = [];
 
-  const skillPath = createSkillFile()
-  const ports = makeFakePorts(
-    skillPath,
-    undefined,
-    undefined,
-    {
-      review: {
-        verdict: "accept",
-        findings: [],
-        convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
-        commit_message: { subject: "ok", body: "" },
-        notes: "",
-        human_decision_needed: null,
-      },
-      raw: "ok",
+  const skillPath = createSkillFile();
+  const ports = makeFakePorts(skillPath, undefined, undefined, {
+    review: {
+      verdict: "accept",
+      findings: [],
+      convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
+      commit_message: { subject: "ok", body: "" },
+      notes: "",
+      human_decision_needed: null,
     },
-  )
+    raw: "ok",
+  });
 
   // Override the verify port with a spy that captures runAutoFix calls.
-  const originalVerify = ports.verify
+  const originalVerify = ports.verify;
   ports.verify = {
     ...originalVerify,
     runAutoFix: async (commands, expectedSurface, _worktree, _timeoutMs) => {
-      autofixCalls.push({ commands, surface: expectedSurface })
+      autofixCalls.push({ commands, surface: expectedSurface });
     },
-  } as any
+  } as any;
 
   const runner = convergeRun({
     store: ports.store,
@@ -814,29 +912,29 @@ test("convergeRun: autofix is called with expected_surface, not repo-wide", asyn
     clock: ports.clock,
     config: ports.config,
     paths: ports.paths,
-  })
+  });
 
-  await runner(RUN_ID)
+  await runner(RUN_ID);
 
   // Autofix should have been called exactly once.
-  equal(autofixCalls.length, 1)
-  const call = autofixCalls[0]
+  equal(autofixCalls.length, 1);
+  const call = autofixCalls[0];
 
   // The surface should be exactly what's in the packet.
-  deepEqual(call.surface, ["src/index.ts"])
+  deepEqual(call.surface, ["src/index.ts"]);
 
   // No autofix_commands in the packet, so empty commands list.
-  equal(call.commands.length, 0)
-})
+  equal(call.commands.length, 0);
+});
 
 // ---------------------------------------------------------------------------
 // Test: autofix with commands and surface passes surface as args
 
 test("convergeRun: autofix with commands runs with expected_surface args", async () => {
-  let autofixCalls: { commands: { command: string }[]; surface: string[] }[] = []
-  let autofixRunCalled = false
+  let autofixCalls: { commands: { command: string }[]; surface: string[] }[] = [];
+  let autofixRunCalled = false;
 
-  const skillPath = createSkillFile()
+  const skillPath = createSkillFile();
 
   // Create a packet with autofix_commands.
   const PACKET_WITH_AUTOFIX = `---
@@ -862,7 +960,7 @@ regression_outcomes:
 ---
 
 body
-`
+`;
 
   const ports = makeFakePorts(
     skillPath,
@@ -872,7 +970,11 @@ body
       review: {
         verdict: "accept",
         findings: [],
-        convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
+        convergence: {
+          recommend_stop: true,
+          profile: { p0: 0, p1: 0, p2: 0, p3: 0 },
+          rationale: "",
+        },
         commit_message: { subject: "ok", body: "" },
         notes: "",
         human_decision_needed: null,
@@ -885,19 +987,19 @@ body
         // The fake store reads PACKET_RAW by default; we need to override readFrozenPacket.
       }
     },
-  )
+  );
 
   // Override readFrozenPacket to return the packet with autofix.
-  const originalReadFrozen = ports.store.readFrozenPacket
-  ;(ports.store as any).readFrozenPacket = () => PACKET_WITH_AUTOFIX
+  const originalReadFrozen = ports.store.readFrozenPacket;
+  (ports.store as any).readFrozenPacket = () => PACKET_WITH_AUTOFIX;
 
   ports.verify = {
     ...ports.verify,
     runAutoFix: async (commands, expectedSurface, _worktree, _timeoutMs) => {
-      autofixRunCalled = true
-      autofixCalls.push({ commands, surface: expectedSurface })
+      autofixRunCalled = true;
+      autofixCalls.push({ commands, surface: expectedSurface });
     },
-  } as any
+  } as any;
 
   const runner = convergeRun({
     store: ports.store,
@@ -907,54 +1009,49 @@ body
     clock: ports.clock,
     config: ports.config,
     paths: ports.paths,
-  })
+  });
 
-  await runner(RUN_ID)
+  await runner(RUN_ID);
 
-  ok(autofixRunCalled, "runAutoFix should have been called")
-  equal(autofixCalls.length, 1)
-  const call = autofixCalls[0]
+  ok(autofixRunCalled, "runAutoFix should have been called");
+  equal(autofixCalls.length, 1);
+  const call = autofixCalls[0];
 
   // Commands from packet frontmatter.
-  equal(call.commands.length, 1)
-  equal(call.commands[0].command, "oxlint --fix")
+  equal(call.commands.length, 1);
+  equal(call.commands[0].command, "oxlint --fix");
 
   // Surface from packet frontmatter.
-  deepEqual(call.surface, ["src/index.ts", "src/utils/*.ts"])
-})
+  deepEqual(call.surface, ["src/index.ts", "src/utils/*.ts"]);
+});
 
 // ---------------------------------------------------------------------------
 // Test: no autofix_commands → runAutoFix is still called but no-op
 
 test("convergeRun: empty autofix_commands → runAutoFix called with empty commands", async () => {
-  let autofixRunCalled = false
-  let capturedCommands: { command: string }[] = []
+  let autofixRunCalled = false;
+  let capturedCommands: { command: string }[] = [];
 
-  const skillPath = createSkillFile()
-  const ports = makeFakePorts(
-    skillPath,
-    undefined,
-    undefined,
-    {
-      review: {
-        verdict: "accept",
-        findings: [],
-        convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
-        commit_message: { subject: "ok", body: "" },
-        notes: "",
-        human_decision_needed: null,
-      },
-      raw: "ok",
+  const skillPath = createSkillFile();
+  const ports = makeFakePorts(skillPath, undefined, undefined, {
+    review: {
+      verdict: "accept",
+      findings: [],
+      convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
+      commit_message: { subject: "ok", body: "" },
+      notes: "",
+      human_decision_needed: null,
     },
-  )
+    raw: "ok",
+  });
 
   ports.verify = {
     ...ports.verify,
     runAutoFix: async (commands, _expectedSurface, _worktree, _timeoutMs) => {
-      autofixRunCalled = true
-      capturedCommands = commands
+      autofixRunCalled = true;
+      capturedCommands = commands;
     },
-  } as any
+  } as any;
 
   const runner = convergeRun({
     store: ports.store,
@@ -964,10 +1061,10 @@ test("convergeRun: empty autofix_commands → runAutoFix called with empty comma
     clock: ports.clock,
     config: ports.config,
     paths: ports.paths,
-  })
+  });
 
-  await runner(RUN_ID)
+  await runner(RUN_ID);
 
-  ok(autofixRunCalled, "runAutoFix should have been called")
-  equal(capturedCommands.length, 0, "autofix_commands should be empty from packet")
-})
+  ok(autofixRunCalled, "runAutoFix should have been called");
+  equal(capturedCommands.length, 0, "autofix_commands should be empty from packet");
+});

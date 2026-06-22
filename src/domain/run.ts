@@ -1,4 +1,4 @@
-import { z } from "zod"
+import { z } from "zod";
 
 // ---------------------------------------------------------------------------
 // Run lifecycle (CONTRACT §3, §5)
@@ -11,8 +11,8 @@ export const RunStatus = z.enum([
   "blocked",
   "failed",
   "accepted",
-])
-export type RunStatus = z.infer<typeof RunStatus>
+]);
+export type RunStatus = z.infer<typeof RunStatus>;
 
 export const BlockedReason = z.enum([
   "human_decision",
@@ -25,8 +25,8 @@ export const BlockedReason = z.enum([
   // A driver-level failure: executeRun itself threw (worktree/server/IO). NOT
   // auto-retried — a systemic fault would hot-loop on the same packet (§5 R10).
   "crashed",
-])
-export type BlockedReason = z.infer<typeof BlockedReason>
+]);
+export type BlockedReason = z.infer<typeof BlockedReason>;
 
 export const RunMeta = z.object({
   runId: z.string(),
@@ -54,8 +54,8 @@ export const RunMeta = z.object({
   startedAt: z.string().optional(),
   endedAt: z.string().optional(),
   updatedAt: z.string(),
-})
-export type RunMeta = z.infer<typeof RunMeta>
+});
+export type RunMeta = z.infer<typeof RunMeta>;
 
 // ---------------------------------------------------------------------------
 // Review obligations (CONTRACT M5 — replacement semantics)
@@ -65,8 +65,8 @@ export const ReviewState = z.object({
   obligations: z.array(z.string()),
   lastDecisionAt: z.string().optional(),
   updatedAt: z.string(),
-})
-export type ReviewState = z.infer<typeof ReviewState>
+});
+export type ReviewState = z.infer<typeof ReviewState>;
 
 // ---------------------------------------------------------------------------
 // Active run pointer (driver-written, plugin-read)
@@ -77,8 +77,8 @@ export const ActiveRun = z.object({
   worktree: z.string(),
   babySessionId: z.string(),
   startedAt: z.string(),
-})
-export type ActiveRun = z.infer<typeof ActiveRun>
+});
+export type ActiveRun = z.infer<typeof ActiveRun>;
 
 // ---------------------------------------------------------------------------
 // Decision (CONTRACT §9)
@@ -95,5 +95,5 @@ export const Decision = z.object({
   answer: z.string(),
   constraints: z.array(z.string()).default([]),
   messageId: z.string().optional(),
-})
-export type Decision = z.infer<typeof Decision>
+});
+export type Decision = z.infer<typeof Decision>;

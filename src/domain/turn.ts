@@ -1,6 +1,6 @@
-import { z } from "zod"
-import { BlockedReason } from "./run.js"
-import { stallAction } from "./liveness.js"
+import { z } from "zod";
+import { stallAction } from "./liveness.js";
+import { BlockedReason } from "./run.js";
 
 // ---------------------------------------------------------------------------
 // Bridge intent (CONTRACT §9, ARCHITECTURE §2.2/§4)
@@ -15,7 +15,10 @@ export const BridgeIntent = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("consult-requested") }),
   z.object({ kind: z.literal("final-review-requested") }),
   z.object({ kind: z.literal("report-rejected"), problems: z.array(z.string()) }),
-  z.object({ kind: z.literal("checkpoint-written"), checkpoint: z.object({ number: z.number(), reason: z.string(), summary: z.string() }) }),
+  z.object({
+    kind: z.literal("checkpoint-written"),
+    checkpoint: z.object({ number: z.number(), reason: z.string(), summary: z.string() }),
+  }),
   z.object({
     kind: z.literal("report-accepted"),
     status: z.enum(["ready_for_review", "failed", "blocked"]),
@@ -24,8 +27,8 @@ export const BridgeIntent = z.discriminatedUnion("kind", [
     summary: z.string(),
   }),
   z.object({ kind: z.literal("outcomes-updated") }),
-])
-export type BridgeIntent = z.infer<typeof BridgeIntent>
+]);
+export type BridgeIntent = z.infer<typeof BridgeIntent>;
 
 // ---------------------------------------------------------------------------
 // Turn facts (ARCHITECTURE §2.2/§4)
@@ -82,7 +85,7 @@ export const TurnFacts = z.object({
 
   // Soft checkpoint nudge (branch 11 — L1 continuation)
   softNudgeDue: z.boolean(),
-})
+});
 
 // ---------------------------------------------------------------------------
 // Turn decision — 12-arm discriminated union (ARCHITECTURE §2.2/§4)
@@ -104,11 +107,11 @@ export type TurnDecision =
   // 3. Accepted report → terminal (READY_FOR_REVIEW, FAILED, BLOCKED)
   // Branch 4-at-cap also emits this arm.
   | {
-      kind: "terminal"
-      status: "ready_for_review" | "failed" | "blocked"
-      reason?: z.infer<typeof BlockedReason>
-      question?: string
-      note?: string
+      kind: "terminal";
+      status: "ready_for_review" | "failed" | "blocked";
+      reason?: z.infer<typeof BlockedReason>;
+      question?: string;
+      note?: string;
     }
 
   // 4. Report rejected (`problems` in facts); app layer sends Q7
@@ -139,7 +142,7 @@ export type TurnDecision =
   | { kind: "nudge" }
 
   // 11. Otherwise → continue; softNudgeDue prefixes Q3 with the soft reminder
-  | { kind: "continue"; softNudgeDue: boolean }
+  | { kind: "continue"; softNudgeDue: boolean };
 
 // ---------------------------------------------------------------------------
 // evaluateTurn (ARCHITECTURE §2.2/§4 — the keystone)
@@ -149,7 +152,7 @@ export type TurnDecision =
 // order. The tests ARE the encoded branch order.
 // ---------------------------------------------------------------------------
 
-type Dec = TurnDecision
+type Dec = TurnDecision;
 
 export const evaluateTurn = (facts: z.infer<typeof TurnFacts>): Dec => {
   const {
@@ -173,61 +176,66 @@ export const evaluateTurn = (facts: z.infer<typeof TurnFacts>): Dec => {
     ladderParkAt,
     sendFailureCount,
     softNudgeDue,
-  } = facts
+  } = facts;
 
   // Derive bridge signals from bridgeIntents scan
-  let parkRequest: { reason: z.infer<typeof BlockedReason>; question: string } | null = null
-  let pendingConsult = false
-  let pendingFinalReview = false
-  let reportRejectedProblems: string[] | null = null
+  let parkRequest: { reason: z.infer<typeof BlockedReason>; question: string } | null = null;
+  let pendingConsult = false;
+  let pendingFinalReview = false;
+  let reportRejectedProblems: string[] | null = null;
   // checkpointWritten is the extracted checkpoint data (not the full intent).
   // null when no checkpoint-written intent was delivered this turn.
-  let checkpointWritten: { number: number; reason: string; summary: string } | null = null
-  let acceptedReport: { status: "ready_for_review" | "failed" | "blocked"; reason?: z.infer<typeof BlockedReason>; question?: string; summary: string } | null = null
+  let checkpointWritten: { number: number; reason: string; summary: string } | null = null;
+  let acceptedReport: {
+    status: "ready_for_review" | "failed" | "blocked";
+    reason?: z.infer<typeof BlockedReason>;
+    question?: string;
+    summary: string;
+  } | null = null;
 
   for (const intent of bridgeIntents) {
     switch (intent.kind) {
       case "park":
-        parkRequest = { reason: intent.reason, question: intent.question }
-        break
+        parkRequest = { reason: intent.reason, question: intent.question };
+        break;
       case "consult-requested":
-        pendingConsult = true
-        break
+        pendingConsult = true;
+        break;
       case "final-review-requested":
-        pendingFinalReview = true
-        break
+        pendingFinalReview = true;
+        break;
       case "report-rejected":
-        reportRejectedProblems = intent.problems
-        break
+        reportRejectedProblems = intent.problems;
+        break;
       case "checkpoint-written":
-        checkpointWritten = intent.checkpoint
-        break
+        checkpointWritten = intent.checkpoint;
+        break;
       case "report-accepted":
         acceptedReport = {
           status: intent.status,
           reason: intent.blockedReason,
           question: intent.blockedQuestion,
           summary: intent.summary,
-        }
-        break
+        };
+        break;
       // outcomes-updated: no turn-level signal; ignored in evaluateTurn
     }
   }
 
   // ---- Branch 1: Watchdog ----
   if (watchdogPastDeadline) {
-    return { kind: "watchdog" }
+    return { kind: "watchdog" };
   }
 
   // ---- Branch 2: Park requested by bridge ----
   if (parkRequest) {
-    return { kind: "park", reason: parkRequest.reason, question: parkRequest.question }
+    return { kind: "park", reason: parkRequest.reason, question: parkRequest.question };
   }
 
   // ---- Branch 3: Accepted report → terminal ----
   if (acceptedReport) {
     if (acceptedReport.status === "failed") {
-      return { kind: "terminal", status: "failed", note: acceptedReport.summary }
+      return { kind: "terminal", status: "failed", note: acceptedReport.summary };
     }
     if (acceptedReport.status === "blocked") {
       return {
@@ -235,9 +243,14 @@ export const evaluateTurn = (facts: z.infer<typeof TurnFacts>): Dec => {
         status: "blocked",
         reason: acceptedReport.reason ?? "stop_condition",
         question: acceptedReport.question ?? acceptedReport.summary,
-      }
+      };
     }
-    return { kind: "terminal", status: "ready_for_review", reason: acceptedReport.reason, question: acceptedReport.question }
+    return {
+      kind: "terminal",
+      status: "ready_for_review",
+      reason: acceptedReport.reason,
+      question: acceptedReport.question,
+    };
   }
 
   // ---- Branch 4: Report rejected ----
@@ -248,49 +261,61 @@ export const evaluateTurn = (facts: z.infer<typeof TurnFacts>): Dec => {
         kind: "terminal",
         status: "failed",
         note: `report rejected ${reportRejectionCount} times; last problems: ${reportRejectedProblems.join("; ")}`,
-      }
+      };
     }
-    return { kind: "reject_report", problems: reportRejectedProblems }
+    return { kind: "reject_report", problems: reportRejectedProblems };
   }
 
   // ---- Branch 5: Pending consult ----
   if (pendingConsult) {
-    return { kind: "run_consult" }
+    return { kind: "run_consult" };
   }
 
   // ---- Branch 6: Pending final review ----
   if (pendingFinalReview) {
-    return { kind: "run_final_review" }
+    return { kind: "run_final_review" };
   }
 
   // ---- Branch 7: Rotation in flight ----
   if (rotationPending) {
     if (checkpointWritten !== null) {
-      return { kind: "rotate", checkpoint: { number: checkpointWritten.number } }
+      return { kind: "rotate", checkpoint: { number: checkpointWritten.number } };
     }
     if (checkpointBounceCount > checkpointBounceLimit) {
-      return { kind: "park", reason: "wedged", question: "Rotation checkpoint bounced past the limit" }
+      return {
+        kind: "park",
+        reason: "wedged",
+        question: "Rotation checkpoint bounced past the limit",
+      };
     }
     // No checkpoint written, under bound — check ladder bound first
-    const nextLadder = ladder + 1
+    const nextLadder = ladder + 1;
     if (nextLadder >= ladderParkAt) {
-      return { kind: "park", reason: "wedged", question: "Rotation teardown demanded repeatedly but write_checkpoint was never called" }
+      return {
+        kind: "park",
+        reason: "wedged",
+        question: "Rotation teardown demanded repeatedly but write_checkpoint was never called",
+      };
     }
-    return { kind: "re_demand_teardown" }
+    return { kind: "re_demand_teardown" };
   }
 
   // ---- Branch 8: Context budget reached ----
   if (contextTokens >= contextBudget) {
-    return { kind: "demand_teardown" }
+    return { kind: "demand_teardown" };
   }
 
   // ---- Branch 9: Gate latched/triggers ----
   if (gateDemandsCheckpoint) {
-    const nextLadder = ladder + 1
+    const nextLadder = ladder + 1;
     if (nextLadder >= ladderParkAt) {
-      return { kind: "park", reason: "wedged", question: `Gate latched (${gateReason ?? "checkpoint required"}) and the executor did not reach ask_planner within ${nextLadder} turns` }
+      return {
+        kind: "park",
+        reason: "wedged",
+        question: `Gate latched (${gateReason ?? "checkpoint required"}) and the executor did not reach ask_planner within ${nextLadder} turns`,
+      };
     }
-    return { kind: "demand_gate_checkpoint", reason: gateReason ?? "checkpoint required" }
+    return { kind: "demand_gate_checkpoint", reason: gateReason ?? "checkpoint required" };
   }
 
   // ---- Dead-session guard (complementary to branch 7 send-failure path) ----
@@ -299,23 +324,31 @@ export const evaluateTurn = (facts: z.infer<typeof TurnFacts>): Dec => {
   // with the full seed). Fires BEFORE the no-progress ladder so a dead landing
   // parks deliberately instead of spiralling up the ladder.
   if (!isFirstTurn && contextTokens < contextTokensFloor) {
-    return { kind: "park", reason: "wedged", question: `Model received only ${contextTokens} context tokens (floor: ${contextTokensFloor}) — possible dead session` }
+    return {
+      kind: "park",
+      reason: "wedged",
+      question: `Model received only ${contextTokens} context tokens (floor: ${contextTokensFloor}) — possible dead session`,
+    };
   }
 
   // ---- Branch 10: No progress → ladder action ----
-  const hadProgress = hadAllowedToolCall || worktreeChanged || checkpointWritten !== null
+  const hadProgress = hadAllowedToolCall || worktreeChanged || checkpointWritten !== null;
   if (!hadProgress) {
-    const nextLadder = ladder + 1
-    const action = stallAction(nextLadder, ladderRotateAt, ladderParkAt)
+    const nextLadder = ladder + 1;
+    const action = stallAction(nextLadder, ladderRotateAt, ladderParkAt);
     if (action === "park") {
-      return { kind: "park", reason: "wedged", question: `${nextLadder} consecutive turns without an allowed tool call` }
+      return {
+        kind: "park",
+        reason: "wedged",
+        question: `${nextLadder} consecutive turns without an allowed tool call`,
+      };
     }
     if (action === "rotate") {
-      return { kind: "rotate", checkpoint: null }
+      return { kind: "rotate", checkpoint: null };
     }
-    return { kind: "nudge" }
+    return { kind: "nudge" };
   }
 
   // ---- Branch 11: Continue (neutral) ----
-  return { kind: "continue", softNudgeDue }
-}
+  return { kind: "continue", softNudgeDue };
+};

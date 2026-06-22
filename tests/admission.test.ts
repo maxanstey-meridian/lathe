@@ -1,29 +1,43 @@
-import { test } from "node:test"
-import { equal, strictEqual, ok, match, deepStrictEqual } from "node:assert"
-import { mkdtemp, readdir, readdirSync, writeFileSync, existsSync, readFileSync, mkdirSync } from "node:fs"
-import { mkdtemp as mkdtempP, rm } from "node:fs/promises"
-import { join } from "node:path"
-import { tmpdir } from "node:os"
-import { execSync } from "node:child_process"
-
-import { StoreAdapter } from "../src/infrastructure/store.js"
-import { makePaths } from "../src/config/paths.js"
-import type { Clock } from "../src/application/ports/clock.js"
-import type { Repo } from "../src/application/ports/repo.js"
-import { admitPacket } from "../src/application/use-cases/admit-packet.js"
-import { repoValid, branchExists, headBranch } from "../src/infrastructure/git.js"
+import { equal, strictEqual, ok, match, deepStrictEqual } from "node:assert";
+import { execSync } from "node:child_process";
+import {
+  mkdtemp,
+  readdir,
+  readdirSync,
+  writeFileSync,
+  existsSync,
+  readFileSync,
+  mkdirSync,
+} from "node:fs";
+import { mkdtemp as mkdtempP, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+import type { Clock } from "../src/application/ports/clock.js";
+import type { Repo } from "../src/application/ports/repo.js";
+import { admitPacket } from "../src/application/use-cases/admit-packet.js";
+import { makePaths } from "../src/config/paths.js";
+import { repoValid, branchExists, headBranch } from "../src/infrastructure/git.js";
+import { StoreAdapter } from "../src/infrastructure/store.js";
 
 // ---------------------------------------------------------------------------
 // Test helpers
 
-const TS_COUNTER = { n: 0 }
+const TS_COUNTER = { n: 0 };
 const fixedClock = (): Clock => ({
   now: () => 1700000000000 + TS_COUNTER.n++,
   nowIso: () => `2026-01-01T00:00:${String(TS_COUNTER.n++).padStart(2, "0")}.000Z`,
-})
+});
 
-const fakeRepo = (_opts?: { headBranch?: string; branchExists?: boolean; headBranchThrows?: boolean; repoValid?: boolean }): Repo => ({
-  createSandbox: () => { throw new Error("unimplemented") },
+const fakeRepo = (_opts?: {
+  headBranch?: string;
+  branchExists?: boolean;
+  headBranchThrows?: boolean;
+  repoValid?: boolean;
+}): Repo => ({
+  createSandbox: () => {
+    throw new Error("unimplemented");
+  },
   wipCommit: () => undefined,
   amendCommit: () => "",
   worktreeIsDirty: () => false,
@@ -31,16 +45,24 @@ const fakeRepo = (_opts?: { headBranch?: string; branchExists?: boolean; headBra
   readDiffStats: () => ({}),
   reviewableDiff: () => "",
   reviewableDiffAgainst: () => "",
-  fetchBranchFromClone: () => { throw new Error("unimplemented") },
-  removeSandbox: () => { throw new Error("unimplemented") },
+  fetchBranchFromClone: () => {
+    throw new Error("unimplemented");
+  },
+  removeSandbox: () => {
+    throw new Error("unimplemented");
+  },
   headBranch: () => "main",
   branchExists: () => true,
   repoValid: () => true,
-  mergeAccept: () => { throw new Error("unimplemented") },
-})
+  mergeAccept: () => {
+    throw new Error("unimplemented");
+  },
+});
 
 const gitRepo = (): Repo => ({
-  createSandbox: () => { throw new Error("unimplemented") },
+  createSandbox: () => {
+    throw new Error("unimplemented");
+  },
   wipCommit: () => undefined,
   amendCommit: () => "",
   worktreeIsDirty: () => false,
@@ -48,23 +70,49 @@ const gitRepo = (): Repo => ({
   readDiffStats: () => ({}),
   reviewableDiff: () => "",
   reviewableDiffAgainst: () => "",
-  fetchBranchFromClone: () => { throw new Error("unimplemented") },
-  removeSandbox: () => { throw new Error("unimplemented") },
+  fetchBranchFromClone: () => {
+    throw new Error("unimplemented");
+  },
+  removeSandbox: () => {
+    throw new Error("unimplemented");
+  },
   headBranch,
   branchExists,
   repoValid,
-  mergeAccept: () => { throw new Error("unimplemented") },
-})
+  mergeAccept: () => {
+    throw new Error("unimplemented");
+  },
+});
 
 const initGitRepo = (path: string): void => {
-  mkdirSync(path, { recursive: true })
-  execSync("git init -q -b main", { cwd: path, encoding: "utf-8", stdio: "pipe", shell: "/bin/zsh" })
-  execSync("git config user.email test@test.com", { cwd: path, encoding: "utf-8", stdio: "pipe", shell: "/bin/zsh" })
-  execSync("git config user.name Test", { cwd: path, encoding: "utf-8", stdio: "pipe", shell: "/bin/zsh" })
-  writeFileSync(join(path, "README.md"), "# test\n")
-  execSync("git add -A", { cwd: path, encoding: "utf-8", stdio: "pipe", shell: "/bin/zsh" })
-  execSync("git commit -m initial", { cwd: path, encoding: "utf-8", stdio: "pipe", shell: "/bin/zsh" })
-}
+  mkdirSync(path, { recursive: true });
+  execSync("git init -q -b main", {
+    cwd: path,
+    encoding: "utf-8",
+    stdio: "pipe",
+    shell: "/bin/zsh",
+  });
+  execSync("git config user.email test@test.com", {
+    cwd: path,
+    encoding: "utf-8",
+    stdio: "pipe",
+    shell: "/bin/zsh",
+  });
+  execSync("git config user.name Test", {
+    cwd: path,
+    encoding: "utf-8",
+    stdio: "pipe",
+    shell: "/bin/zsh",
+  });
+  writeFileSync(join(path, "README.md"), "# test\n");
+  execSync("git add -A", { cwd: path, encoding: "utf-8", stdio: "pipe", shell: "/bin/zsh" });
+  execSync("git commit -m initial", {
+    cwd: path,
+    encoding: "utf-8",
+    stdio: "pipe",
+    shell: "/bin/zsh",
+  });
+};
 
 // ---------------------------------------------------------------------------
 // Test data
@@ -83,7 +131,7 @@ verification:
 ---
 
 body
-`
+`;
 
 const invalidNoRepoPacket = `---
 base: main
@@ -98,7 +146,7 @@ verification:
 ---
 
 body
-`
+`;
 
 const invalidNoOutcomesPacket = `---
 repo: /tmp/test-repo
@@ -111,45 +159,49 @@ verification:
 ---
 
 body
-`
+`;
 
-const invalidYamlPacket = "---\nnot: valid: yaml: ::: \n---\n\nbody\n"
+const invalidYamlPacket = "---\nnot: valid: yaml: ::: \n---\n\nbody\n";
 
 const cleanTemp = async (dir: string) => {
-  try { await rm(dir, { recursive: true, force: true }) } catch { /* ignore */ }
-}
+  try {
+    await rm(dir, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+};
 
 // ---------------------------------------------------------------------------
 // admitPacket — valid packet
 
 test("admitPacket: valid packet → admitted to queue, not archived", () => {
   return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "admit-valid-"))
-    const clock = fixedClock()
-    const repoPath = join(tmp, "repo")
-    const repo = gitRepo()
-    initGitRepo(repoPath)
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock)
-    const packet = validPacket.replace("/tmp/test-repo", repoPath)
-    admitPacket(store, "20260101-000000-valid", packet)
+    const tmp = await mkdtempP(join(tmpdir(), "admit-valid-"));
+    const clock = fixedClock();
+    const repoPath = join(tmp, "repo");
+    const repo = gitRepo();
+    initGitRepo(repoPath);
+    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const packet = validPacket.replace("/tmp/test-repo", repoPath);
+    admitPacket(store, "20260101-000000-valid", packet);
     // Should be in queue
-    const queue = store.listQueue()
-    strictEqual(queue.length, 1)
-    equal(queue[0].runId, "20260101-000000-valid")
+    const queue = store.listQueue();
+    strictEqual(queue.length, 1);
+    equal(queue[0].runId, "20260101-000000-valid");
     // Should NOT be archived
-    strictEqual(existsSync(join(tmp, "rejected", "20260101-000000-valid.md")), false)
-    await cleanTemp(tmp)
-  })()
-})
+    strictEqual(existsSync(join(tmp, "rejected", "20260101-000000-valid.md")), false);
+    await cleanTemp(tmp);
+  })();
+});
 
 test("admitPacket: valid packet without base → stamped from HEAD", () => {
   return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "admit-stamp-"))
-    const clock = fixedClock()
-    const repoPath = join(tmp, "repo")
-    const repo = gitRepo()
-    initGitRepo(repoPath)
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock)
+    const tmp = await mkdtempP(join(tmpdir(), "admit-stamp-"));
+    const clock = fixedClock();
+    const repoPath = join(tmp, "repo");
+    const repo = gitRepo();
+    initGitRepo(repoPath);
+    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
     const packet = `---
 repo: ${repoPath}
 summary: no base
@@ -163,148 +215,165 @@ verification:
 ---
 
 body
-`
-    admitPacket(store, "20260101-000000-nobase", packet)
-    const queue = store.listQueue()
-    strictEqual(queue.length, 1)
+`;
+    admitPacket(store, "20260101-000000-nobase", packet);
+    const queue = store.listQueue();
+    strictEqual(queue.length, 1);
     // Base should be stamped from HEAD (main)
-    const queueFile = join(tmp, "queue", "20260101-000000-nobase.md")
-    ok(existsSync(queueFile))
-    const content = readFileSync(queueFile, "utf-8")
-    match(content, /base: main/)
-    await cleanTemp(tmp)
-  })()
-})
+    const queueFile = join(tmp, "queue", "20260101-000000-nobase.md");
+    ok(existsSync(queueFile));
+    const content = readFileSync(queueFile, "utf-8");
+    match(content, /base: main/);
+    await cleanTemp(tmp);
+  })();
+});
 
 test("admitPacket: valid packet with explicit base → base preserved", () => {
   return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "admit-explicit-"))
-    const clock = fixedClock()
-    const repoPath = join(tmp, "repo")
-    const repo = gitRepo()
-    initGitRepo(repoPath)
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock)
-    const packet = validPacket.replace("/tmp/test-repo", repoPath)
-    admitPacket(store, "20260101-000000-explicit", packet)
-    const queue = store.listQueue()
-    strictEqual(queue.length, 1)
-    const queueFile = join(tmp, "queue", "20260101-000000-explicit.md")
-    const content = readFileSync(queueFile, "utf-8")
-    match(content, /base: main/)
-    await cleanTemp(tmp)
-  })()
-})
+    const tmp = await mkdtempP(join(tmpdir(), "admit-explicit-"));
+    const clock = fixedClock();
+    const repoPath = join(tmp, "repo");
+    const repo = gitRepo();
+    initGitRepo(repoPath);
+    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const packet = validPacket.replace("/tmp/test-repo", repoPath);
+    admitPacket(store, "20260101-000000-explicit", packet);
+    const queue = store.listQueue();
+    strictEqual(queue.length, 1);
+    const queueFile = join(tmp, "queue", "20260101-000000-explicit.md");
+    const content = readFileSync(queueFile, "utf-8");
+    match(content, /base: main/);
+    await cleanTemp(tmp);
+  })();
+});
 
 // ---------------------------------------------------------------------------
 // admitPacket — invalid packets
 
 test("admitPacket: invalid packet (no repo) → archived, not in queue", () => {
   return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "admit-norepo-"))
-    const clock = fixedClock()
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock)
-    admitPacket(store, "20260101-000000-norepo", invalidNoRepoPacket)
-    strictEqual(store.listQueue().length, 0)
-    ok(existsSync(join(tmp, "rejected", "20260101-000000-norepo.md")), "should be archived")
-    const problems = readFileSync(join(tmp, "rejected", "20260101-000000-norepo.md.problems.txt"), "utf-8")
-    match(problems, /no repo/)
-    await cleanTemp(tmp)
-  })()
-})
+    const tmp = await mkdtempP(join(tmpdir(), "admit-norepo-"));
+    const clock = fixedClock();
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    admitPacket(store, "20260101-000000-norepo", invalidNoRepoPacket);
+    strictEqual(store.listQueue().length, 0);
+    ok(existsSync(join(tmp, "rejected", "20260101-000000-norepo.md")), "should be archived");
+    const problems = readFileSync(
+      join(tmp, "rejected", "20260101-000000-norepo.md.problems.txt"),
+      "utf-8",
+    );
+    match(problems, /no repo/);
+    await cleanTemp(tmp);
+  })();
+});
 
 test("admitPacket: invalid packet (no outcomes) → archived with schema error", () => {
   return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "admit-nooutcomes-"))
-    const clock = fixedClock()
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock)
-    admitPacket(store, "20260101-000000-nooutcomes", invalidNoOutcomesPacket)
-    strictEqual(store.listQueue().length, 0)
-    ok(existsSync(join(tmp, "rejected", "20260101-000000-nooutcomes.md")), "should be archived")
-    const problems = readFileSync(join(tmp, "rejected", "20260101-000000-nooutcomes.md.problems.txt"), "utf-8")
-    match(problems, /outcomes/)
-    await cleanTemp(tmp)
-  })()
-})
+    const tmp = await mkdtempP(join(tmpdir(), "admit-nooutcomes-"));
+    const clock = fixedClock();
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    admitPacket(store, "20260101-000000-nooutcomes", invalidNoOutcomesPacket);
+    strictEqual(store.listQueue().length, 0);
+    ok(existsSync(join(tmp, "rejected", "20260101-000000-nooutcomes.md")), "should be archived");
+    const problems = readFileSync(
+      join(tmp, "rejected", "20260101-000000-nooutcomes.md.problems.txt"),
+      "utf-8",
+    );
+    match(problems, /outcomes/);
+    await cleanTemp(tmp);
+  })();
+});
 
 test("admitPacket: invalid YAML frontmatter → archived", () => {
   return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "admit-badyaml-"))
-    const clock = fixedClock()
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock)
-    admitPacket(store, "20260101-000000-badyaml", invalidYamlPacket)
-    strictEqual(store.listQueue().length, 0)
-    ok(existsSync(join(tmp, "rejected", "20260101-000000-badyaml.md")), "should be archived")
-    const problems = readFileSync(join(tmp, "rejected", "20260101-000000-badyaml.md.problems.txt"), "utf-8")
-    match(problems, /no repo/)
-    await cleanTemp(tmp)
-  })()
-})
+    const tmp = await mkdtempP(join(tmpdir(), "admit-badyaml-"));
+    const clock = fixedClock();
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    admitPacket(store, "20260101-000000-badyaml", invalidYamlPacket);
+    strictEqual(store.listQueue().length, 0);
+    ok(existsSync(join(tmp, "rejected", "20260101-000000-badyaml.md")), "should be archived");
+    const problems = readFileSync(
+      join(tmp, "rejected", "20260101-000000-badyaml.md.problems.txt"),
+      "utf-8",
+    );
+    match(problems, /no repo/);
+    await cleanTemp(tmp);
+  })();
+});
 
 test("admitPacket: invalid packet when repoValid fails → archived with repo error", () => {
   return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "admit-repoval-"))
-    const clock = fixedClock()
+    const tmp = await mkdtempP(join(tmpdir(), "admit-repoval-"));
+    const clock = fixedClock();
     // Plain directory — no .git, repoValid returns false
-    const repoPath = join(tmp, "not-a-repo")
-    mkdirSync(repoPath)
-    const repo = gitRepo()
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock)
-    const packet = validPacket.replace("/tmp/test-repo", repoPath)
-    admitPacket(store, "20260101-000000-badrepo", packet)
-    strictEqual(store.listQueue().length, 0)
-    ok(existsSync(join(tmp, "rejected", "20260101-000000-badrepo.md")), "should be archived")
-    const problems = readFileSync(join(tmp, "rejected", "20260101-000000-badrepo.md.problems.txt"), "utf-8")
-    match(problems, /not a valid git repository/)
-    await cleanTemp(tmp)
-  })()
-})
+    const repoPath = join(tmp, "not-a-repo");
+    mkdirSync(repoPath);
+    const repo = gitRepo();
+    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const packet = validPacket.replace("/tmp/test-repo", repoPath);
+    admitPacket(store, "20260101-000000-badrepo", packet);
+    strictEqual(store.listQueue().length, 0);
+    ok(existsSync(join(tmp, "rejected", "20260101-000000-badrepo.md")), "should be archived");
+    const problems = readFileSync(
+      join(tmp, "rejected", "20260101-000000-badrepo.md.problems.txt"),
+      "utf-8",
+    );
+    match(problems, /not a valid git repository/);
+    await cleanTemp(tmp);
+  })();
+});
 
 test("admitPacket: invalid packet when branchExists fails → archived", () => {
   return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "admit-noexist-"))
-    const clock = fixedClock()
-    const repoPath = join(tmp, "repo")
-    const repo = gitRepo()
-    initGitRepo(repoPath)
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock)
+    const tmp = await mkdtempP(join(tmpdir(), "admit-noexist-"));
+    const clock = fixedClock();
+    const repoPath = join(tmp, "repo");
+    const repo = gitRepo();
+    initGitRepo(repoPath);
+    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
     // Use a base branch that does not exist in the repo
-    const packet = validPacket.replace("/tmp/test-repo", repoPath).replace("base: main", "base: nonexistent")
-    admitPacket(store, "20260101-000000-noexist", packet)
-    strictEqual(store.listQueue().length, 0)
-    ok(existsSync(join(tmp, "rejected", "20260101-000000-noexist.md")), "should be archived")
-    const problems = readFileSync(join(tmp, "rejected", "20260101-000000-noexist.md.problems.txt"), "utf-8")
-    match(problems, /does not exist/)
-    await cleanTemp(tmp)
-  })()
-})
+    const packet = validPacket
+      .replace("/tmp/test-repo", repoPath)
+      .replace("base: main", "base: nonexistent");
+    admitPacket(store, "20260101-000000-noexist", packet);
+    strictEqual(store.listQueue().length, 0);
+    ok(existsSync(join(tmp, "rejected", "20260101-000000-noexist.md")), "should be archived");
+    const problems = readFileSync(
+      join(tmp, "rejected", "20260101-000000-noexist.md.problems.txt"),
+      "utf-8",
+    );
+    match(problems, /does not exist/);
+    await cleanTemp(tmp);
+  })();
+});
 
 // ---------------------------------------------------------------------------
 // admitPacket — never-delete guarantee (F3)
 
 test("admitPacket: both valid and invalid packets are never deleted", () => {
   return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "admit-neverdel-"))
-    const clock = fixedClock()
-    const repoPath = join(tmp, "repo")
-    const repo = gitRepo()
-    initGitRepo(repoPath)
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock)
+    const tmp = await mkdtempP(join(tmpdir(), "admit-neverdel-"));
+    const clock = fixedClock();
+    const repoPath = join(tmp, "repo");
+    const repo = gitRepo();
+    initGitRepo(repoPath);
+    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
 
-    const validP = validPacket.replace("/tmp/test-repo", repoPath)
-    admitPacket(store, "20260101-000000-valid", validP)
-    admitPacket(store, "20260101-000000-invalid", invalidNoRepoPacket)
+    const validP = validPacket.replace("/tmp/test-repo", repoPath);
+    admitPacket(store, "20260101-000000-valid", validP);
+    admitPacket(store, "20260101-000000-invalid", invalidNoRepoPacket);
 
     // Valid should be in queue
-    const queue = store.listQueue()
-    strictEqual(queue.length, 1)
-    equal(queue[0].runId, "20260101-000000-valid")
+    const queue = store.listQueue();
+    strictEqual(queue.length, 1);
+    equal(queue[0].runId, "20260101-000000-valid");
 
     // Invalid should be in rejected
-    const rejectedDir = join(tmp, "rejected")
-    ok(existsSync(rejectedDir))
-    const rejected = readdirSync(rejectedDir)
-    ok(rejected.some(f => f.startsWith("20260101-000000-invalid")))
+    const rejectedDir = join(tmp, "rejected");
+    ok(existsSync(rejectedDir));
+    const rejected = readdirSync(rejectedDir);
+    ok(rejected.some((f) => f.startsWith("20260101-000000-invalid")));
 
-    await cleanTemp(tmp)
-  })()
-})
+    await cleanTemp(tmp);
+  })();
+});

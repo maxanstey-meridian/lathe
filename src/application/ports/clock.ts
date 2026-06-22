@@ -3,6 +3,6 @@
 // do NOT import the system clock directly.
 
 export type Clock = {
-  now(): number
-  nowIso(): string
-}
+  now(): number;
+  nowIso(): string;
+};

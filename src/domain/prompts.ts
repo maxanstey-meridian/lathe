@@ -4,12 +4,12 @@
 // This is the single consolidated render module — ARCHITECTURE.v3.md:146-148.
 // Pure functions over durable-state snapshots. No file I/O.
 
-import { redactPacketInfra } from "./packet.js"
-import type { Packet } from "./packet.js"
-import type { OutcomeLedger, Checkpoint } from "./outcomes.js"
-import type { ReviewState, Decision } from "./run.js"
-import type { PlannerResponse, QuestionType } from "./review.js"
-import type { SubmitReport } from "./report.js"
+import type { OutcomeLedger, Checkpoint } from "./outcomes.js";
+import { redactPacketInfra } from "./packet.js";
+import type { Packet } from "./packet.js";
+import type { SubmitReport } from "./report.js";
+import type { PlannerResponse, QuestionType } from "./review.js";
+import type { ReviewState, Decision } from "./run.js";
 
 // ---------------------------------------------------------------------------
 // BRIDGE_CONTRACT (reference prompts.ts:7-38)
@@ -46,7 +46,7 @@ Tooling:
 - Let the code compute. Never hand-simulate algorithms, counts, or arithmetic in your head — write a small script and run it. Your mental math is unreliable and expensive; the machine's is free.
 - Prefer rg over grep, and rg --files over find — targeted searches for symbols, routes, config keys, error strings; never broad recursive scans.
 - Read files before editing them. Match the surrounding style exactly.
-- Run things through bash from the project root; it is your cwd.`
+- Run things through bash from the project root; it is your cwd.`;
 
 // ---------------------------------------------------------------------------
 // Private helpers (reference prompts.ts:40-64)
@@ -60,42 +60,43 @@ const renderOutcomes = (ledger: OutcomeLedger): string =>
           ? ` — state: ${o.state ?? "unknown"}; next action: ${o.nextAction ?? "unknown"}`
           : o.status === "done"
             ? ` — evidence: ${o.evidence.join("; ") || "none recorded"}`
-            : ""
-      return `- [${o.status}] ${o.id}: ${o.description}${extra}`
+            : "";
+      return `- [${o.status}] ${o.id}: ${o.description}${extra}`;
     })
-    .join("\n")
+    .join("\n");
 
 export const renderSealedFiles = (packet: Packet): string => {
-  const ro = packet.frontmatter.regression_outcomes ?? []
-  if (ro.length === 0) return ""
+  const ro = packet.frontmatter.regression_outcomes ?? [];
+  if (ro.length === 0) return "";
   return `## Sealed files (prior converged work)
 
 ${ro.map((o) => `- [${o.id}]: ${o.description}`).join("\n")}
 
 These outcomes were delivered by prior packets in the chain and converged — their files are sealed.
 Read them to integrate against; do NOT modify them. Your new work goes only in this packet's
-expected_surface (already shown in the packet above).`
-}
+expected_surface (already shown in the packet above).`;
+};
 
 const renderObligations = (review: ReviewState): string =>
-  review.obligations.length > 0
-    ? review.obligations.map((o) => `- ${o}`).join("\n")
-    : "- None"
+  review.obligations.length > 0 ? review.obligations.map((o) => `- ${o}`).join("\n") : "- None";
 
 const renderRecentDecisions = (decisions: Decision[], n: number): string => {
-  const recent = decisions.slice(-n)
-  if (recent.length === 0) return "- None yet"
+  const recent = decisions.slice(-n);
+  if (recent.length === 0) return "- None yet";
   return recent
     .map((d) => `- [${d.status}] Q: ${d.question.slice(0, 160)} → A: ${d.answer.slice(0, 200)}`)
-    .join("\n")
-}
+    .join("\n");
+};
 
 // ---------------------------------------------------------------------------
 // Q-table functions (reference prompts.ts:66-326)
 // ---------------------------------------------------------------------------
 
 // Q1 — initial seed (B1)
-export const q1InitialSeed = (packet: Packet, ledger: OutcomeLedger): string => `You are Baby: the Meridian executor. You are implementing one handoff packet, alone, overnight, in the project (your working directory is its root). A planner (Daddy) answers scoped questions through the meridian-bridge_ask_planner tool; the human (Max) is asleep and reachable only by parking the run.
+export const q1InitialSeed = (
+  packet: Packet,
+  ledger: OutcomeLedger,
+): string => `You are Baby: the Meridian executor. You are implementing one handoff packet, alone, overnight, in the project (your working directory is its root). A planner (Daddy) answers scoped questions through the meridian-bridge_ask_planner tool; the human (Max) is asleep and reachable only by parking the run.
 
 ${BRIDGE_CONTRACT}
 
@@ -110,7 +111,7 @@ ${renderSealedFiles(packet)}
 
 ## Start
 
-Inspect only what the packet's "Inspect first" section names. Your first edit requires an accepted planner decision: when you have inspected enough to state your implementation approach for the first slice, call meridian-bridge_ask_planner with that approach and your evidence. Then implement.`
+Inspect only what the packet's "Inspect first" section names. Your first edit requires an accepted planner decision: when you have inspected enough to state your implementation approach for the first slice, call meridian-bridge_ask_planner with that approach and your evidence. Then implement.`;
 
 // Q2 — rotation seed (O5)
 export const q2RotationSeed = (
@@ -121,23 +122,26 @@ export const q2RotationSeed = (
   decisions: Decision[],
   diffStat: string,
 ): string => {
-  const done = ledger.outcomes.filter((o) => o.status === "done")
-  const inProgress = ledger.outcomes.filter((o) => o.status === "in_progress")
-  const notStarted = ledger.outcomes.filter((o) => o.status === "not_started")
-  const blocked = ledger.outcomes.filter((o) => o.status === "blocked")
+  const done = ledger.outcomes.filter((o) => o.status === "done");
+  const inProgress = ledger.outcomes.filter((o) => o.status === "in_progress");
+  const notStarted = ledger.outcomes.filter((o) => o.status === "not_started");
+  const blocked = ledger.outcomes.filter((o) => o.status === "blocked");
 
   const statusLine = [
     done.length ? `Done: ${done.map((o) => o.id).join(", ")}.` : "",
     inProgress.length
       ? inProgress
-          .map((o) => `In progress: ${o.id} — ${o.state ?? "state unknown"}; next action: ${o.nextAction ?? "unknown"}.`)
+          .map(
+            (o) =>
+              `In progress: ${o.id} — ${o.state ?? "state unknown"}; next action: ${o.nextAction ?? "unknown"}.`,
+          )
           .join(" ")
       : "",
     notStarted.length ? `Not started: ${notStarted.map((o) => o.id).join(", ")}.` : "",
     blocked.length ? `Blocked: ${blocked.map((o) => o.id).join(", ")}.` : "",
   ]
     .filter(Boolean)
-    .join(" ")
+    .join(" ");
 
   return `You are Baby: the Meridian executor, TAKING OVER a run a different, earlier session started. You did not do any of the work described below and you do not share that session's memory. The status, ledger, checkpoint, and decisions below are that session's CLAIMS — a starting map to verify, not facts you witnessed. Do not reconstruct from memory you don't have, and do not assume any outcome is actually finished just because it is described or marked done here.
 
@@ -184,25 +188,30 @@ ${redactPacketInfra(packet.raw)}
 
 ## Continue
 
-Continue with the in-progress outcome's next action. A "done" marker is the predecessor's claim, not proof: before you build on a done outcome, spot-check it against the diff, and if the claim doesn't hold, reopen it with meridian-bridge_update_outcomes rather than assuming it is finished. The point is not to blindly re-do work — it is to not blindly trust it either.`
-}
+Continue with the in-progress outcome's next action. A "done" marker is the predecessor's claim, not proof: before you build on a done outcome, spot-check it against the diff, and if the claim doesn't hold, reopen it with meridian-bridge_update_outcomes rather than assuming it is finished. The point is not to blindly re-do work — it is to not blindly trust it either.`;
+};
 
 // Q3 — neutral continuation (L5; v1 X8 carried: every exit named, none privileged)
 export const q3Continue = (): string =>
-  `Meridian driver: the run is still active. Pick exactly one: continue with the next step; route a question — including one you just asked in prose, which no one received — to meridian-bridge_ask_planner; or, if the packet is complete or only Max can decide, call meridian-bridge_submit_report. Prose reaches no one; act through tools.`
+  `Meridian driver: the run is still active. Pick exactly one: continue with the next step; route a question — including one you just asked in prose, which no one received — to meridian-bridge_ask_planner; or, if the packet is complete or only Max can decide, call meridian-bridge_submit_report. Prose reaches no one; act through tools.`;
 
 // Q4 — checkpoint demand (gate latched)
-export const q4CheckpointDemand = (reason: string, review: ReviewState): string => `Meridian driver: a planner checkpoint is required before further edits.
+export const q4CheckpointDemand = (
+  reason: string,
+  review: ReviewState,
+): string => `Meridian driver: a planner checkpoint is required before further edits.
 
 Reason: ${reason}.
 
 Current review obligations from Daddy (include them in your evidence; Daddy's reply replaces them):
 ${renderObligations(review)}
 
-Call meridian-bridge_ask_planner now, then stop and end your turn — the decision comes back in your next prompt, not in the tool result. Summarize current status, your intended next step, and any in-flight issues (failing builds, half-finished edits) as current status — do not try to fix them first; edits are blocked until the planner returns proceed or proceed_with_constraints. Your approach arg must carry your actual plan: the design decisions you have made or are about to make, especially any the packet marks as daddy-discoverable. Asking a narrow safe question while holding back the real plan gets the plan unwound later, not approved. Reads stay available for gathering evidence. If the reason names out-of-surface files, ask Daddy to classify each as expected, acceptable-but-not-predeclared, or suspicious, with the evidence that explains why it changed.`
+Call meridian-bridge_ask_planner now, then stop and end your turn — the decision comes back in your next prompt, not in the tool result. Summarize current status, your intended next step, and any in-flight issues (failing builds, half-finished edits) as current status — do not try to fix them first; edits are blocked until the planner returns proceed or proceed_with_constraints. Your approach arg must carry your actual plan: the design decisions you have made or are about to make, especially any the packet marks as daddy-discoverable. Asking a narrow safe question while holding back the real plan gets the plan unwound later, not approved. Reads stay available for gathering evidence. If the reason names out-of-surface files, ask Daddy to classify each as expected, acceptable-but-not-predeclared, or suspicious, with the evidence that explains why it changed.`;
 
 // Q5 — teardown demand (O4)
-export const q5TeardownDemand = (ledger: OutcomeLedger): string => `Meridian driver: this session is being rotated (context budget reached). Your final task in this session is to write the rotation checkpoint — nothing else.
+export const q5TeardownDemand = (
+  ledger: OutcomeLedger,
+): string => `Meridian driver: this session is being rotated (context budget reached). Your final task in this session is to write the rotation checkpoint — nothing else.
 
 THIS MUST BE A TOOL CALL. Invoke the meridian-bridge_write_checkpoint tool. Printing the checkpoint as text or JSON in your reply does NOTHING — no one reads it, it is not saved, and this demand will simply repeat until the run is parked as wedged. The tool takes only two things:
 
@@ -214,18 +223,20 @@ The driver records the rest itself: which outcomes are at what status (from the 
 Current ledger for reference:
 ${renderOutcomes(ledger)}
 
-Do not start new work. meridian-bridge_update_outcomes (if the ledger is stale) then meridian-bridge_write_checkpoint are the only acceptable tool calls.`
+Do not start new work. meridian-bridge_update_outcomes (if the ledger is stale) then meridian-bridge_write_checkpoint are the only acceptable tool calls.`;
 
 // Q6 — report-properly (L4)
 export const q6ReportProperly = (): string =>
-  `Meridian driver: you described an outcome in prose, but runs end only through the meridian-bridge_submit_report tool. Call meridian-bridge_submit_report now with the appropriate status (ready_for_review / blocked / failed) and the full report fields. If work remains, continue working instead.`
+  `Meridian driver: you described an outcome in prose, but runs end only through the meridian-bridge_submit_report tool. Call meridian-bridge_submit_report now with the appropriate status (ready_for_review / blocked / failed) and the full report fields. If work remains, continue working instead.`;
 
 // Q7 — report rejection (V1/V3)
-export const q7ReportRejected = (problems: string[]): string => `Meridian driver: meridian-bridge_submit_report was rejected. The following must be resolved first:
+export const q7ReportRejected = (
+  problems: string[],
+): string => `Meridian driver: meridian-bridge_submit_report was rejected. The following must be resolved first:
 
 ${problems.map((p) => `- ${p}`).join("\n")}
 
-Resolve them (run the missing verification commands, fix the outcome ledger via meridian-bridge_update_outcomes, or re-run verification after your latest edits), then call meridian-bridge_submit_report again. If a problem cannot be resolved, submit with status "failed" or "blocked" and say why.`
+Resolve them (run the missing verification commands, fix the outcome ledger via meridian-bridge_update_outcomes, or re-run verification after your latest edits), then call meridian-bridge_submit_report again. If a problem cannot be resolved, submit with status "failed" or "blocked" and say why.`;
 
 // Q8 — reconciliation seed (O6, R8)
 export const q8ReconciliationSeed = (
@@ -270,7 +281,7 @@ ${diffStat || "(clean)"}
 
 ## The handoff packet
 
-${redactPacketInfra(packet.raw)}`
+${redactPacketInfra(packet.raw)}`;
 
 // Qreorient — reorient seed (hallucination recovery). The predecessor session derailed
 // (confabulated files/paths/projects, lost the thread) but Daddy worked out the
@@ -321,24 +332,26 @@ ${diffStat || "(clean)"}
 
 ## The handoff packet
 
-${redactPacketInfra(packet.raw)}`
+${redactPacketInfra(packet.raw)}`;
 
 // Periodic NON-BLOCKING checkpoint reminder (§10). The cadence that used to
 // THROW `MERIDIAN GATE BLOCKED: …checkpoint interval reached` (and end Baby's
 // turn) is reborn here as a shout: Baby keeps full tool access and is free to
 // ignore it. No "BLOCKED" — that word would be a lie now.
 export const softCheckpointNudge = (minutes: number): string =>
-  `Meridian driver: it has been ~${minutes} min since your last planner check-in. You are NOT blocked — continue with full tool access. If you'd value Daddy's eyes on your direction, call meridian-bridge_ask_planner; otherwise carry on and call meridian-bridge_submit_report once the packet is complete. Prose reaches no one; act through tools.`
+  `Meridian driver: it has been ~${minutes} min since your last planner check-in. You are NOT blocked — continue with full tool access. If you'd value Daddy's eyes on your direction, call meridian-bridge_ask_planner; otherwise carry on and call meridian-bridge_submit_report once the packet is complete. Prose reaches no one; act through tools.`;
 
 // Ladder step 2 sharpened nudge (L3) — reuses Q3's exits with the stakes stated.
 export const ladderNudge = (count: number): string =>
-  `Meridian driver: ${count} consecutive turns have ended without an allowed tool call. One more and this run parks as wedged for Max to review in the morning. Act through a tool now: continue the work, route your question to meridian-bridge_ask_planner, or call meridian-bridge_submit_report.`
+  `Meridian driver: ${count} consecutive turns have ended without an allowed tool call. One more and this run parks as wedged for Max to review in the morning. Act through a tool now: continue the work, route your question to meridian-bridge_ask_planner, or call meridian-bridge_submit_report.`;
 
 // Qp — planner decision delivery. The driver runs the meridian-bridge_ask_planner consult off
 // the MCP request path and delivers Daddy's verdict here, on the turn AFTER the
 // one Baby asked in. The payload mirrors what meridian-bridge_ask_planner used to return inline
 // (the { planner } object), so Baby reads the same shape it already knows.
-export const qPlannerDecision = (planner: PlannerResponse): string => `Meridian driver: the planner (Daddy) answered the question you submitted.
+export const qPlannerDecision = (
+  planner: PlannerResponse,
+): string => `Meridian driver: the planner (Daddy) answered the question you submitted.
 
 ${JSON.stringify({ planner }, null, 2)}
 
@@ -346,16 +359,18 @@ ${
   planner.status === "revise_slice"
     ? "This is revise_slice: narrow or rework your slice as directed above, then call meridian-bridge_ask_planner again BEFORE editing. Do not implement the original plan."
     : "Your question is answered and the gate is now clear for this slice. The constraints above are your live review obligations — satisfy them in the code. Proceed with implementation."
-}`
+}`;
 
 // Qp-fail — the consult itself failed to reach Daddy (transport, not a stop
 // verdict). Mirrors the old inline "planner unavailable" error text: retry once,
 // then park via meridian-bridge_submit_report rather than improvising.
-export const qPlannerUnavailable = (detail: string): string => `Meridian driver: your meridian-bridge_ask_planner consult could not reach the planner.
+export const qPlannerUnavailable = (
+  detail: string,
+): string => `Meridian driver: your meridian-bridge_ask_planner consult could not reach the planner.
 
 Detail: ${detail}
 
-Do not improvise an answer. Call meridian-bridge_ask_planner once more; if it fails again, call meridian-bridge_submit_report with status blocked, blockedReason stop_condition, and this error in blockedQuestion.`
+Do not improvise an answer. Call meridian-bridge_ask_planner once more; if it fails again, call meridian-bridge_submit_report with status blocked, blockedReason stop_condition, and this error in blockedQuestion.`;
 
 // ---------------------------------------------------------------------------
 // Daddy seed + planner question (reference planner.ts:10-138)
@@ -366,13 +381,15 @@ Do not improvise an answer. Call meridian-bridge_ask_planner once more; if it fa
 // know the run's longitudinal shape (attempt count, time burned, whether
 // verification has EVER passed).
 export type DriverFacts = {
-  attempt: number
-  rotations: number
-  ledgerSummary: string
-}
+  attempt: number;
+  rotations: number;
+  ledgerSummary: string;
+};
 
 // renderDaddySeed — the initial Daddy prompt
-export const renderDaddySeed = (packetRaw: string): string => `You are Daddy: the Meridian planner for one overnight run. You decide, you don't implement.
+export const renderDaddySeed = (
+  packetRaw: string,
+): string => `You are Daddy: the Meridian planner for one overnight run. You decide, you don't implement.
 
 A smaller executor model (Baby) is implementing the handoff packet below in the project. Its questions reach you through an MCP bridge as structured prompts; you answer in strict JSON per the contract embedded in each question.
 
@@ -386,7 +403,7 @@ Reply to this message with exactly: PLANNER_OK
 
 --- HANDOFF PACKET ---
 ${redactPacketInfra(packetRaw)}
---- END HANDOFF PACKET ---`
+--- END HANDOFF PACKET ---`;
 
 // renderPlannerQuestion — the structured question Daddy receives
 export const renderPlannerQuestion = (
@@ -398,13 +415,16 @@ export const renderPlannerQuestion = (
   reviewState: ReviewState | undefined,
   facts?: DriverFacts,
 ): string => {
-  const evidenceBullets = evidence.length > 0 ? evidence.map((e) => `- ${e}`).join("\n") : "- None supplied"
-  const obligationBullets = reviewState && reviewState.obligations.length > 0
-    ? reviewState.obligations.map((o) => `- ${o}`).join("\n")
-    : "- None"
+  const evidenceBullets =
+    evidence.length > 0 ? evidence.map((e) => `- ${e}`).join("\n") : "- None supplied";
+  const obligationBullets =
+    reviewState && reviewState.obligations.length > 0
+      ? reviewState.obligations.map((o) => `- ${o}`).join("\n")
+      : "- None";
 
-  const diffAuditRules = questionType === "diff_audit"
-    ? `
+  const diffAuditRules =
+    questionType === "diff_audit"
+      ? `
 ## Diff audit closure rules
 
 This is a closure audit. The executor may be trying to prove it satisfied review obligations you previously gave.
@@ -413,15 +433,16 @@ This is a closure audit. The executor may be trying to prove it satisfied review
 - Return revise_slice if the executor has not fixed what you previously required, or is asking to move on without closure evidence.
 - Closure requires evidence, not "talked to planner".
 `
-    : ""
+      : "";
 
-  const reconciliationRules = questionType === "reconciliation"
-    ? `
+  const reconciliationRules =
+    questionType === "reconciliation"
+      ? `
 ## Reconciliation rules
 
 The previous executor session ended without a valid checkpoint. The executor has reconstructed state from the diff, ledger, and outcome file. Accept (proceed / proceed_with_constraints) only if the reconstruction is consistent with the durable evidence supplied; otherwise return stop or revise_slice and name what is inconsistent.
 `
-    : ""
+      : "";
 
   return `Executor question via the Meridian bridge. Answer per your role and the rules below.
 
@@ -450,13 +471,15 @@ The executor states its approach below — its design decisions, made or pending
 
 ## Driver telemetry (mechanical facts, not the executor's words)
 
-${facts
+${
+  facts
     ? `- Run attempt: ${facts.attempt} (previous attempts ended in restart/rotation, not completion)
 - Session rotations: ${facts.rotations}
 - Outcome ledger: ${facts.ledgerSummary}
 
 These are the run's longitudinal shape, which the executor cannot see. If attempts and rotations are mounting while the outcome ledger sits unchanged, re-check the approach rather than approving more code. There is no wall-clock deadline — answer on correctness alone, never on speed.`
-    : "- (not supplied)"}
+    : "- (not supplied)"
+}
 
 ## Current context
 
@@ -489,8 +512,8 @@ Return ONLY JSON. No markdown fences, no prose outside JSON.
   "evidence_used": ["what you based this on"],
   "safe_next_action": "one concrete next action",
   "human_decision_needed": null
-}`
-}
+}`;
+};
 
 // ---------------------------------------------------------------------------
 // Super-daddy review prompt (reference super-review.ts:46-209)
@@ -498,14 +521,14 @@ Return ONLY JSON. No markdown fences, no prose outside JSON.
 
 // SuperReviewInput — the structured input for renderSuperReview
 export type SuperReviewInput = {
-  packet: Packet // the ORIGINAL packet — the intent super-daddy anchors to
-  diff: string // run branch vs base (committed WIP included)
-  reportText: string // the run's report.md, as supplementary context (not trusted)
-  skillText: string // Max's meridian skill — injected verbatim as the rubric
-  pass: number // which convergence pass produced this run
-  maxPasses: number // the hard cap, for the reviewer's urgency calibration
-  campaignId: string // session-scoping key: reuse session within, reset between
-}
+  packet: Packet; // the ORIGINAL packet — the intent super-daddy anchors to
+  diff: string; // run branch vs base (committed WIP included)
+  reportText: string; // the run's report.md, as supplementary context (not trusted)
+  skillText: string; // Max's meridian skill — injected verbatim as the rubric
+  pass: number; // which convergence pass produced this run
+  maxPasses: number; // the hard cap, for the reviewer's urgency calibration
+  campaignId: string; // session-scoping key: reuse session within, reset between
+};
 
 // The must-execute mandate and the shared body (rubric, packet, diff, grounding
 // rule, response contract, commit-message instructions).
@@ -514,14 +537,15 @@ You have bash. RUN the verification commands below yourself, plus whatever
 build/typecheck/test the repo needs. Do not trust the report's claims; the report
 is a possibly-stale convenience. A command that exits non-zero is non-negotiable
 evidence of a blocker. A fully green suite is REQUIRED before you may recommend
-stopping — you may never declare convergence while anything is red.`
+stopping — you may never declare convergence while anything is red.`;
 
 const reviewBody = (input: SuperReviewInput): string => {
-  const fm = input.packet.frontmatter
-  const outcomeLines = fm.outcomes.map((o) => `- ${o.id}: ${o.description}`).join("\n")
+  const fm = input.packet.frontmatter;
+  const outcomeLines = fm.outcomes.map((o) => `- ${o.id}: ${o.description}`).join("\n");
   const verificationLines =
-    fm.verification.map((v) => `- \`${v.command}\``).join("\n") || "- (none declared)"
-  const constraintLines = fm.constraints.length > 0 ? fm.constraints.map((c) => `- ${c}`).join("\n") : "- (none)"
+    fm.verification.map((v) => `- \`${v.command}\``).join("\n") || "- (none declared)";
+  const constraintLines =
+    fm.constraints.length > 0 ? fm.constraints.map((c) => `- ${c}`).join("\n") : "- (none)";
 
   return `## The rubric — Max's house doctrine (this IS your grading criteria)
 Grade the diff against this. Its architecture rules (data-transforms, port
@@ -633,8 +657,8 @@ landing yet).
 - escalate — converged-but-for a decision only Max can make (product/UX/security/
   tenancy/data/billing/legal/migration policy), or you cannot safely judge. Put the
   exact decision in human_decision_needed.
-- recommend_stop MUST be false if ANY verification command exited non-zero.`
-}
+- recommend_stop MUST be false if ANY verification command exited non-zero.`;
+};
 
 // renderSuperReview — the convergence reviewer prompt
 export const renderSuperReview = (input: SuperReviewInput): string =>
@@ -659,7 +683,7 @@ AND to the house doctrine in the rubric. Your cwd is the run's worktree.
 
 ${MUST_EXECUTE}
 
-${reviewBody(input)}`
+${reviewBody(input)}`;
 
 // ---------------------------------------------------------------------------
 // Final review — Daddy's acceptance check (reference final-review.ts:11-77)
@@ -672,13 +696,16 @@ export const renderFinalReview = (
   ledger: OutcomeLedger,
   report: SubmitReport,
 ): string => {
-  const outcomeLines = ledger.outcomes.map((o) => `- ${o.id}: ${o.description}`).join("\n")
+  const outcomeLines = ledger.outcomes.map((o) => `- ${o.id}: ${o.description}`).join("\n");
   const verificationLines =
-    packet.frontmatter.verification.map((v) => `- \`${v.command}\``).join("\n") || "- (none declared)"
+    packet.frontmatter.verification.map((v) => `- \`${v.command}\``).join("\n") ||
+    "- (none declared)";
   const filesLines =
     report.filesChanged.length > 0
-      ? report.filesChanged.map((f) => `- \`${f.path}\` (${f.classification}, ${f.action})`).join("\n")
-      : "- (none reported)"
+      ? report.filesChanged
+          .map((f) => `- \`${f.path}\` (${f.classification}, ${f.action})`)
+          .join("\n")
+      : "- (none reported)";
 
   return `FINAL REVIEW — the run is complete and you are the last gate before it reaches Max.
 
@@ -731,5 +758,5 @@ Return ONLY JSON. No markdown fences, no prose outside JSON.
 - escalate — the work is mechanically complete but now exposes a decision only
   Max can make (product, UX, security, permission, tenancy, data retention,
   billing, legal, compliance, migration policy, scope beyond the packet). Put
-  the exact decision in human_decision_needed.`
-}
+  the exact decision in human_decision_needed.`;
+};

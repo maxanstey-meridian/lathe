@@ -188,17 +188,17 @@ export const diagnosePlannerParse = (raw: string): string => {
 export const jsonReaskNudge = (reason: string): string =>
   `Your previous reply could not be accepted: ${reason}. Reply again with ONLY the JSON verdict object in the response shape above — no reasoning, no markdown fences, nothing before the opening { or after the closing }.`
 
-// Parse a final-review response, or null if nothing validates. Uses the same
-// balanced-object scan as the planner response path — the scar is identical
-// (prose examples before the real verdict).
-// Reference: reference/src/final-review.ts:82-107
+// Parse a final-review response, or null if nothing validates. Mirrors
+// parseSuperReview's scan: every balanced {...} object, LAST first (the real
+// verdict trails any prose example), return the FIRST candidate that validates.
+// Reference: reference/src/convergence.ts:154-165
 export const tryParseFinalReview = (raw: string): FinalReview | null => {
-  for (const candidate of plannerResponseCandidates(raw)) {
+  for (const candidate of extractBalancedObjects(raw).reverse()) {
     try {
       const parsed = FinalReview.safeParse(JSON.parse(candidate))
       if (parsed.success) return parsed.data
     } catch {
-      /* try next candidate */
+      /* not this object — try the next-earlier one */
     }
   }
   return null

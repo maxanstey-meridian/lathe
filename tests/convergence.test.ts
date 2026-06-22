@@ -170,6 +170,19 @@ test("tryParseFinalReview: returns null when fenced content is not valid JSON bu
   assert.equal(result, null)
 })
 
+test("tryParseFinalReview: fenced example object before real balanced-JSON verdict → parses the real verdict", () => {
+  const real = { verdict: "accept", findings: ["all outcomes delivered"], notes: "8/8" }
+  const response =
+    "Here's what a verdict looks like:\n\n" +
+    "```json\n" +
+    JSON.stringify({ verdict: "request_changes", findings: ["example finding"], notes: "example" }) +
+    "\n```\n\n" +
+    "The actual verdict:\n\n" +
+    JSON.stringify(real)
+  assert.equal(tryParseFinalReview(response)?.verdict, "accept")
+  assert.equal(tryParseFinalReview(response)?.notes, "8/8")
+})
+
 // --- parsePlannerResponse: fences, braces, garbage → stop ---
 
 test("parsePlannerResponse: fenced JSON, bare JSON, garbage → stop", () => {

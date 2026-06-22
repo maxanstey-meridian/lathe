@@ -296,6 +296,15 @@ test("editTargetOutOfSurface: in-worktree path containing .. that stays inside i
   assert.strictEqual(safe, undefined)
 })
 
+test("editTargetOutOfSurface: doubled slash after worktree prefix bypass is blocked", () => {
+  const escaped = editTargetOutOfSurface(
+    "edit",
+    { filePath: "/home/user/worktree//../../etc/passwd" },
+    "/home/user/worktree",
+  )
+  assert.strictEqual(escaped, "/home/user/worktree//../../etc/passwd")
+})
+
 test("editTargetOutOfSurface: relative path climbing out is blocked", () => {
   const escaped = editTargetOutOfSurface("edit", { filePath: "../other/file.ts" }, "/home/user/worktree")
   assert.strictEqual(escaped, "../other/file.ts")

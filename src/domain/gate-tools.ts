@@ -77,21 +77,22 @@ export const editTargetOutOfSurface = (
   const record = args as Record<string, unknown>
   const raw = typeof record.filePath === "string" ? record.filePath : typeof record.path === "string" ? record.path : undefined
   if (!raw) return undefined
+
   const prefix = worktree.endsWith("/") ? worktree : `${worktree}/`
-  if (raw.startsWith(prefix)) {
-    const afterPrefix = raw.slice(prefix.length)
-    const normalized = normalize(afterPrefix)
-    // An absolute path whose remainder climbs out of the worktree is invisible
-    // to the run's diff — denying here is the ONLY net for it. Never fail open.
-    if (normalized === ".." || normalized.startsWith("../")) return raw
-    // Empty string (path resolves to worktree root itself) is allowed.
+
+  // POSIX-normalize the ENTIRE path first (pure string op — handles doubled slashes,
+  // collapsed `..`, etc.), then check containment. This is the ONLY net for
+  // escape-to-real-disk. Never fail open.
+  const normalized = normalize(raw)
+
+  if (normalized.startsWith("/")) {
+    // Absolute path: deny unless it starts with the worktree prefix.
+    if (!normalized.startsWith(prefix)) return raw
+    // Inside worktree — allowed.
     return undefined
   }
-  // An absolute path outside the worktree is invisible to the run's diff —
-  // denying here is the ONLY net for it. Never fail open.
-  if (raw.startsWith("/")) return raw
-  // Relative path: normalize and check for parent-dir escapes.
-  const normalized = normalize(raw)
+
+  // Relative path: deny if it climbs above the working directory.
   if (normalized === ".." || normalized.startsWith("../")) return raw
   return undefined
 }

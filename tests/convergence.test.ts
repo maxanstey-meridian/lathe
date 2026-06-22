@@ -11,7 +11,7 @@ import {
   assembleCommitMessage,
   renderNits,
 } from "../src/domain/convergence.js"
-import { parseFinalReview, parsePlannerResponse } from "../src/domain/review.js"
+import { parseFinalReview, parsePlannerResponse, tryParseFinalReview } from "../src/domain/review.js"
 import { upsertPass } from "../src/domain/campaign.js"
 import { parseStaged, convergedTip, decidePromotion } from "../src/domain/chain.js"
 import { parsePacketShape, type AdmissionResult } from "../src/domain/packet.js"
@@ -129,6 +129,45 @@ test("parseFinalReview: valid verdicts parse; garbage → request_changes", () =
   assert.equal(fenced.verdict, "accept")
   const garbage = parseFinalReview("the build looks fine to me, ship it")
   assert.equal(garbage.verdict, "request_changes")
+})
+
+test("parseFinalReview: prose example object before real verdict → parses the real verdict (balanced last-first)", () => {
+  const good = { verdict: "accept", findings: ["all outcomes delivered"], notes: "8/8" }
+  const response =
+    "I'll show what a good verdict looks like:\n\n" +
+    '{"verdict": "request_changes", "findings": ["example finding"]}\n\n' +
+    "But the actual verdict is:\n\n" +
+    JSON.stringify(good)
+  assert.equal(parseFinalReview(response).verdict, "accept")
+})
+
+test("parseFinalReview: fenced verdict with surrounding prose → parses correctly", () => {
+  const good = { verdict: "accept", findings: [], notes: "green" }
+  const response =
+    "Reviewed the diff. Everything looks good.\n\n" +
+    "```json\n" +
+    JSON.stringify(good) +
+    "\n```\n\n" +
+    "No issues found."
+  assert.equal(parseFinalReview(response).verdict, "accept")
+})
+
+test("tryParseFinalReview: returns null for unparseable input", () => {
+  assert.equal(tryParseFinalReview("the build looks fine to me"), null)
+  assert.equal(tryParseFinalReview(""), null)
+  assert.equal(tryParseFinalReview("not json at all {with braces"), null)
+})
+
+test("tryParseFinalReview: returns parsed result for valid input", () => {
+  const good = { verdict: "accept", findings: ["a"], notes: "ok" }
+  const result = tryParseFinalReview(JSON.stringify(good))
+  assert.ok(result)
+  assert.equal(result.verdict, "accept")
+})
+
+test("tryParseFinalReview: returns null when fenced content is not valid JSON but prose is also not valid", () => {
+  const result = tryParseFinalReview("```json\n{not valid json\n```\nstill broken")
+  assert.equal(result, null)
 })
 
 // --- parsePlannerResponse: fences, braces, garbage → stop ---

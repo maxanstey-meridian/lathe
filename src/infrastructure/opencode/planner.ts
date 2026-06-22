@@ -7,7 +7,7 @@ import type { Planner } from "../../application/ports/planner.js"
 import type { PlannerResponse, FinalReview } from "../../domain/review.js"
 import type { Packet, OutcomeLedger, SubmitReport } from "../../domain/index.js"
 import { renderPlannerQuestion, renderFinalReview } from "../../domain/prompts.js"
-import { tryParsePlannerResponse, diagnosePlannerParse, jsonReaskNudge, parsePlannerResponse, parseFinalReview } from "../../domain/review.js"
+import { tryParsePlannerResponse, diagnosePlannerParse, jsonReaskNudge, parsePlannerResponse, parseFinalReview, tryParseFinalReview } from "../../domain/review.js"
 import { extractText } from "../../domain/agent-response.js"
 
 // ---------------------------------------------------------------------------
@@ -69,6 +69,7 @@ export const createPlanner = (
   }
 
   // V7: fails closed to request_changes on ANY error (transport, parse, timeout).
+  // Re-asks ONCE on a parse miss, then fails closed.
   // Reference: reference/src/bridge.ts:55-87
   const finalReview = async (packet: Packet, reviewableDiff: string, ledger: OutcomeLedger, report: SubmitReport): Promise<FinalReview> => {
     if (!daddySessionId) throw new Error("handshake must be called before finalReview")
@@ -77,7 +78,19 @@ export const createPlanner = (
     try {
       const response = await executor.sendMessage(daddySessionId, prompt, daddyModel, daddyTimeoutMs)
       const raw = extractText(response)
-      return parseFinalReview(raw)
+      const parsed = tryParseFinalReview(raw)
+      if (parsed) return parsed
+
+      // Re-ask with concrete reason (M4)
+      const reason = diagnosePlannerParse(raw)
+      const nudge = jsonReaskNudge(reason)
+      const retry = await executor.sendMessage(daddySessionId, nudge, daddyModel, daddyTimeoutMs)
+      const retryText = extractText(retry)
+      const retryParsed = tryParseFinalReview(retryText)
+      if (retryParsed) return retryParsed
+
+      // Fail closed to request_changes
+      return parseFinalReview("")
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err)
       return {

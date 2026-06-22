@@ -188,20 +188,12 @@ export const diagnosePlannerParse = (raw: string): string => {
 export const jsonReaskNudge = (reason: string): string =>
   `Your previous reply could not be accepted: ${reason}. Reply again with ONLY the JSON verdict object in the response shape above — no reasoning, no markdown fences, nothing before the opening { or after the closing }.`
 
-// parseFinalReview: try fenced JSON block first, then outermost braces slice.
-// NOT a balanced-object scan — the scar it guards is different from parseSuperReview.
+// Parse a final-review response, or null if nothing validates. Uses the same
+// balanced-object scan as the planner response path — the scar is identical
+// (prose examples before the real verdict).
 // Reference: reference/src/final-review.ts:82-107
-export const parseFinalReview = (raw: string): FinalReview => {
-  let cleaned = raw.trim()
-  const fenceMatch = cleaned.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/)
-  if (fenceMatch && fenceMatch[1] !== undefined) cleaned = fenceMatch[1].trim()
-
-  const candidates: string[] = [cleaned]
-  const start = cleaned.indexOf("{")
-  const end = cleaned.lastIndexOf("}")
-  if (start !== -1 && end > start) candidates.push(cleaned.slice(start, end + 1))
-
-  for (const candidate of candidates) {
+export const tryParseFinalReview = (raw: string): FinalReview | null => {
+  for (const candidate of plannerResponseCandidates(raw)) {
     try {
       const parsed = FinalReview.safeParse(JSON.parse(candidate))
       if (parsed.success) return parsed.data
@@ -209,11 +201,14 @@ export const parseFinalReview = (raw: string): FinalReview => {
       /* try next candidate */
     }
   }
+  return null
+}
 
-  return {
+// Fail closed: a final-review that still won't parse becomes request_changes.
+export const parseFinalReview = (raw: string): FinalReview =>
+  tryParseFinalReview(raw) ?? {
     verdict: "request_changes",
     findings: ["Daddy's final-review response was not valid JSON; failing closed to request_changes."],
     notes: "unparseable verdict",
     human_decision_needed: null,
   }
-}

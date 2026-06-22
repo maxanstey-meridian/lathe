@@ -711,6 +711,53 @@ test("submit_report: pass-2 with non-empty justification and no test → floor c
   await cleanTemp(tmp);
 });
 
+test("submit_report: whitespace-only noTestJustification → rejects at parse time", async () => {
+  // z.string().trim().min(1).optional() rejects whitespace-only strings at zod parse time.
+  // SubmitReport.parse at bridge.ts:498 has no try/catch, so this throws (not returns isError).
+  const { ref, tmp } = makeRef();
+  await handleUpdateOutcomes(ref, {
+    outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
+  });
+  await rejects(
+    () =>
+      handleSubmitReport(ref, {
+        status: "ready_for_review",
+        summary: "Fixed it.",
+        regressionGuard: { noTestJustification: "   " },
+      }),
+    { message: /noTestJustification/ },
+  );
+  await cleanTemp(tmp);
+});
+
+test("submit_report: pass-2 naming a real changed non-test file → V8B rejects (not V8A)", async () => {
+  // Seeds src/fix.ts (non-test path) in the diff, names it in regressionGuard.tests on pass 2.
+  // V8A anti-fabrication should NOT fire (file is in diff), but V8B should reject because
+  // isTestPath("src/fix.ts") === false and no justification is given.
+  const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
+  await handleUpdateOutcomes(ref, {
+    outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
+  });
+  await seedWorktreeGit(tmp, "src/fix.ts");
+  ref.current.worktree = tmp;
+  const result = await handleSubmitReport(ref, {
+    status: "ready_for_review",
+    summary: "Fixed it.",
+    regressionGuard: {
+      tests: [{ name: "fix-test", file: "src/fix.ts", covers: "the broken path" }],
+    },
+  });
+  equal(result.isError, true);
+  const body = JSON.parse(result.content[0].text);
+  ok(body.problems.some((p: string) => p.includes("repair pass (pass 2)")));
+  ok(body.problems.some((p: string) => p.includes("regression test")));
+  ok(
+    !body.problems.some((p: string) => p.includes("is not among your changed files")),
+    "anti-fabrication (V8A) should NOT fire — src/fix.ts is in the diff",
+  );
+  await cleanTemp(tmp);
+});
+
 test("submit_report: blocked report with no regressionGuard → unaffected", async () => {
   const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
   await handleUpdateOutcomes(ref, {

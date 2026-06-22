@@ -761,7 +761,7 @@ export const buildMcpServer = (ref: RunRef): McpServer => {
               }),
             )
             .default([]),
-          noTestJustification: z.string().optional(),
+          noTestJustification: z.string().trim().min(1).optional(),
         })
         .optional(),
     },

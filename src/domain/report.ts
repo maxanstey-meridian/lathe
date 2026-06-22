@@ -60,7 +60,7 @@ export const SubmitReport = z.object({
           }),
         )
         .default([]),
-      noTestJustification: z.string().optional(),
+      noTestJustification: z.string().trim().min(1).optional(),
     })
     .default({ tests: [] }),
 });

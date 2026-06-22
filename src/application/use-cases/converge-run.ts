@@ -127,6 +127,7 @@ export const convergeRun = (deps: ConvergeDeps): (runId: string) => Promise<void
           suspicious_surface: [],
           verification: [],
           constraints: [],
+          autofix_commands: [],
           pass: 1,
           regression_outcomes: [],
         },
@@ -149,7 +150,15 @@ export const convergeRun = (deps: ConvergeDeps): (runId: string) => Promise<void
 
     // --- Convergence loop ---------------------------------------------------
     try {
-      // 1. Verification — driver's own run, ground truth (S6).
+      // 1. Autofix — best-effort mechanical fixes scoped to expected_surface.
+      await verify.runAutoFix(
+        packet.frontmatter.autofix_commands,
+        packet.frontmatter.expected_surface,
+        meta.worktree,
+        config.thresholds.verificationTimeoutMs,
+      )
+
+      // 2. Verification — driver's own run, ground truth (S6).
       const verificationResults = await verify.run(
         packet.frontmatter.verification,
         meta.worktree,
@@ -157,7 +166,7 @@ export const convergeRun = (deps: ConvergeDeps): (runId: string) => Promise<void
       )
       const verificationGreen = allGreen(verificationResults)
 
-      // 2. Super-daddy review — ONE reviewer, trusted (S2/S4).
+      // 3. Super-daddy review — ONE reviewer, trusted (S2/S4).
       const diff = repo.reviewableDiffAgainst(
         meta.worktree,
         meta.base,

@@ -12,4 +12,5 @@ export type VerificationResult = { command: string; exitCode: number; outputTail
 
 export type Verify = {
   run(commands: VerificationCommand[], worktree: string, timeoutMs: number): Promise<VerificationResult[]>
+  runAutoFix(commands: VerificationCommand[], expectedSurface: string[], worktree: string, timeoutMs: number): Promise<void>
 }

@@ -153,6 +153,7 @@ const fakeReviewer: Reviewer = {
 
 const fakeVerify: Verify = {
   run: async () => [],
+  runAutoFix: async () => {},
 }
 
 // ---------------------------------------------------------------------------

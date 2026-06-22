@@ -32,6 +32,10 @@ export const PacketFrontmatter = z.object({
   suspicious_surface: z.array(z.string().min(1)).default([]),
   verification: z.array(VerificationCommand).min(1),
   constraints: z.array(z.string()).default([]),
+  // Autofix commands to run (best-effort) before verification, scoped to
+  // expected_surface — never repo-wide. Harness appends surface entries as
+  // quoted arguments; the command's own tooling handles glob expansion.
+  autofix_commands: z.array(VerificationCommand).default([]),
   // Convergence lineage. All optional/defaulted.
   campaign_id: z.string().optional(),
   parent_run_id: z.string().optional(),

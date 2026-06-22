@@ -32,4 +32,25 @@ export const createVerify = (): Verify => ({
       }
     })
   },
+
+  runAutoFix: async (commands: VerificationCommand[], expectedSurface: string[], worktree: string, timeoutMs: number): Promise<void> => {
+    if (commands.length === 0 || expectedSurface.length === 0) return
+    const wt = resolve(worktree)
+    // Append surface entries as quoted arguments to each command.
+    // The command's own tooling handles glob expansion.
+    const args = expectedSurface.map((s) => `'${s}'`).join(" ")
+    for (const cmd of commands) {
+      try {
+        execSync(`${cmd.command} ${args}`, {
+          cwd: wt,
+          encoding: "utf-8",
+          stdio: ["ignore" as const, "pipe" as const, "pipe" as const],
+          timeout: timeoutMs,
+          shell: "/bin/zsh",
+        })
+      } catch {
+        // Autofix is best-effort — swallow errors.
+      }
+    }
+  },
 })

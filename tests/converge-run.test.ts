@@ -157,6 +157,7 @@ const makeFakePorts = (
     } as Reviewer,
     verify: {
       run: async () => verifyOverride ?? [{ command: "echo ok", exitCode: 0, outputTail: "" }],
+      runAutoFix: async () => {},
     } as unknown as Verify,
     nitsStore,
     convergenceStore,
@@ -665,6 +666,7 @@ test("convergeRun: stop with meta already ready_for_review — no unnecessary wr
     } as any,
     verify: {
       run: async () => [{ command: "true", exitCode: 0, outputTail: "" }],
+      runAutoFix: async () => {},
     } as unknown as Verify,
   }
 
@@ -769,4 +771,203 @@ test("convergeRun: stop on pass cap (maxPasses=1, pass=1) → should stop if acc
   // but accept+green is stop before cap check in decideConvergence)
   ok(campaignWritten, "campaign should be written")
   equal(campaignWritten?.status, "converged")
+})
+
+// ---------------------------------------------------------------------------
+// Test: autofix runs with expected_surface, not repo-wide
+
+test("convergeRun: autofix is called with expected_surface, not repo-wide", async () => {
+  let autofixCalls: { commands: { command: string }[]; surface: string[] }[] = []
+
+  const skillPath = createSkillFile()
+  const ports = makeFakePorts(
+    skillPath,
+    undefined,
+    undefined,
+    {
+      review: {
+        verdict: "accept",
+        findings: [],
+        convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
+        commit_message: { subject: "ok", body: "" },
+        notes: "",
+        human_decision_needed: null,
+      },
+      raw: "ok",
+    },
+  )
+
+  // Override the verify port with a spy that captures runAutoFix calls.
+  const originalVerify = ports.verify
+  ports.verify = {
+    ...originalVerify,
+    runAutoFix: async (commands, expectedSurface, _worktree, _timeoutMs) => {
+      autofixCalls.push({ commands, surface: expectedSurface })
+    },
+  } as any
+
+  const runner = convergeRun({
+    store: ports.store,
+    repo: ports.repo,
+    reviewer: ports.reviewer,
+    verify: ports.verify,
+    clock: ports.clock,
+    config: ports.config,
+    paths: ports.paths,
+  })
+
+  await runner(RUN_ID)
+
+  // Autofix should have been called exactly once.
+  equal(autofixCalls.length, 1)
+  const call = autofixCalls[0]
+
+  // The surface should be exactly what's in the packet.
+  deepEqual(call.surface, ["src/index.ts"])
+
+  // No autofix_commands in the packet, so empty commands list.
+  equal(call.commands.length, 0)
+})
+
+// ---------------------------------------------------------------------------
+// Test: autofix with commands and surface passes surface as args
+
+test("convergeRun: autofix with commands runs with expected_surface args", async () => {
+  let autofixCalls: { commands: { command: string }[]; surface: string[] }[] = []
+  let autofixRunCalled = false
+
+  const skillPath = createSkillFile()
+
+  // Create a packet with autofix_commands.
+  const PACKET_WITH_AUTOFIX = `---
+repo: /tmp/test-repo
+base: main
+summary: converge-run fixture
+outcomes:
+  - id: test-outcome
+    description: A test outcome
+expected_surface:
+  - src/index.ts
+  - src/utils/*.ts
+verification:
+  - command: echo ok
+autofix_commands:
+  - command: oxlint --fix
+constraints:
+  - keep it clean
+pass: 1
+regression_outcomes:
+  - id: prior-outcome
+    description: a prior outcome
+---
+
+body
+`
+
+  const ports = makeFakePorts(
+    skillPath,
+    undefined,
+    undefined,
+    {
+      review: {
+        verdict: "accept",
+        findings: [],
+        convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
+        commit_message: { subject: "ok", body: "" },
+        notes: "",
+        human_decision_needed: null,
+      },
+      raw: "ok",
+    },
+    (runId, content) => {
+      // Swap in the packet with autofix_commands when the store reads it.
+      if (runId === RUN_ID) {
+        // The fake store reads PACKET_RAW by default; we need to override readFrozenPacket.
+      }
+    },
+  )
+
+  // Override readFrozenPacket to return the packet with autofix.
+  const originalReadFrozen = ports.store.readFrozenPacket
+  ;(ports.store as any).readFrozenPacket = () => PACKET_WITH_AUTOFIX
+
+  ports.verify = {
+    ...ports.verify,
+    runAutoFix: async (commands, expectedSurface, _worktree, _timeoutMs) => {
+      autofixRunCalled = true
+      autofixCalls.push({ commands, surface: expectedSurface })
+    },
+  } as any
+
+  const runner = convergeRun({
+    store: ports.store,
+    repo: ports.repo,
+    reviewer: ports.reviewer,
+    verify: ports.verify,
+    clock: ports.clock,
+    config: ports.config,
+    paths: ports.paths,
+  })
+
+  await runner(RUN_ID)
+
+  ok(autofixRunCalled, "runAutoFix should have been called")
+  equal(autofixCalls.length, 1)
+  const call = autofixCalls[0]
+
+  // Commands from packet frontmatter.
+  equal(call.commands.length, 1)
+  equal(call.commands[0].command, "oxlint --fix")
+
+  // Surface from packet frontmatter.
+  deepEqual(call.surface, ["src/index.ts", "src/utils/*.ts"])
+})
+
+// ---------------------------------------------------------------------------
+// Test: no autofix_commands → runAutoFix is still called but no-op
+
+test("convergeRun: empty autofix_commands → runAutoFix called with empty commands", async () => {
+  let autofixRunCalled = false
+  let capturedCommands: { command: string }[] = []
+
+  const skillPath = createSkillFile()
+  const ports = makeFakePorts(
+    skillPath,
+    undefined,
+    undefined,
+    {
+      review: {
+        verdict: "accept",
+        findings: [],
+        convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
+        commit_message: { subject: "ok", body: "" },
+        notes: "",
+        human_decision_needed: null,
+      },
+      raw: "ok",
+    },
+  )
+
+  ports.verify = {
+    ...ports.verify,
+    runAutoFix: async (commands, _expectedSurface, _worktree, _timeoutMs) => {
+      autofixRunCalled = true
+      capturedCommands = commands
+    },
+  } as any
+
+  const runner = convergeRun({
+    store: ports.store,
+    repo: ports.repo,
+    reviewer: ports.reviewer,
+    verify: ports.verify,
+    clock: ports.clock,
+    config: ports.config,
+    paths: ports.paths,
+  })
+
+  await runner(RUN_ID)
+
+  ok(autofixRunCalled, "runAutoFix should have been called")
+  equal(capturedCommands.length, 0, "autofix_commands should be empty from packet")
 })

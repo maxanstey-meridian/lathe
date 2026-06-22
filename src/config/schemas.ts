@@ -122,7 +122,11 @@ export const Config = z.object({
     maxReorientRetries: z.number().int().min(0).default(2),
     maxRunMs: z.number().int().default(6 * 60 * 60 * 1000),
   }).default({}),
-  mutationCommandPatterns: z.array(z.string()).default([
+ // Idle timeout: inactivity timer for sendMessage — destroys the request after
+  // idleTimeoutMs of silence (no data chunks). Matches the headerTimeoutMs
+  // pattern at line 60 (z.union with false to disable for diagnosis).
+  idleTimeoutMs: z.union([z.number().int(), z.literal(false)]).default(120_000),
+   mutationCommandPatterns: z.array(z.string()).default([
     "\\b(pnpm|npm|yarn)\\b.*\\bgenerate\\b",
     "task contracts",
     "dotnet-rivet",

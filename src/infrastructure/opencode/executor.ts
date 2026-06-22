@@ -63,12 +63,29 @@ export const createOpencodeClient = (config: Config): Executor => {
         agent: model.agent,
         parts: [{ type: "text", text }],
       })
+      let idleTimer: ReturnType<typeof setTimeout> | undefined
+      const idleMs = config.idleTimeoutMs
+      const armIdle = (): void => {
+        if (idleMs === false) return
+        if (idleTimer) clearTimeout(idleTimer)
+        idleTimer = setTimeout(() => {
+          req.destroy(new Error(`no data for ${idleMs}ms — connection stalled`))
+        }, idleMs)
+      }
       const req = httpRequest(
         `${base}/session/${sessionId}/message`,
         { method: "POST", headers: { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } },
         (res) => {
           const chunks: Buffer[] = []
-          res.on("data", (c: Buffer) => chunks.push(c))
+          // Arm the idle timer when the response starts (headers received).
+          // It resets on each data chunk. If silence exceeds idleTimeoutMs,
+          // the request is destroyed.
+          armIdle()
+          res.on("data", (c: Buffer) => {
+            // Reset the idle timer on every chunk of data.
+            armIdle()
+            chunks.push(c)
+          })
           res.on("end", () => {
             cleanup()
             const body = Buffer.concat(chunks).toString("utf-8")
@@ -102,6 +119,7 @@ export const createOpencodeClient = (config: Config): Executor => {
       }
       const cleanup = (): void => {
         clearTimeout(timer)
+        if (idleTimer) clearTimeout(idleTimer)
         signal?.removeEventListener("abort", onAbort)
       }
       req.on("error", (err) => {

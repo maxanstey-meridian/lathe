@@ -7,6 +7,7 @@ import { join } from "node:path"
 import { writeOpencodeConfig, pluginPath } from "../src/infrastructure/opencode/config.js"
 import { makePaths } from "../src/config/paths.js"
 import type { Config } from "../src/config/schemas.js"
+import { createOpencodeClient } from "../src/infrastructure/opencode/executor.js"
 
 const makeTestConfig = (overrides: Partial<Config> = {}): Config => ({
   stateRoot: "~/.meridian/v2",
@@ -54,6 +55,7 @@ const makeTestConfig = (overrides: Partial<Config> = {}): Config => ({
     ...overrides.thresholds,
   },
   mutationCommandPatterns: ["\\b(pnpm|npm|yarn)\\b.*\\bgenerate\\b", "task contracts", "dotnet-rivet"],
+  idleTimeoutMs: 120_000,
 })
 
 const bridgeTools = [
@@ -250,4 +252,111 @@ test("config generation: seeds node_modules trio from global dir when missing", 
   assert.strictEqual(copiedPkg.name, "global-opencode")
   const copiedLock = JSON.parse(readFileSync(join(tmpDir, "package-lock.json"), "utf-8"))
   assert.strictEqual(copiedLock.lockfileVersion, 3)
+})
+
+// ---------------------------------------------------------------------------
+// Idle timeout: stalled response rejects on idle timer, not total deadline
+// ---------------------------------------------------------------------------
+
+test("idle timeout: stalled response rejects before total deadline", async () => {
+  const IDLE_MS = 200
+  const TOTAL_MS = 30_000
+  const PORT = 14199
+
+  let server: ReturnType<typeof import("node:http").createServer>
+  try {
+    const { createServer } = await import("node:http")
+    server = createServer((req, res) => {
+      if (req.url === "/session" && req.method === "POST") {
+        let body = ""
+        req.on("data", (c: Buffer) => { body += c })
+        req.on("end", () => {
+          res.writeHead(200, { "content-type": "application/json" })
+          res.end(JSON.stringify({ id: "idle-test-sess" }))
+        })
+      } else {
+        // sendMessage path: send 200 headers with SSE, then never send data.
+        req.resume() // consume request body
+        res.writeHead(200, { "content-type": "text/event-stream" })
+        res.flushHeaders() // flush headers without sending body data
+      }
+    })
+    await new Promise<void>((resolve) => server.listen(PORT, resolve))
+    server.unref()
+
+    const config: Config = {
+      idleTimeoutMs: IDLE_MS,
+      opencode: { port: PORT },
+      daddy: {},
+      baby: {},
+      superdaddy: {},
+      thresholds: {},
+      mutationCommandPatterns: [],
+    }
+    const client = createOpencodeClient(config)
+
+    const t0 = Date.now()
+    await assert.rejects(
+      async () => client.sendMessage("idle-test-sess", "hello", { providerId: "test", modelId: "test", agent: "test" }, TOTAL_MS),
+      (err: Error) => {
+        const elapsed = Date.now() - t0
+        assert.ok(err.message.includes("no data"), `expected idle error, got: ${err.message}`)
+        assert.ok(err.message.includes("connection stalled"), `expected stalled text, got: ${err.message}`)
+        assert.ok(elapsed < TOTAL_MS / 2, `should reject on idle timer (${elapsed}ms) not total deadline (${TOTAL_MS}ms)`)
+        assert.ok(elapsed >= IDLE_MS - 50, `should take at least ~${IDLE_MS}ms, took ${elapsed}ms`)
+        return true
+      },
+    )
+  } finally {
+    server?.close()
+  }
+})
+
+test("idle timeout: disabled (false) does not reject", async () => {
+  const PORT = 14200
+
+  let server: ReturnType<typeof import("node:http").createServer>
+  try {
+    const { createServer } = await import("node:http")
+    server = createServer((req, res) => {
+      if (req.url === "/session" && req.method === "POST") {
+        let body = ""
+        req.on("data", (c: Buffer) => { body += c })
+        req.on("end", () => {
+          res.writeHead(200, { "content-type": "application/json" })
+          res.end(JSON.stringify({ id: "idle-disable-test" }))
+        })
+      } else {
+        res.writeHead(200, { "content-type": "text/event-stream" })
+        const payload = JSON.stringify({
+          info: { role: "assistant", model: "test", createdAt: "2026-01-01T00:00:00Z" },
+          parts: [{ type: "text", text: "ok" }],
+        })
+        res.write(`data: ${payload}\n`)
+        res.write("data: [DONE]\n")
+        res.end()
+      }
+    })
+    await new Promise<void>((resolve) => server.listen(PORT, resolve))
+    server.unref()
+
+    const config: Config = {
+      idleTimeoutMs: false,
+      opencode: { port: PORT },
+      daddy: {},
+      baby: {},
+      superdaddy: {},
+      thresholds: {},
+      mutationCommandPatterns: [],
+    }
+    const client = createOpencodeClient(config)
+
+    const result = await client.sendMessage("idle-disable-test", "hello", { providerId: "test", modelId: "test", agent: "test" }, 5_000)
+    assert.deepStrictEqual(result, {
+      info: { role: "assistant", model: "test", createdAt: "2026-01-01T00:00:00Z" },
+      parts: [{ type: "text", text: "ok" }],
+    })
+  } finally {
+    server?.close()
+  }
 })

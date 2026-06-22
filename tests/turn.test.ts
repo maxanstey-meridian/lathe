@@ -11,8 +11,10 @@ const def = (overrides: Record<string, unknown>) => {
   const base = {
     bridgeIntents: [],
     watchdogPastDeadline: false,
-    contextTokens: 0,
+    contextTokens: 10_000,
     contextBudget: 100_000,
+    contextTokensFloor: 128,
+    isFirstTurn: false,
     gateDemandsCheckpoint: false,
     gateReason: undefined,
     hadAllowedToolCall: true,
@@ -530,4 +532,101 @@ test("evaluateTurn: bridgeIntents scan — checkpoint-written payload is checked
   })
   const result = run(facts)
   assert.strictEqual(result.kind, "re_demand_teardown")
+})
+
+// ---------------------------------------------------------------------------
+// Dead-session guard (complementary to branch 7 send-failure path)
+// ---------------------------------------------------------------------------
+
+test("evaluateTurn: dead-session guard — low tokens, not first turn, no progress returns park wedged", () => {
+  const facts = def({
+    contextTokens: 4,
+    contextTokensFloor: 128,
+    isFirstTurn: false,
+    hadAllowedToolCall: false,
+    worktreeChanged: false,
+  })
+  const result = run(facts)
+  assert.strictEqual(result.kind, "park")
+  assert.strictEqual(result.reason, "wedged")
+  assert.ok(result.question.includes("4 context tokens"))
+})
+
+test("evaluateTurn: dead-session guard — fires when ladder > 0 (dead session after no-progress rotation)", () => {
+  // The primary v2 scar: dead session landing after a no-progress rotation has ladder > 0.
+  // The guard must NOT depend on ladder — it fires regardless.
+  const facts = def({
+    contextTokens: 10,
+    contextTokensFloor: 128,
+    isFirstTurn: false,
+    ladder: 3,
+    hadAllowedToolCall: false,
+    worktreeChanged: false,
+  })
+  const result = run(facts)
+  assert.strictEqual(result.kind, "park")
+  assert.strictEqual(result.reason, "wedged")
+})
+
+test("evaluateTurn: dead-session guard — first turn exempt even with low tokens", () => {
+  const facts = def({
+    contextTokens: 4,
+    contextTokensFloor: 128,
+    isFirstTurn: true,
+  })
+  const result = run(facts)
+  assert.strictEqual(result.kind, "continue")
+})
+
+test("evaluateTurn: dead-session guard — low tokens but first turn has progress continues", () => {
+  const facts = def({
+    contextTokens: 50,
+    contextTokensFloor: 128,
+    isFirstTurn: true,
+    hadAllowedToolCall: true,
+  })
+  const result = run(facts)
+  assert.strictEqual(result.kind, "continue")
+})
+
+test("evaluateTurn: dead-session guard — low tokens not first turn parks regardless of progress (guard fires before branch 10)", () => {
+  // The guard fires BEFORE progress evaluation — that's the intended design.
+  // Below-floor tokens means dead session regardless of any spurious tool call.
+  const facts = def({
+    contextTokens: 50,
+    contextTokensFloor: 128,
+    isFirstTurn: false,
+    hadAllowedToolCall: true,
+  })
+  const result = run(facts)
+  assert.strictEqual(result.kind, "park")
+  assert.strictEqual(result.reason, "wedged")
+})
+
+test("evaluateTurn: dead-session guard — tokens above floor does not trip", () => {
+  const facts = def({
+    contextTokens: 200,
+    contextTokensFloor: 128,
+    isFirstTurn: false,
+    hadAllowedToolCall: false,
+    worktreeChanged: false,
+  })
+  const result = run(facts)
+  // Falls through to branch 10 no-progress (nudge)
+  assert.notStrictEqual(result.kind, "park")
+})
+
+test("evaluateTurn: dead-session guard — precedence over no-progress ladder", () => {
+  const facts = def({
+    contextTokens: 2,
+    contextTokensFloor: 128,
+    isFirstTurn: false,
+    hadAllowedToolCall: false,
+    worktreeChanged: false,
+    ladder: 9,
+  })
+  const result = run(facts)
+  assert.strictEqual(result.kind, "park")
+  assert.strictEqual(result.reason, "wedged")
+  assert.ok(result.question.includes("2 context tokens"))
 })

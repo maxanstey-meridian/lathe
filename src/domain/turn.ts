@@ -50,6 +50,11 @@ export const TurnFacts = z.object({
   contextTokens: z.number(),
   contextBudget: z.number(),
 
+  // Dead-session guard (complementary to branch 7 send-failure path):
+  // floor of acceptable context tokens; first-turn exempt.
+  contextTokensFloor: z.number(),
+  isFirstTurn: z.boolean(),
+
   // Gate state (branch 9): demands checkpoint (latched OR triggered)
   gateDemandsCheckpoint: z.boolean(),
   gateReason: z.string().optional(),
@@ -152,6 +157,8 @@ export const evaluateTurn = (facts: z.infer<typeof TurnFacts>): Dec => {
     watchdogPastDeadline,
     contextTokens,
     contextBudget,
+    contextTokensFloor,
+    isFirstTurn,
     gateDemandsCheckpoint,
     gateReason,
     hadAllowedToolCall,
@@ -284,6 +291,15 @@ export const evaluateTurn = (facts: z.infer<typeof TurnFacts>): Dec => {
       return { kind: "park", reason: "wedged", question: `Gate latched (${gateReason ?? "checkpoint required"}) and the executor did not reach ask_planner within ${nextLadder} turns` }
     }
     return { kind: "demand_gate_checkpoint", reason: gateReason ?? "checkpoint required" }
+  }
+
+  // ---- Dead-session guard (complementary to branch 7 send-failure path) ----
+  // A send that returns but with an empty/near-zero prompt landing — the v2
+  // reseed-dead-session scar. First-turn exempt (a fresh session always starts
+  // with the full seed). Fires BEFORE the no-progress ladder so a dead landing
+  // parks deliberately instead of spiralling up the ladder.
+  if (!isFirstTurn && contextTokens < contextTokensFloor) {
+    return { kind: "park", reason: "wedged", question: `Model received only ${contextTokens} context tokens (floor: ${contextTokensFloor}) — possible dead session` }
   }
 
   // ---- Branch 10: No progress → ladder action ----

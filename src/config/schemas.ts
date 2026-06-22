@@ -28,7 +28,7 @@ export const Config = z.object({
     baseUrl: z.string().default("http://maxs-mac-studio.local:8000/v1"),
     apiKey: z.string().default("api-key"),
     agent: z.string().default("baby"),
-    contextWindow: z.number().int().default(98_304),
+    contextWindow: z.number().int().default(114_688),
     timeoutMs: z.number().int().default(1_800_000),
     turnSteps: z.number().int().default(12),
     // Caps Baby's per-turn reasoning (oMLX `thinking_budget`, integer tokens):
@@ -121,6 +121,11 @@ export const Config = z.object({
     // "try again pls"; 0 disables reorient.
     maxReorientRetries: z.number().int().min(0).default(2),
     maxRunMs: z.number().int().default(6 * 60 * 60 * 1000),
+    // Floor below which a turn is treated as a dead landing (model received
+    // essentially no prompt). First-turn exempt (a fresh session always starts
+    // with the full seed). Kept low (128) so a legitimate small turn never
+    // trips it — even a minimal tool-call round-trip exceeds this.
+    contextTokensFloor: z.number().int().default(128),
   }).default({}),
  // Idle timeout: inactivity timer for sendMessage — destroys the request after
   // idleTimeoutMs of silence (no data chunks). Matches the headerTimeoutMs

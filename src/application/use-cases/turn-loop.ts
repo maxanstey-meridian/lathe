@@ -251,6 +251,8 @@ export const turnLoop = async (
       watchdogPastDeadline: clock.now() >= deadlineMs,
       contextTokens: obs.contextTokens,
       contextBudget,
+      contextTokensFloor: config.thresholds.contextTokensFloor,
+      isFirstTurn: turn === 1,
       gateDemandsCheckpoint: gateReason !== undefined,
       gateReason,
       hadAllowedToolCall: obs.hadAllowedToolCall,

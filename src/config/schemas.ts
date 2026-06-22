@@ -6,7 +6,7 @@ import { z } from "zod";
 // is the schema; the shape is truth.
 
 export const Config = z.object({
-  stateRoot: z.string().default("~/.meridian/v2"),
+  stateRoot: z.string().default("~/.meridian/v3"),
   opencode: z
     .object({
       binary: z.string().default("opencode"),

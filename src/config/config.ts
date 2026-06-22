@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { makePaths, expandHome, type Paths } from "./paths.js";
 import { Config } from "./schemas.js";
 
-const DEFAULT_ROOT = "~/.meridian/v2";
+const DEFAULT_ROOT = "~/.meridian/v3";
 
 // Config lives inside the state root, but the state root is itself config —
 // bootstrap order: read the default location; an explicit stateRoot inside it

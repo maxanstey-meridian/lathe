@@ -27,7 +27,16 @@ type Subscribe = (
   onEvent: (event: OpencodeEvent) => void,
 ) => { close: () => void };
 
-export type TailUiDeps = { store: Store; budget: number; subscribe: Subscribe; runId: string };
+// daddyDirectory: the planner session's directory (paths.root). Daddy's opencode
+// session is rooted there, NOT in the worktree, so its events arrive on a separate
+// directory-scoped feed (events.ts) — the tail subscribes to both to fill both panes.
+export type TailUiDeps = {
+  store: Store;
+  budget: number;
+  subscribe: Subscribe;
+  runId: string;
+  daddyDirectory: string;
+};
 
 type LineStyle = "think" | "text" | "tool";
 type PaneLine = { text: string; style: LineStyle };
@@ -87,10 +96,13 @@ const Pane = ({
 }) => {
   // 10s window: tool gaps (installs, typechecks) shouldn't flip "active" to "waiting".
   const active = Date.now() - pane.lastAt < 10_000;
+  // Content area is height-2 (top+bottom border); the title takes one of those
+  // rows, so at most height-3 lines fit. Slicing tighter keeps the pane's natural
+  // height inside its box so it never pushes the frame past the terminal rows.
   const visible: PaneLine[] = [
     ...pane.lines,
     ...(pane.current.trim() ? [{ text: pane.current, style: pane.currentStyle }] : []),
-  ].slice(-(height - 2));
+  ].slice(-(height - 3));
   return (
     <Box
       flexDirection="column"
@@ -120,7 +132,7 @@ const Pane = ({
   );
 };
 
-const TailApp = ({ store, budget, subscribe, runId }: TailUiDeps) => {
+const TailApp = ({ store, budget, subscribe, runId, daddyDirectory }: TailUiDeps) => {
   const { exit } = useApp();
   const [baby, setBaby] = useState<PaneState>(emptyPane());
   const [daddy, setDaddy] = useState<PaneState>(emptyPane());
@@ -217,7 +229,7 @@ const TailApp = ({ store, budget, subscribe, runId }: TailUiDeps) => {
     const apply = (speaker: "baby" | "daddy", fn: (p: PaneState) => PaneState) =>
       speaker === "baby" ? setBaby(fn) : setDaddy(fn);
 
-    const sub = subscribe(worktree, (event) => {
+    const onEvent = (event: OpencodeEvent) => {
       const props = event.properties;
       if (!props) {
         return;
@@ -280,8 +292,21 @@ const TailApp = ({ store, budget, subscribe, runId }: TailUiDeps) => {
         const style: LineStyle = partTypes.current.get(partId) === "reasoning" ? "think" : "text";
         apply(speaker, (p) => pushDelta(p, delta, style));
       }
-    });
-    return () => sub.close();
+    };
+
+    // opencode's /event feed is directory-scoped by EXACT match: the worktree feed
+    // carries only baby's session, the paths.root feed only daddy's planner session.
+    // An ancestor directory does NOT see child sessions, so neither feed covers the
+    // other — we subscribe to both and let speakerFor route each event by sessionID.
+    // The two feeds never overlap, so there is no double-delivery. (An earlier
+    // single-feed attempt on the ancestor left baby's pane dead. The "doubling" that
+    // prompted it was the full-screen render bug below, not duplicate events.)
+    const subBaby = subscribe(worktree, onEvent);
+    const subDaddy = subscribe(daddyDirectory, onEvent);
+    return () => {
+      subBaby.close();
+      subDaddy.close();
+    };
   }, []);
 
   const rows = process.stdout.rows ?? 35;
@@ -293,7 +318,7 @@ const TailApp = ({ store, budget, subscribe, runId }: TailUiDeps) => {
   const terminal = ["ready_for_review", "blocked", "failed", "accepted"].includes(stats.status);
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" height={rows} overflow="hidden">
       <Box>
         <Pane title="baby" pane={baby} height={paneHeight} accent="green" />
         <Pane title="daddy" pane={daddy} height={paneHeight} accent="magenta" />

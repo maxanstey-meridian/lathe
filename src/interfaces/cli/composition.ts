@@ -379,7 +379,13 @@ export const openTail = (config: Config, paths: Paths, runId: string): number =>
   const repo = buildRepo();
   const store = StoreAdapter.create(paths, repo, clock);
   const events = createEvents(config);
-  runTailUi({ store, budget: babyContextBudget(config), subscribe: events.subscribe, runId });
+  runTailUi({
+    store,
+    budget: babyContextBudget(config),
+    subscribe: events.subscribe,
+    runId,
+    daddyDirectory: paths.root,
+  });
   return -1;
 };
 

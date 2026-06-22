@@ -94,7 +94,9 @@ export const runLoop = async <Ref>(
           // Update meta to running. For fresh queue entries (no meta file yet),
           // derive from the queue packet; if the packet vanished, skip.
           const meta = store.readMetaIfExists(runId) ?? store.initMetaFromQueue(runId);
-          if (!meta) continue;
+          if (!meta) {
+            continue;
+          }
           store.writeMeta({ ...meta, status: "running" as const, updatedAt: clock.nowIso() });
 
           try {
@@ -199,10 +201,14 @@ export const runLoop = async <Ref>(
         await waitForWork(currentAbort.signal);
       } catch (err: unknown) {
         // AbortError from signal.abort() is expected; swallow it.
-        if ((err as Error)?.name !== "AbortError") throw err;
+        if ((err as Error)?.name !== "AbortError") {
+          throw err;
+        }
       }
 
-      if (stopRequested) break;
+      if (stopRequested) {
+        break;
+      }
     }
   } finally {
     // Cleanup: release the power assertion, close the bridge server.
@@ -221,7 +227,9 @@ export const recoverOrphanedRuns = (store: Store, repo: Repo, clock: Clock): voi
   const runs = store.listRunIds();
   for (const runId of runs) {
     const meta = store.readMetaIfExists(runId);
-    if (meta?.status !== "running") continue;
+    if (meta?.status !== "running") {
+      continue;
+    }
     if (meta.worktree) {
       repo.wipCommit(meta.worktree, `meridian: WIP ${runId} [interrupted]`);
     }
@@ -245,10 +253,14 @@ export const recoverStalledRun = (
   clock: Clock,
 ): void => {
   const meta = store.readMetaIfExists(runId);
-  if (!meta) return;
+  if (!meta) {
+    return;
+  }
 
   const decision = decideStallRecovery(meta, maxStallRetries);
-  if (decision.action === "none") return;
+  if (decision.action === "none") {
+    return;
+  }
 
   if (decision.action === "requeue") {
     const { blockedReason: _r, blockedQuestion: _q, ...rest } = meta;
@@ -285,10 +297,14 @@ export const recoverStalledRunsAtStartup = (
 
   for (const runId of runs) {
     const meta = store.readMetaIfExists(runId);
-    if (meta?.status !== "blocked" || meta.blockedReason !== "wedged") continue;
+    if (meta?.status !== "blocked" || meta.blockedReason !== "wedged") {
+      continue;
+    }
 
     const decision = decideStallRecovery(meta, maxStallRetries);
-    if (decision.action === "none") continue;
+    if (decision.action === "none") {
+      continue;
+    }
 
     if (decision.action === "requeue") {
       store.writeMeta({

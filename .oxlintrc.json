@@ -4,7 +4,7 @@
   },
   "rules": {
     "no-unused-vars": "warn",
-    "curly": "off"
+    "curly": ["error", "all"]
   },
   "ignorePatterns": ["reference/**", "dist/**", "node_modules/**"]
 }

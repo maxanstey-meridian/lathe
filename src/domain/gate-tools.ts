@@ -29,7 +29,9 @@ export const isEditTool = (tool: string): boolean => {
 };
 
 export const commandFromArgs = (args: unknown): string => {
-  if (!args || typeof args !== "object") return "";
+  if (!args || typeof args !== "object") {
+    return "";
+  }
   const command = (args as Record<string, unknown>).command;
   return typeof command === "string" ? command : "";
 };
@@ -53,12 +55,20 @@ export const isMutationCommand = (command: string, patterns: string[]): boolean 
 // Edit tools (edit/write/patch) always mutate.
 // Bash tools matching mutation patterns or shell mutation verbs / redirection / sed -i mutate.
 export const isMutation = (tool: string, _args: unknown, patterns: string[]): boolean => {
-  if (isEditTool(tool)) return true;
+  if (isEditTool(tool)) {
+    return true;
+  }
   const t = tool.toLowerCase();
-  if (!t.includes("bash")) return false;
+  if (!t.includes("bash")) {
+    return false;
+  }
   const command = commandFromArgs(_args);
-  if (!command) return false;
-  if (isMutationCommand(command, patterns)) return true;
+  if (!command) {
+    return false;
+  }
+  if (isMutationCommand(command, patterns)) {
+    return true;
+  }
   return /(^|\s)(rm|mv|cp|mkdir|touch|tee)\s|>{1,2}|\bsed\b.*-i/.test(command);
 };
 
@@ -73,8 +83,12 @@ export const editTargetOutOfSurface = (
   args: unknown,
   worktree: string,
 ): string | undefined => {
-  if (!isEditTool(tool)) return undefined;
-  if (!args || typeof args !== "object") return undefined;
+  if (!isEditTool(tool)) {
+    return undefined;
+  }
+  if (!args || typeof args !== "object") {
+    return undefined;
+  }
   const record = args as Record<string, unknown>;
   const raw =
     typeof record.filePath === "string"
@@ -82,7 +96,9 @@ export const editTargetOutOfSurface = (
       : typeof record.path === "string"
         ? record.path
         : undefined;
-  if (!raw) return undefined;
+  if (!raw) {
+    return undefined;
+  }
 
   const prefix = worktree.endsWith("/") ? worktree : `${worktree}/`;
 
@@ -93,12 +109,16 @@ export const editTargetOutOfSurface = (
 
   if (normalized.startsWith("/")) {
     // Absolute path: deny unless it starts with the worktree prefix.
-    if (!normalized.startsWith(prefix)) return raw;
+    if (!normalized.startsWith(prefix)) {
+      return raw;
+    }
     // Inside worktree — allowed.
     return undefined;
   }
 
   // Relative path: deny if it climbs above the working directory.
-  if (normalized === ".." || normalized.startsWith("../")) return raw;
+  if (normalized === ".." || normalized.startsWith("../")) {
+    return raw;
+  }
   return undefined;
 };

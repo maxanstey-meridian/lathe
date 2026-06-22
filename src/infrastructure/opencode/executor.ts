@@ -16,9 +16,13 @@ const parseStreamingBody = (body: string): TurnResponse => {
   const payloads: unknown[] = [];
   for (const line of body.split("\n")) {
     const trimmed = line.trim();
-    if (!trimmed || trimmed === "[DONE]") continue;
+    if (!trimmed || trimmed === "[DONE]") {
+      continue;
+    }
     const data = trimmed.startsWith("data: ") ? trimmed.slice(6).trim() : trimmed;
-    if (data === "[DONE]") continue;
+    if (data === "[DONE]") {
+      continue;
+    }
     try {
       payloads.push(JSON.parse(data));
     } catch {
@@ -28,7 +32,9 @@ const parseStreamingBody = (body: string): TurnResponse => {
   const complete = payloads.find(
     (p): p is TurnResponse => typeof p === "object" && p !== null && "info" in p && "parts" in p,
   );
-  if (!complete) throw new Error("streaming response contained no complete message payload");
+  if (!complete) {
+    throw new Error("streaming response contained no complete message payload");
+  }
   return complete;
 };
 
@@ -44,9 +50,13 @@ export const createOpencodeClient = (config: Config): Executor => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ title }),
     });
-    if (!res.ok) throw new Error(`session create failed: ${res.status} ${await res.text()}`);
+    if (!res.ok) {
+      throw new Error(`session create failed: ${res.status} ${await res.text()}`);
+    }
     const data = (await res.json()) as { id?: string };
-    if (!data.id) throw new Error(`session create returned no id: ${JSON.stringify(data)}`);
+    if (!data.id) {
+      throw new Error(`session create returned no id: ${JSON.stringify(data)}`);
+    }
     return data.id;
   };
 
@@ -71,8 +81,12 @@ export const createOpencodeClient = (config: Config): Executor => {
       let idleTimer: ReturnType<typeof setTimeout> | undefined;
       const idleMs = config.idleTimeoutMs;
       const armIdle = (): void => {
-        if (idleMs === false) return;
-        if (idleTimer) clearTimeout(idleTimer);
+        if (idleMs === false) {
+          return;
+        }
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+        }
         idleTimer = setTimeout(() => {
           req.destroy(new Error(`no data for ${idleMs}ms — connection stalled`));
         }, idleMs);
@@ -133,7 +147,9 @@ export const createOpencodeClient = (config: Config): Executor => {
       };
       const cleanup = (): void => {
         clearTimeout(timer);
-        if (idleTimer) clearTimeout(idleTimer);
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+        }
         signal?.removeEventListener("abort", onAbort);
       };
       req.on("error", (err) => {
@@ -150,7 +166,9 @@ export const createOpencodeClient = (config: Config): Executor => {
 
   const listMessages = async (sessionId: string): Promise<TurnResponse[]> => {
     const res = await fetch(`${base}/session/${sessionId}/message`);
-    if (!res.ok) throw new Error(`message list failed: ${res.status} ${await res.text()}`);
+    if (!res.ok) {
+      throw new Error(`message list failed: ${res.status} ${await res.text()}`);
+    }
     return (await res.json()) as TurnResponse[];
   };
 

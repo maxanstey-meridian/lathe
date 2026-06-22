@@ -23,7 +23,9 @@ export const promoteStaged = (store: Store, repo: Repo): void => {
         // No parent → admit straight away. Stamp base from HEAD if absent.
         try {
           const raw = store.readStaged(child.runId);
-          if (raw === undefined) continue;
+          if (raw === undefined) {
+            continue;
+          }
           const headBranch = repo.headBranch(child.repo);
           const stamped = stampBase(raw, headBranch);
           store.admitQueue(child.runId, stamped);
@@ -39,7 +41,9 @@ export const promoteStaged = (store: Store, repo: Repo): void => {
         // Parent converged → fetch tip branch into source repo, stamp base, admit.
         try {
           const raw = store.readStaged(child.runId);
-          if (raw === undefined) continue;
+          if (raw === undefined) {
+            continue;
+          }
           const tipMeta = store.readMetaIfExists(decision.tipRunId);
           if (!tipMeta) {
             // Tip run meta not found — leave staged, retry next sweep.

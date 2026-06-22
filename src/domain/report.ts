@@ -59,7 +59,9 @@ export const renderReportMarkdown = (
     `Status: **${report.status}**${report.blockedReason ? ` (${report.blockedReason})` : ""}`,
     "",
   ];
-  if (report.blockedQuestion) lines.push(`## Decision needed`, "", report.blockedQuestion, "");
+  if (report.blockedQuestion) {
+    lines.push(`## Decision needed`, "", report.blockedQuestion, "");
+  }
   lines.push(`## Summary`, "", report.summary, "");
   if (report.filesChanged.length > 0) {
     lines.push(
@@ -68,35 +70,41 @@ export const renderReportMarkdown = (
       "| File | Classification | Reason | Action |",
       "|---|---|---|---|",
     );
-    for (const f of report.filesChanged)
+    for (const f of report.filesChanged) {
       lines.push(`| \`${f.path}\` | ${f.classification} | ${f.reason} | ${f.action} |`);
+    }
     lines.push("");
   }
-  if (report.behaviourChanged.length > 0)
+  if (report.behaviourChanged.length > 0) {
     lines.push(`## Behaviour changed`, "", ...report.behaviourChanged.map((b) => `- ${b}`), "");
-  if (report.sourceOfTruthFollowed.length > 0)
+  }
+  if (report.sourceOfTruthFollowed.length > 0) {
     lines.push(
       `## Source of truth followed`,
       "",
       ...report.sourceOfTruthFollowed.map((s) => `- ${s}`),
       "",
     );
+  }
   lines.push(`## Outcomes`, "", ...report.outcomeClaims.map((o) => `- ${o.id}: ${o.status}`), "");
   if (report.verificationClaims.length > 0) {
     lines.push(`## Verification`, "", "| Command | Result | Notes |", "|---|---|---|");
-    for (const v of report.verificationClaims)
+    for (const v of report.verificationClaims) {
       lines.push(`| \`${v.command}\` | ${v.result} | ${v.notes ?? ""} |`);
+    }
     lines.push("");
   }
-  if (report.escalations.length > 0)
+  if (report.escalations.length > 0) {
     lines.push(`## Escalations`, "", ...report.escalations.map((e) => `- ${e}`), "");
-  if (report.remainingUncertainty.length > 0)
+  }
+  if (report.remainingUncertainty.length > 0) {
     lines.push(
       `## Remaining uncertainty`,
       "",
       ...report.remainingUncertainty.map((u) => `- ${u}`),
       "",
     );
+  }
   if (finalReview) {
     lines.push(
       `## Final review (Daddy)`,

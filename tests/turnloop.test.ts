@@ -43,7 +43,9 @@ body
 
 const parseFixture = (): Packet => {
   const shape = parsePacketShape(PACKET_RAW, RUN_ID);
-  if (!shape.ok) throw new Error(`fixture packet invalid: ${shape.problems.join("; ")}`);
+  if (!shape.ok) {
+    throw new Error(`fixture packet invalid: ${shape.problems.join("; ")}`);
+  }
   return shape.packet;
 };
 
@@ -126,11 +128,18 @@ const scriptedExecutor = (
     createSession: async () => newSessionIds[s++] ?? `baby-r${s}`,
     sendMessage: async () => {
       const step = steps[i++] ?? {};
-      if (step.intents) channel.intents.push(...step.intents);
-      if (step.pendingConsult !== undefined) channel.pendingConsult = step.pendingConsult;
-      if (step.pendingFinalReview !== undefined)
+      if (step.intents) {
+        channel.intents.push(...step.intents);
+      }
+      if (step.pendingConsult !== undefined) {
+        channel.pendingConsult = step.pendingConsult;
+      }
+      if (step.pendingFinalReview !== undefined) {
         channel.pendingFinalReview = step.pendingFinalReview;
-      if (step.bumpRejection) channel.reportRejectionCount += step.bumpRejection;
+      }
+      if (step.bumpRejection) {
+        channel.reportRejectionCount += step.bumpRejection;
+      }
       return { info: { id: `m${i}`, sessionID: "s", tokens: {} }, parts: step.toolParts ?? [] };
     },
     listMessages: async () => [],
@@ -421,7 +430,9 @@ test("turnLoop: consult stop verdict → parks blocked (stop_condition)", () => 
     );
 
     equal(result.outcome.status, "blocked");
-    if (result.outcome.status === "blocked") equal(result.outcome.reason, "stop_condition");
+    if (result.outcome.status === "blocked") {
+      equal(result.outcome.reason, "stop_condition");
+    }
     await cleanTemp(tmp);
   })();
 });
@@ -578,7 +589,9 @@ test("turnLoop: past the deadline → parks wedged (watchdog)", () => {
     );
 
     equal(result.outcome.status, "blocked");
-    if (result.outcome.status === "blocked") equal(result.outcome.reason, "wedged");
+    if (result.outcome.status === "blocked") {
+      equal(result.outcome.reason, "wedged");
+    }
     await cleanTemp(tmp);
   })();
 });
@@ -634,7 +647,9 @@ test("turnLoop: two consecutive sendMessage failures → parks wedged", () => {
       createSession: async () => "baby-0",
       sendMessage: async () => {
         sendCount += 1;
-        if (sendCount <= 2) throw new Error("turn timeout");
+        if (sendCount <= 2) {
+          throw new Error("turn timeout");
+        }
         return { info: { id: `m${sendCount}`, sessionID: "s", tokens: {} }, parts: [] };
       },
       listMessages: async () => [],

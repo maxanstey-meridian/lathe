@@ -62,7 +62,9 @@ export const gateDeniedPart = (part: MessagePart): boolean =>
 // or null when the turn carried none.
 export const messageError = (info: MessageInfo): string | null => {
   const e = info.error;
-  if (!e) return null;
+  if (!e) {
+    return null;
+  }
   const status = typeof e.data?.statusCode === "number" ? ` (HTTP ${e.data.statusCode})` : "";
   const detail = e.data?.message ?? e.name ?? "unknown provider error";
   return `${e.name ?? "provider error"}${status}: ${detail}`;

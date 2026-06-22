@@ -92,7 +92,9 @@ export const createReviewer = (
       // the escalate below says e.g. "APIError (HTTP 400): …" instead of the
       // "unparseable" a 0-char parse would invent. (A timeout or a dead socket
       // already rejects out of sendMessage into the same catch.)
-      if (error) throw new Error(error);
+      if (error) {
+        throw new Error(error);
+      }
 
       return { review: parseSuperReview(raw), raw };
     } catch (err) {

@@ -16,8 +16,12 @@
 export type StallAction = "park" | "rotate" | "nudge";
 
 export const stallAction = (ladder: number, rotateAt: number, parkAt: number): StallAction => {
-  if (ladder >= parkAt) return "park";
-  if (rotateAt > 0 && ladder % rotateAt === 0) return "rotate";
+  if (ladder >= parkAt) {
+    return "park";
+  }
+  if (rotateAt > 0 && ladder % rotateAt === 0) {
+    return "rotate";
+  }
   return "nudge";
 };
 
@@ -39,7 +43,9 @@ export const decideStallRecovery = (
   meta: { status: string; blockedReason?: string; stallRetries: number },
   maxStallRetries: number,
 ): StallRecoveryDecision => {
-  if (meta.status !== "blocked" || meta.blockedReason !== "wedged") return { action: "none" };
+  if (meta.status !== "blocked" || meta.blockedReason !== "wedged") {
+    return { action: "none" };
+  }
   const used = meta.stallRetries ?? 0;
   return used < maxStallRetries
     ? { action: "requeue", stallRetries: used + 1 }
@@ -59,6 +65,8 @@ export type ReorientBound =
   | { allowed: false; escalating: true };
 
 export const checkReorientBound = (used: number, maxReorientRetries: number): ReorientBound => {
-  if (used >= maxReorientRetries) return { allowed: false, escalating: true };
+  if (used >= maxReorientRetries) {
+    return { allowed: false, escalating: true };
+  }
   return { allowed: true, escalating: false };
 };

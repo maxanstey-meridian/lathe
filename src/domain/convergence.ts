@@ -96,7 +96,9 @@ export const decideConvergence = (
     return { action: "escalate", reason: review.human_decision_needed ?? "reviewer escalated" };
   }
   if (review.verdict === "accept") {
-    if (verificationGreen) return { action: "stop" };
+    if (verificationGreen) {
+      return { action: "stop" };
+    }
     return {
       action: "escalate",
       reason:
@@ -135,14 +137,21 @@ const balancedObjects = (text: string): string[] => {
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
     if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === "\\") escaped = true;
-      else if (ch === '"') inString = false;
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
       continue;
     }
-    if (ch === '"') inString = true;
-    else if (ch === "{") {
-      if (depth === 0) startIdx = i;
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "{") {
+      if (depth === 0) {
+        startIdx = i;
+      }
       depth++;
     } else if (ch === "}" && depth > 0) {
       depth--;
@@ -165,7 +174,9 @@ export const parseSuperReview = (raw: string): SuperReview => {
   for (const obj of balancedObjects(raw).reverse()) {
     try {
       const parsed = SuperReview.safeParse(JSON.parse(obj));
-      if (parsed.success) return parsed.data;
+      if (parsed.success) {
+        return parsed.data;
+      }
     } catch {
       /* not this object — try the next-earlier one */
     }
@@ -213,9 +224,12 @@ const dedupeVerification = <T extends { command: string }>(cmds: T[]): T[] => {
 
 const renderBlockerBody = (b: Finding): string => {
   const lines = [`### ${b.severity} \`${outcomeIdOf(b)}\` — ${b.title}`];
-  if (b.grounding.kind !== "none")
+  if (b.grounding.kind !== "none") {
     lines.push("", `Grounding (${b.grounding.kind}): ${b.grounding.ref}`);
-  if (b.evidence.length > 0) lines.push("", ...b.evidence.map((e) => `- ${e}`));
+  }
+  if (b.evidence.length > 0) {
+    lines.push("", ...b.evidence.map((e) => `- ${e}`));
+  }
   return lines.join("\n");
 };
 
@@ -234,8 +248,9 @@ export const renderFollowupPacket = (input: FollowupPacketInput): FollowupPacket
     timestamp,
     slug,
   } = input;
-  if (blockers.length === 0)
+  if (blockers.length === 0) {
     throw new Error("renderFollowupPacket: no blockers — nothing to author (converged)");
+  }
 
   const runId = `${timestamp}-${slug}`;
   if (!RUN_ID_RE.test(runId)) {
@@ -249,7 +264,9 @@ export const renderFollowupPacket = (input: FollowupPacketInput): FollowupPacket
   const seenOutcomeIds = new Set<string>();
   for (const b of blockers) {
     const id = outcomeIdOf(b);
-    if (seenOutcomeIds.has(id)) continue;
+    if (seenOutcomeIds.has(id)) {
+      continue;
+    }
     seenOutcomeIds.add(id);
     outcomes.push({
       id,
@@ -355,7 +372,9 @@ export const assembleCommitMessage = (cm: CommitMessage): string => {
 // Pure render so it can be unit-tested; the I/O wrapper lives in converge.ts.
 export const renderNits = (runId: string, primary: SuperReview): string | undefined => {
   const nits = primary.findings;
-  if (nits.length === 0) return undefined;
+  if (nits.length === 0) {
+    return undefined;
+  }
 
   const lines = [
     `# Notes — ${runId}`,
@@ -370,7 +389,9 @@ export const renderNits = (runId: string, primary: SuperReview): string | undefi
     if (finding.grounding.kind !== "none" && finding.grounding.ref.trim().length > 0) {
       lines.push(`- grounding (${finding.grounding.kind}): ${finding.grounding.ref}`);
     }
-    for (const e of finding.evidence) lines.push(`- ${e}`);
+    for (const e of finding.evidence) {
+      lines.push(`- ${e}`);
+    }
     lines.push("");
   }
   return lines.join("\n");

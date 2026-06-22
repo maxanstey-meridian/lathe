@@ -39,7 +39,9 @@ body
 
 const parseFixture = (): Packet => {
   const shape = parsePacketShape(PACKET_RAW, RUN_ID);
-  if (!shape.ok) throw new Error(shape.problems.join("; "));
+  if (!shape.ok) {
+    throw new Error(shape.problems.join("; "));
+  }
   return shape.packet;
 };
 
@@ -105,7 +107,9 @@ const scriptedExecutor = (
     createSession: async () => newSessionIds[s++] ?? `baby-${s}`,
     sendMessage: async () => {
       const step = steps[i++] ?? {};
-      if (step.intents) channel.intents.push(...step.intents);
+      if (step.intents) {
+        channel.intents.push(...step.intents);
+      }
       return { info: { id: `m${i}`, sessionID: "s", tokens: {} }, parts: [] };
     },
     listMessages: async () => [],

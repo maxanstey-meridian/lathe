@@ -84,14 +84,21 @@ const extractBalancedObjects = (text: string): string[] => {
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
     if (inString) {
-      if (escape) escape = false;
-      else if (ch === "\\") escape = true;
-      else if (ch === '"') inString = false;
+      if (escape) {
+        escape = false;
+      } else if (ch === "\\") {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
       continue;
     }
-    if (ch === '"') inString = true;
-    else if (ch === "{") {
-      if (depth === 0) start = i;
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "{") {
+      if (depth === 0) {
+        start = i;
+      }
       depth += 1;
     } else if (ch === "}" && depth > 0) {
       depth -= 1;
@@ -121,7 +128,9 @@ const plannerResponseCandidates = (raw: string): string[] => {
 
   const start = cleaned.indexOf("{");
   const end = cleaned.lastIndexOf("}");
-  if (start !== -1 && end > start) candidates.push(cleaned.slice(start, end + 1));
+  if (start !== -1 && end > start) {
+    candidates.push(cleaned.slice(start, end + 1));
+  }
   candidates.push(cleaned);
 
   return candidates;
@@ -134,7 +143,9 @@ export const tryParsePlannerResponse = (raw: string): PlannerResponse | null => 
   for (const candidate of plannerResponseCandidates(raw)) {
     try {
       const parsed = PlannerResponse.safeParse(JSON.parse(candidate));
-      if (parsed.success) return parsed.data;
+      if (parsed.success) {
+        return parsed.data;
+      }
     } catch {
       /* try next candidate */
     }
@@ -170,7 +181,9 @@ export const diagnosePlannerParse = (raw: string): string => {
       continue;
     }
     const parsed = PlannerResponse.safeParse(value);
-    if (parsed.success) continue; // a valid candidate exists — caller would not be here
+    if (parsed.success) {
+      continue;
+    } // a valid candidate exists — caller would not be here
     return parsed.error.issues
       .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
       .join("; ");
@@ -193,7 +206,9 @@ export const tryParseFinalReview = (raw: string): FinalReview | null => {
   for (const candidate of extractBalancedObjects(raw).reverse()) {
     try {
       const parsed = FinalReview.safeParse(JSON.parse(candidate));
-      if (parsed.success) return parsed.data;
+      if (parsed.success) {
+        return parsed.data;
+      }
     } catch {
       /* not this object — try the next-earlier one */
     }

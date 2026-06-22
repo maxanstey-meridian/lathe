@@ -56,7 +56,9 @@ export const makeExecuteRun =
     const shape = parsePacketShape(raw, runId);
     if (!shape.ok) {
       const prior = store.readMetaIfExists(runId);
-      if (prior) store.writeMeta({ ...prior, status: "failed", updatedAt: clock.nowIso() });
+      if (prior) {
+        store.writeMeta({ ...prior, status: "failed", updatedAt: clock.nowIso() });
+      }
       return;
     }
     const packet = shape.packet;
@@ -208,12 +210,13 @@ const finalizeRun = (
   const { outcome } = result;
 
   const sha = repo.wipCommit(worktree, `meridian: WIP ${runId} [${outcome.status}]`);
-  if (sha)
+  if (sha) {
     journal(ports, runId, 0, {
       event: "committed",
       sha,
       message: `meridian: WIP ${runId} [${outcome.status}]`,
     });
+  }
 
   if (outcome.status === "ready_for_review" && result.acceptedReport) {
     const markdown = renderReportMarkdown(result.acceptedReport, runId, result.finalReview);
@@ -236,8 +239,9 @@ const finalizeRun = (
       updatedAt: clock.nowIso(),
     });
   } else {
-    if (outcome.status === "failed")
+    if (outcome.status === "failed") {
       journal(ports, runId, 0, { event: "driver_note", note: outcome.note });
+    }
     store.writeMeta({
       ...meta,
       status: outcome.status,

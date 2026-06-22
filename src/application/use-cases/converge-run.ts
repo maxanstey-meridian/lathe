@@ -93,7 +93,9 @@ const slugFromRunId = (runId: string, pass: number): string => {
   // Strip any prior -fixN suffix before appending the new one.
   while (parts.length > 0) {
     const last = parts[parts.length - 1];
-    if (last === undefined || !last.startsWith("fix")) break;
+    if (last === undefined || !last.startsWith("fix")) {
+      break;
+    }
     parts.pop();
   }
   const base = parts.join("-");

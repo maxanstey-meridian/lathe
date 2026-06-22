@@ -43,7 +43,9 @@ export const createSandbox = (
   // Crash recovery: reuse only a REAL sandbox (a .git directory). A bare/half-made
   // dir is not reused — `git clone` below fails loudly on an occupied path rather
   // than us silently deleting something during setup.
-  if (existsSync(dotGit) && statSync(dotGit).isDirectory()) return;
+  if (existsSync(dotGit) && statSync(dotGit).isDirectory()) {
+    return;
+  }
   git(dirname(sandboxPath), ["clone", "--local", "--branch", base, repo, sandboxPath]);
   git(sandboxPath, ["checkout", "-b", branch]);
 };
@@ -71,7 +73,9 @@ export const fetchBranchFromClone = (repo: string, clone: string, branch: string
 // `.git`. A corrupt meta, a symlink, or a stray path can never steer it onto
 // something else — every failed check throws instead of deleting.
 export const removeSandbox = (sandboxPath: string, runsDir: string): void => {
-  if (!existsSync(sandboxPath)) return; // already tidy — accept is idempotent
+  if (!existsSync(sandboxPath)) {
+    return;
+  } // already tidy — accept is idempotent
   const real = realpathSync(sandboxPath); // resolve symlinks to the TRUE target
   const realRuns = realpathSync(runsDir);
   const rel = relative(realRuns, real);
@@ -81,10 +85,12 @@ export const removeSandbox = (sandboxPath: string, runsDir: string): void => {
       `refusing to delete ${sandboxPath}: not a <runsDir>/<runId>/worktree path (resolved ${real}; runsDir ${realRuns})`,
     );
   }
-  if (!statSync(real).isDirectory())
+  if (!statSync(real).isDirectory()) {
     throw new Error(`refusing to delete ${sandboxPath}: not a directory`);
-  if (!existsSync(join(real, ".git")))
+  }
+  if (!existsSync(join(real, ".git"))) {
     throw new Error(`refusing to delete ${sandboxPath}: no .git — not a sandbox`);
+  }
   rmSync(real, { recursive: true, force: true });
 };
 
@@ -94,7 +100,9 @@ export const worktreeIsDirty = (worktree: string): boolean =>
 // One WIP commit per run attempt (R3): at terminal status, park, or crash
 // recovery. Returns undefined when there is nothing to commit.
 export const wipCommit = (worktree: string, message: string): string | undefined => {
-  if (!worktreeIsDirty(worktree)) return undefined;
+  if (!worktreeIsDirty(worktree)) {
+    return undefined;
+  }
   git(worktree, ["add", "-A"]);
   git(worktree, ["commit", "-m", message, "--no-verify"]);
   return git(worktree, ["rev-parse", "HEAD"]);
@@ -142,10 +150,14 @@ export const readDiffStats = (
     const output = git(worktree, ["diff", "--numstat", "HEAD"]);
     for (const line of output.split("\n")) {
       const trimmed = line.trim();
-      if (!trimmed) continue;
+      if (!trimmed) {
+        continue;
+      }
       const [addedText, removedText, ...pathParts] = trimmed.split(/\s+/);
       const path = pathParts.join(" ");
-      if (!path) continue;
+      if (!path) {
+        continue;
+      }
       const added = Number.parseInt(addedText ?? "0", 10);
       const removed = Number.parseInt(removedText ?? "0", 10);
       stats[path] = {
@@ -162,13 +174,21 @@ export const readDiffStats = (
       // Dependency trees are never work product; without a .gitignore in the
       // target repo they'd count as thousands of out-of-surface files (seen
       // live: pnpm install latched the gate on node_modules/.bin/tsc et al).
-      if (file.startsWith("node_modules/") || file.includes("/node_modules/")) continue;
-      if (stats[file]) continue;
+      if (file.startsWith("node_modules/") || file.includes("/node_modules/")) {
+        continue;
+      }
+      if (stats[file]) {
+        continue;
+      }
       const fullPath = join(worktree, file);
-      if (!existsSync(fullPath)) continue;
+      if (!existsSync(fullPath)) {
+        continue;
+      }
       try {
         const content = readFileSync(fullPath);
-        if (content.length > 1024 * 1024 || content.includes(0)) continue;
+        if (content.length > 1024 * 1024 || content.includes(0)) {
+          continue;
+        }
         stats[file] = { added: content.toString("utf-8").split("\n").length, removed: 0 };
       } catch {
         // Binary/unreadable untracked files do not count toward text LoC.
@@ -191,7 +211,9 @@ export const reviewableDiff = (worktree: string, maxBytes: number): string => {
   const sections: string[] = [];
   try {
     const tracked = git(worktree, ["diff", "HEAD"]);
-    if (tracked) sections.push(tracked);
+    if (tracked) {
+      sections.push(tracked);
+    }
   } catch {
     /* unreadable diff → rely on the untracked listing + Daddy's own inspection */
   }
@@ -203,10 +225,14 @@ export const reviewableDiff = (worktree: string, maxBytes: number): string => {
       .filter((f) => !f.startsWith("node_modules/") && !f.includes("/node_modules/"));
     for (const file of untracked) {
       const fullPath = join(worktree, file);
-      if (!existsSync(fullPath)) continue;
+      if (!existsSync(fullPath)) {
+        continue;
+      }
       try {
         const content = readFileSync(fullPath);
-        if (content.length > 1024 * 1024 || content.includes(0)) continue;
+        if (content.length > 1024 * 1024 || content.includes(0)) {
+          continue;
+        }
         sections.push(`--- new file: ${file} ---\n${content.toString("utf-8")}`);
       } catch {
         /* binary/unreadable untracked file — skip */
@@ -217,7 +243,9 @@ export const reviewableDiff = (worktree: string, maxBytes: number): string => {
   }
 
   const full = sections.join("\n\n");
-  if (full.length <= maxBytes) return full || "(no changes in the worktree)";
+  if (full.length <= maxBytes) {
+    return full || "(no changes in the worktree)";
+  }
   return `${full.slice(0, maxBytes)}\n\n[diff truncated at ${maxBytes} bytes — run \`git diff HEAD\` and read files directly for the full picture]`;
 };
 
@@ -230,7 +258,9 @@ export const reviewableDiffAgainst = (worktree: string, base: string, maxBytes: 
   const sections: string[] = [];
   try {
     const tracked = git(worktree, ["diff", base]);
-    if (tracked) sections.push(tracked);
+    if (tracked) {
+      sections.push(tracked);
+    }
   } catch {
     /* unreadable diff → rely on the untracked listing + super-daddy's own inspection */
   }
@@ -242,10 +272,14 @@ export const reviewableDiffAgainst = (worktree: string, base: string, maxBytes: 
       .filter((f) => !f.startsWith("node_modules/") && !f.includes("/node_modules/"));
     for (const file of untracked) {
       const fullPath = join(worktree, file);
-      if (!existsSync(fullPath)) continue;
+      if (!existsSync(fullPath)) {
+        continue;
+      }
       try {
         const content = readFileSync(fullPath);
-        if (content.length > 1024 * 1024 || content.includes(0)) continue;
+        if (content.length > 1024 * 1024 || content.includes(0)) {
+          continue;
+        }
         sections.push(`--- new file: ${file} ---\n${content.toString("utf-8")}`);
       } catch {
         /* binary/unreadable untracked file — skip */
@@ -256,7 +290,9 @@ export const reviewableDiffAgainst = (worktree: string, base: string, maxBytes: 
   }
 
   const full = sections.join("\n\n");
-  if (full.length <= maxBytes) return full || "(no changes on this branch vs base)";
+  if (full.length <= maxBytes) {
+    return full || "(no changes on this branch vs base)";
+  }
   return `${full.slice(0, maxBytes)}\n\n[diff truncated at ${maxBytes} bytes — run \`git diff ${base}\` and read files directly for the full picture]`;
 };
 

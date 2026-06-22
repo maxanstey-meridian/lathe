@@ -125,7 +125,9 @@ const makeRepo = (opts?: {
       state.removeSandboxRunsDir = runsDir;
     },
     headBranch: (repo) => {
-      if (opts?.headBranchThrows) throw new Error("detached HEAD");
+      if (opts?.headBranchThrows) {
+        throw new Error("detached HEAD");
+      }
       return opts?.currentBranch ?? "main";
     },
     branchExists: () => true,

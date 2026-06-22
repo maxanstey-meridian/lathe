@@ -41,7 +41,9 @@ const deps: CliDeps = {
 
 dispatch(process.argv.slice(2), deps)
   .then((code) => {
-    if (code >= 0) process.exit(code);
+    if (code >= 0) {
+      process.exit(code);
+    }
   })
   .catch((err) => {
     console.error(err instanceof Error ? err.message : String(err));

@@ -55,10 +55,12 @@ export const volumeCheckpointReason = (
   delta: { files: string[]; loc: number },
   limits: { checkpointToolCalls: number; checkpointFiles: number; checkpointLoc: number },
 ): string | undefined => {
-  if (toolCalls >= limits.checkpointToolCalls)
+  if (toolCalls >= limits.checkpointToolCalls) {
     return `work checkpoint interval reached (${toolCalls} tool calls since your last planner check-in)`;
-  if (delta.files.length >= limits.checkpointFiles || delta.loc >= limits.checkpointLoc)
+  }
+  if (delta.files.length >= limits.checkpointFiles || delta.loc >= limits.checkpointLoc) {
     return `work checkpoint interval reached (${delta.files.length} files, ${delta.loc} changed LoC since your last planner check-in)`;
+  }
   return undefined;
 };
 
@@ -100,14 +102,21 @@ export const mutationDenyReason = (
   memoryLatchReason: string | undefined,
 ): string | undefined => {
   const surfaceTarget = editTargetOutOfSurface(tool, args, worktree);
-  if (surfaceTarget)
+  if (surfaceTarget) {
     return `attempted edit outside the handoff's expected change surface: ${surfaceTarget}`;
-  if (state.latched) return state.latchReason ?? "planner checkpoint required";
-  if (memoryLatchReason) return memoryLatchReason;
-  if (!state.firstEditApproved)
+  }
+  if (state.latched) {
+    return state.latchReason ?? "planner checkpoint required";
+  }
+  if (memoryLatchReason) {
+    return memoryLatchReason;
+  }
+  if (!state.firstEditApproved) {
     return "first edit of the run requires an accepted planner decision";
-  if (state.reconciliationRequired)
+  }
+  if (state.reconciliationRequired) {
     return "reconciliation required: no valid checkpoint from the previous session";
+  }
   return undefined;
 };
 
@@ -120,9 +129,13 @@ export const checkpointNudgeDue = (
   nowMs: number,
   intervalMs: number,
 ): number | undefined => {
-  if (!state.firstEditApproved || !state.lastAcceptedDecisionAt) return undefined;
+  if (!state.firstEditApproved || !state.lastAcceptedDecisionAt) {
+    return undefined;
+  }
   const elapsed = nowMs - Date.parse(state.lastAcceptedDecisionAt);
-  if (elapsed < intervalMs) return undefined;
+  if (elapsed < intervalMs) {
+    return undefined;
+  }
   return Math.round(elapsed / 60_000);
 };
 
@@ -130,10 +143,14 @@ export const checkpointNudgeDue = (
 // ALLOW path. Returns the notice string when due, else undefined.
 // The driver appends this to Baby's per-mutation results.
 export const checkpointNudgeNotice = (state: GateState, nowMs: number): string | undefined => {
-  if (!state.firstEditApproved || !state.lastAcceptedDecisionAt) return undefined;
+  if (!state.firstEditApproved || !state.lastAcceptedDecisionAt) {
+    return undefined;
+  }
   const intervalMs = state.checkpointNudgeMs ?? 20 * 60 * 1000;
   const elapsed = nowMs - Date.parse(state.lastAcceptedDecisionAt);
-  if (elapsed < intervalMs) return undefined;
+  if (elapsed < intervalMs) {
+    return undefined;
+  }
   const minutes = Math.round(elapsed / 60_000);
   return `MERIDIAN GATE NOTICE: ~${minutes} min since your last planner check-in. You are NOT blocked — this is a reminder, keep working with full tool access. If your direction could use Daddy's eyes, call ask_planner; otherwise carry on and call submit_report once the packet is complete.`;
 };
@@ -149,17 +166,23 @@ export const volumeNoticeReason = (
   isMutationCall: boolean,
   delta: DeltaInput,
 ): string | undefined => {
-  if (typeof state.checkpointToolCalls === "number" && toolCallCount >= state.checkpointToolCalls)
+  if (typeof state.checkpointToolCalls === "number" && toolCallCount >= state.checkpointToolCalls) {
     return `work checkpoint interval reached (${toolCallCount} tool calls since your last planner check-in)`;
-  if (!isMutationCall) return undefined;
+  }
+  if (!isMutationCall) {
+    return undefined;
+  }
   const fileLimit = state.checkpointFiles;
   const locLimit = state.checkpointLoc;
-  if (typeof fileLimit !== "number" && typeof locLimit !== "number") return undefined;
+  if (typeof fileLimit !== "number" && typeof locLimit !== "number") {
+    return undefined;
+  }
   if (
     (typeof fileLimit === "number" && delta.files.length >= fileLimit) ||
     (typeof locLimit === "number" && delta.loc >= locLimit)
-  )
+  ) {
     return `work checkpoint interval reached (${delta.files.length} files, ${delta.loc} changed LoC since your last planner check-in)`;
+  }
   return undefined;
 };
 // --- messages (all carry the MERIDIAN GATE marker the driver journals on) ----

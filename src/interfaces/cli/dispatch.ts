@@ -133,13 +133,21 @@ const cmdChain = (args: string[], deps: CliDeps): number => {
   // straight away; the rest wait in the staged registry.
   promoteStaged(deps.store, deps.repo);
 
-  for (const runId of staged) console.log(`staged: ${runId}`);
-  for (const f of skipped) console.log(`skipped (not a .md packet): ${f}`);
+  for (const runId of staged) {
+    console.log(`staged: ${runId}`);
+  }
+  for (const f of skipped) {
+    console.log(`skipped (not a .md packet): ${f}`);
+  }
   for (const r of rejected) {
     console.error(`REJECTED ${r.file}:`);
-    for (const p of r.problems) console.error(`  - ${p}`);
+    for (const p of r.problems) {
+      console.error(`  - ${p}`);
+    }
   }
-  if (staged.length === 0 && rejected.length === 0) console.log("nothing to stage");
+  if (staged.length === 0 && rejected.length === 0) {
+    console.log("nothing to stage");
+  }
   return rejected.length > 0 ? 1 : 0;
 };
 
@@ -191,15 +199,21 @@ const cmdTail = (args: string[], deps: CliDeps): number => {
   } else {
     console.log(renderJournalReplay(deps.store, runId));
   }
-  if (!follow) return 0;
+  if (!follow) {
+    return 0;
+  }
 
   // Live follow: re-read the journal on each change and print only new events.
   // The same renderer serves replay and live (D4 — identical output).
   let printed = existsSync(file) ? deps.store.readJournal(runId).length : 0;
   const flush = (): void => {
-    if (!existsSync(file)) return;
+    if (!existsSync(file)) {
+      return;
+    }
     const events = deps.store.readJournal(runId);
-    for (const e of events.slice(printed)) console.log(renderJournalEvent(e));
+    for (const e of events.slice(printed)) {
+      console.log(renderJournalEvent(e));
+    }
     printed = events.length;
   };
   watchFile(file, { interval: 1000 }, flush);

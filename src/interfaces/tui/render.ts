@@ -26,9 +26,13 @@ export const fmtOutcomes = (store: Store, runId: string): string => {
       return undefined;
     }
   })();
-  if (!ledger) return "";
+  if (!ledger) {
+    return "";
+  }
   const counts = { done: 0, in_progress: 0, not_started: 0, blocked: 0 };
-  for (const o of ledger.outcomes) counts[o.status] += 1;
+  for (const o of ledger.outcomes) {
+    counts[o.status] += 1;
+  }
   const extra = `${counts.in_progress ? `, ${counts.in_progress} in progress` : ""}${counts.blocked ? `, ${counts.blocked} blocked` : ""}`;
   return `${counts.done}/${ledger.outcomes.length} done${extra}`;
 };
@@ -44,26 +48,35 @@ export const renderStatus = (store: Store): string => {
     let latched: string | undefined;
     try {
       const gate = store.readGateState(active.runId);
-      if (gate.latched) latched = gate.latchReason ?? "unknown";
+      if (gate.latched) {
+        latched = gate.latchReason ?? "unknown";
+      }
     } catch {
       /* no gate yet */
     }
-    if (latched) lines.push(`  gate latched: ${latched}`);
-    for (const e of store.readJournal(active.runId).slice(-5))
+    if (latched) {
+      lines.push(`  gate latched: ${latched}`);
+    }
+    for (const e of store.readJournal(active.runId).slice(-5)) {
       lines.push(`  ${e.at.slice(11, 19)} ${e.event}`);
+    }
   } else {
     lines.push("no active run");
   }
 
   const queued = store.listQueue();
-  if (queued.length > 0) lines.push(`queued: ${queued.map((q) => q.runId).join(", ")}`);
+  if (queued.length > 0) {
+    lines.push(`queued: ${queued.map((q) => q.runId).join(", ")}`);
+  }
 
   const parked = store
     .listRunIds()
     .map((id) => store.readMetaIfExists(id))
     .filter((m) => m !== undefined && m.status === "blocked");
   for (const m of parked) {
-    if (!m) continue;
+    if (!m) {
+      continue;
+    }
     const retries = m.stallRetries
       ? `, ${m.stallRetries} auto-retr${m.stallRetries === 1 ? "y" : "ies"}`
       : "";
@@ -104,11 +117,15 @@ export const renderReview = (store: Store): string => {
     .map((id) => store.readMetaIfExists(id))
     .filter((m) => m !== undefined && m.status !== "running" && m.status !== "queued");
 
-  if (runs.length === 0) return "nothing to review";
+  if (runs.length === 0) {
+    return "nothing to review";
+  }
 
   const lines: string[] = [];
   for (const m of runs) {
-    if (!m) continue;
+    if (!m) {
+      continue;
+    }
     const icon =
       m.status === "ready_for_review"
         ? "✅"
@@ -139,7 +156,9 @@ export const renderReview = (store: Store): string => {
 // `meridian queue`: the queue, marking any packet that fails re-validation.
 export const renderQueue = (store: Store): string => {
   const entries = store.listQueue();
-  if (entries.length === 0) return "queue is empty";
+  if (entries.length === 0) {
+    return "queue is empty";
+  }
   return entries.map((e, i) => `${i + 1}. ${e.runId}`).join("\n");
 };
 

@@ -152,7 +152,9 @@ export class StoreAdapter implements Store {
 
   listRunIds(): string[] {
     const runsDir = this.paths.runsDir;
-    if (!existsSync(runsDir)) return [];
+    if (!existsSync(runsDir)) {
+      return [];
+    }
     return readdirSync(runsDir)
       .filter((d) => existsSync(this.paths.metaFile(d)))
       .sort();
@@ -228,7 +230,9 @@ export class StoreAdapter implements Store {
 
   latestCheckpoint(runId: string): Checkpoint | undefined {
     const dir = this.paths.checkpointsDir(runId);
-    if (!existsSync(dir)) return undefined;
+    if (!existsSync(dir)) {
+      return undefined;
+    }
     const files = readdirSync(dir)
       .filter((f) => f.endsWith(".json"))
       .sort();
@@ -248,7 +252,9 @@ export class StoreAdapter implements Store {
 
   nextCheckpointNumber(runId: string): number {
     const dir = this.paths.checkpointsDir(runId);
-    if (!existsSync(dir)) return 1;
+    if (!existsSync(dir)) {
+      return 1;
+    }
     return readdirSync(dir).filter((f) => f.endsWith(".json")).length + 1;
   }
 
@@ -270,7 +276,9 @@ export class StoreAdapter implements Store {
   // Report (markdown — prose, not schema-validated)
 
   readReport(runId: string): string {
-    if (!existsSync(this.paths.reportFile(runId))) return "";
+    if (!existsSync(this.paths.reportFile(runId))) {
+      return "";
+    }
     return readFileSync(this.paths.reportFile(runId), "utf-8");
   }
 
@@ -283,7 +291,9 @@ export class StoreAdapter implements Store {
   // Nits (markdown — prose)
 
   readNits(runId: string): string {
-    if (!existsSync(this.paths.nitsFile(runId))) return "";
+    if (!existsSync(this.paths.nitsFile(runId))) {
+      return "";
+    }
     return readFileSync(this.paths.nitsFile(runId), "utf-8");
   }
 
@@ -313,7 +323,9 @@ export class StoreAdapter implements Store {
   }
 
   readFrozenPacket(runId: string): string {
-    if (!existsSync(this.paths.packetFile(runId))) return "";
+    if (!existsSync(this.paths.packetFile(runId))) {
+      return "";
+    }
     return readFileSync(this.paths.packetFile(runId), "utf-8");
   }
 
@@ -351,7 +363,9 @@ export class StoreAdapter implements Store {
 
   listCampaigns(): Campaign[] {
     const dir = this.paths.campaignsDir;
-    if (!existsSync(dir)) return [];
+    if (!existsSync(dir)) {
+      return [];
+    }
     return readdirSync(dir)
       .sort()
       .flatMap((campaignId) => {
@@ -448,7 +462,9 @@ export class StoreAdapter implements Store {
   archiveQueue(runId: string): void {
     // Archive the queue file if it exists, else no-op (mirror dropFromQueue).
     const file = join(this.paths.queueDir, `${runId}.md`);
-    if (!existsSync(file)) return;
+    if (!existsSync(file)) {
+      return;
+    }
     archivePacket(this.paths, file);
   }
 
@@ -457,7 +473,9 @@ export class StoreAdapter implements Store {
 
   listStaged(): StagedInfo[] {
     const stagedDir = this.paths.stagedDir;
-    if (!existsSync(stagedDir)) return [];
+    if (!existsSync(stagedDir)) {
+      return [];
+    }
     return readdirSync(stagedDir)
       .sort()
       .filter((f) => f.endsWith(".md"))
@@ -465,14 +483,18 @@ export class StoreAdapter implements Store {
         const filePath = join(stagedDir, f);
         const raw = readFileSync(filePath, "utf-8");
         const result = parseStaged(raw, filePath);
-        if (result.ok) return [result.info];
+        if (result.ok) {
+          return [result.info];
+        }
         return [];
       });
   }
 
   readStaged(runId: string): string | undefined {
     const file = this.paths.stagedFile(runId);
-    if (!existsSync(file)) return undefined;
+    if (!existsSync(file)) {
+      return undefined;
+    }
     return readFileSync(file, "utf-8");
   }
 
@@ -505,7 +527,9 @@ export class StoreAdapter implements Store {
 
   readQueuePacket(runId: string): string | undefined {
     const file = join(this.paths.queueDir, `${runId}.md`);
-    if (!existsSync(file)) return undefined;
+    if (!existsSync(file)) {
+      return undefined;
+    }
     return readFileSync(file, "utf-8");
   }
 
@@ -515,10 +539,14 @@ export class StoreAdapter implements Store {
 
   initMetaFromQueue(runId: string): RunMeta | undefined {
     const raw = this.readQueuePacket(runId);
-    if (!raw) return undefined;
+    if (!raw) {
+      return undefined;
+    }
     const repo = extractRepoFromYaml(raw);
     const base = extractBaseFromYaml(raw);
-    if (!repo || !base) return undefined;
+    if (!repo || !base) {
+      return undefined;
+    }
     return {
       runId,
       status: "queued",

@@ -95,7 +95,9 @@ export const parsePacketShape = (raw: string, runId?: string): AdmissionResult =
   }
 
   const ids = fm.data.outcomes.map((o) => o.id);
-  if (new Set(ids).size !== ids.length) problems.push("outcome ids are not unique");
+  if (new Set(ids).size !== ids.length) {
+    problems.push("outcome ids are not unique");
+  }
 
   if (runId) {
     if (!RUNID_RE.test(runId)) {
@@ -103,7 +105,9 @@ export const parsePacketShape = (raw: string, runId?: string): AdmissionResult =
     }
   }
 
-  if (problems.length > 0) return { ok: false, problems };
+  if (problems.length > 0) {
+    return { ok: false, problems };
+  }
 
   return {
     ok: true,
@@ -116,7 +120,9 @@ export const parsePacketShape = (raw: string, runId?: string): AdmissionResult =
 
 export const redactPacketInfra = (raw: string): string => {
   const match = FRONTMATTER_RE.exec(raw);
-  if (!match || match[1] === undefined || match[2] === undefined) return raw;
+  if (!match || match[1] === undefined || match[2] === undefined) {
+    return raw;
+  }
   const kept = match[1]
     .split("\n")
     .filter((line) => !INFRA_KEYS_RE.test(line))
@@ -129,7 +135,9 @@ export const redactPacketInfra = (raw: string): string => {
 
 export const stampBase = (raw: string, headBranch: string): string => {
   const match = FRONTMATTER_RE.exec(raw);
-  if (!match || match[1] === undefined) return raw;
+  if (!match || match[1] === undefined) {
+    return raw;
+  }
 
   let parsed: unknown;
   try {
@@ -137,12 +145,20 @@ export const stampBase = (raw: string, headBranch: string): string => {
   } catch {
     return raw;
   }
-  if (parsed === null || typeof parsed !== "object") return raw;
+  if (parsed === null || typeof parsed !== "object") {
+    return raw;
+  }
   const fm = parsed as Record<string, unknown>;
 
-  if (typeof fm.base === "string" && fm.base.length > 0) return raw; // explicit override
-  if (typeof fm.repo !== "string" || fm.repo.length === 0) return raw; // no repo, can't stamp
-  if (headBranch.length === 0 || headBranch === "HEAD") return raw; // detached / no branch
+  if (typeof fm.base === "string" && fm.base.length > 0) {
+    return raw;
+  } // explicit override
+  if (typeof fm.repo !== "string" || fm.repo.length === 0) {
+    return raw;
+  } // no repo, can't stamp
+  if (headBranch.length === 0 || headBranch === "HEAD") {
+    return raw;
+  } // detached / no branch
 
   return `---\nbase: ${headBranch}\n${match[1]}\n---\n${match[2] ?? ""}`;
 };
@@ -154,9 +170,13 @@ export const stampBase = (raw: string, headBranch: string): string => {
 
 export const extractRepoFromYaml = (raw: string): string | undefined => {
   const match = raw.match(/^---\n([\s\S]*?)\n---/);
-  if (!match || !match[1]) return undefined;
+  if (!match || !match[1]) {
+    return undefined;
+  }
   const repoLine = match[1].split("\n").find((line) => /^repo:\s/.test(line));
-  if (!repoLine) return undefined;
+  if (!repoLine) {
+    return undefined;
+  }
   const value = repoLine.replace(/^repo:\s*/, "").trim();
   return value.startsWith('"') && value.endsWith('"')
     ? value.slice(1, -1)
@@ -167,9 +187,13 @@ export const extractRepoFromYaml = (raw: string): string | undefined => {
 
 export const extractBaseFromYaml = (raw: string): string | undefined => {
   const match = raw.match(/^---\n([\s\S]*?)\n---/);
-  if (!match || !match[1]) return undefined;
+  if (!match || !match[1]) {
+    return undefined;
+  }
   const baseLine = match[1].split("\n").find((line) => /^base:\s/.test(line));
-  if (!baseLine) return undefined;
+  if (!baseLine) {
+    return undefined;
+  }
   const value = baseLine.replace(/^base:\s*/, "").trim();
   return value.startsWith('"') && value.endsWith('"')
     ? value.slice(1, -1)

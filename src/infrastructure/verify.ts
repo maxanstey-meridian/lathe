@@ -48,7 +48,9 @@ export const createVerify = (): Verify => ({
     worktree: string,
     timeoutMs: number,
   ): Promise<void> => {
-    if (commands.length === 0 || expectedSurface.length === 0) return;
+    if (commands.length === 0 || expectedSurface.length === 0) {
+      return;
+    }
     const wt = resolve(worktree);
     // Shell-escape each surface entry for safe interpolation into /bin/zsh.
     const shellEscape = (s: string): string => `'${s.replace(/'/g, "'\\''")}'`;

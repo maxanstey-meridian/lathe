@@ -59,7 +59,9 @@ const fakeRepo = (opts?: {
     },
     headBranch: (w: string) => {
       headBranchCallCount++;
-      if (opts?.headBranchThrows) throw new Error("not a repo");
+      if (opts?.headBranchThrows) {
+        throw new Error("not a repo");
+      }
       return opts?.headBranch ?? "main";
     },
     branchExists: (w: string, b: string) => opts?.branchExists ?? true,

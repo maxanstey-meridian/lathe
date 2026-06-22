@@ -58,7 +58,9 @@ describe("createPlanner.finalReview", () => {
       createSession: async () => "test-session",
       sendMessage: async () => {
         sendCount++;
-        if (sendCount === 1) return mockResponse("PLANNER_OK");
+        if (sendCount === 1) {
+          return mockResponse("PLANNER_OK");
+        }
         return mockResponse(validJson);
       },
       listMessages: async () => [],
@@ -79,7 +81,9 @@ describe("createPlanner.finalReview", () => {
       createSession: async () => "test-session",
       sendMessage: async () => {
         sendCount++;
-        if (sendCount === 1) return mockResponse("PLANNER_OK");
+        if (sendCount === 1) {
+          return mockResponse("PLANNER_OK");
+        }
         if (sendCount === 2) {
           return mockResponse("I think this looks good.\n\nno valid json here");
         }
@@ -114,7 +118,9 @@ describe("createPlanner.finalReview", () => {
       createSession: async () => "test-session",
       sendMessage: async () => {
         sendCount++;
-        if (sendCount === 1) return mockResponse("PLANNER_OK");
+        if (sendCount === 1) {
+          return mockResponse("PLANNER_OK");
+        }
         if (sendCount === 2) {
           return mockResponse("```json\n{malformed");
         }
@@ -144,7 +150,9 @@ describe("createPlanner.finalReview", () => {
       createSession: async () => "test-session",
       sendMessage: async () => {
         sendCount++;
-        if (sendCount === 1) return mockResponse("PLANNER_OK");
+        if (sendCount === 1) {
+          return mockResponse("PLANNER_OK");
+        }
         return mockResponse("just prose, no json at all");
       },
       listMessages: async () => [],

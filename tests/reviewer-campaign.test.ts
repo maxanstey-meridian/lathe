@@ -43,7 +43,9 @@ const makeMockExecutor = (
     listMessages: async () => [],
     deleteSession: async (sessionId) => {
       sessionsDeleted.push(sessionId);
-      if (deleteSessionCb) await deleteSessionCb(sessionId);
+      if (deleteSessionCb) {
+        await deleteSessionCb(sessionId);
+      }
     },
   };
 

@@ -47,7 +47,9 @@ export const createPlanner = (
   // Reference: reference/src/bridge.ts:125-139
   // Port contract: returns PlannerResponse directly (NOT { planner } — that's the bridge's internal shape).
   const consult = async (input: Parameters<Planner["consult"]>[0]): Promise<PlannerResponse> => {
-    if (!daddySessionId) throw new Error("handshake must be called before consult");
+    if (!daddySessionId) {
+      throw new Error("handshake must be called before consult");
+    }
     const prompt = renderPlannerQuestion(
       input.questionType,
       input.currentSlice,
@@ -61,7 +63,9 @@ export const createPlanner = (
     const response = await executor.sendMessage(daddySessionId, prompt, daddyModel, daddyTimeoutMs);
     const text = extractText(response);
     let parsed = tryParsePlannerResponse(text);
-    if (parsed) return parsed;
+    if (parsed) {
+      return parsed;
+    }
 
     // Re-ask with concrete reason (M4)
     const reason = diagnosePlannerParse(text);
@@ -69,7 +73,9 @@ export const createPlanner = (
     const retry = await executor.sendMessage(daddySessionId, nudge, daddyModel, daddyTimeoutMs);
     const retryText = extractText(retry);
     parsed = tryParsePlannerResponse(retryText);
-    if (parsed) return parsed;
+    if (parsed) {
+      return parsed;
+    }
 
     // Fail closed to stop
     return parsePlannerResponse("");
@@ -84,7 +90,9 @@ export const createPlanner = (
     ledger: OutcomeLedger,
     report: SubmitReport,
   ): Promise<FinalReview> => {
-    if (!daddySessionId) throw new Error("handshake must be called before finalReview");
+    if (!daddySessionId) {
+      throw new Error("handshake must be called before finalReview");
+    }
     const prompt = renderFinalReview(packet, reviewableDiff, ledger, report);
 
     try {
@@ -96,7 +104,9 @@ export const createPlanner = (
       );
       const raw = extractText(response);
       const parsed = tryParseFinalReview(raw);
-      if (parsed) return parsed;
+      if (parsed) {
+        return parsed;
+      }
 
       // Re-ask with concrete reason (M4)
       const reason = diagnosePlannerParse(raw);
@@ -104,7 +114,9 @@ export const createPlanner = (
       const retry = await executor.sendMessage(daddySessionId, nudge, daddyModel, daddyTimeoutMs);
       const retryText = extractText(retry);
       const retryParsed = tryParseFinalReview(retryText);
-      if (retryParsed) return retryParsed;
+      if (retryParsed) {
+        return retryParsed;
+      }
 
       // Fail closed to request_changes
       return parseFinalReview("");

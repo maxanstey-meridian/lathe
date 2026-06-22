@@ -102,9 +102,13 @@ const journalTurn = (
   let toolCalls = 0;
 
   for (const part of turnParts) {
-    if (part.type !== "tool") continue;
+    if (part.type !== "tool") {
+      continue;
+    }
     const denied = gateDeniedPart(part);
-    if (!(part.tool ?? "").toLowerCase().includes("meridian-bridge")) toolCalls += 1;
+    if (!(part.tool ?? "").toLowerCase().includes("meridian-bridge")) {
+      toolCalls += 1;
+    }
     const status = part.state?.status === "error" ? ("error" as const) : ("completed" as const);
     const command =
       typeof part.state?.input?.command === "string" ? part.state.input.command : undefined;
@@ -118,7 +122,9 @@ const journalTurn = (
     const exitCode =
       typeof metadataExit === "number" ? metadataExit : status === "completed" ? 0 : 1;
 
-    if (!denied && status !== "error") hadAllowedToolCall = true;
+    if (!denied && status !== "error") {
+      hadAllowedToolCall = true;
+    }
 
     journal(ports, runId, turn, {
       event: "tool_call",
@@ -346,8 +352,9 @@ export const turnLoop = async (
         return finish({ status: "blocked", reason: decision.reason, question: decision.question });
 
       case "terminal": {
-        if (decision.status === "failed")
+        if (decision.status === "failed") {
           return finish({ status: "failed", note: decision.note ?? "" });
+        }
         if (decision.status === "blocked") {
           return finish({
             status: "blocked",
@@ -423,8 +430,9 @@ export const turnLoop = async (
           );
           journal(ports, runId, turn, { event: "gate_cleared", decisionAt: clock.nowIso() });
           const meta = store.readMeta(runId);
-          if ((meta.reorientRetries ?? 0) > 0)
+          if ((meta.reorientRetries ?? 0) > 0) {
             store.writeMeta({ ...meta, reorientRetries: 0, updatedAt: clock.nowIso() });
+          }
           next = { name: "Qp", text: qPlannerDecision(plannerResponse) };
           continue;
         }
@@ -612,12 +620,13 @@ export const turnLoop = async (
           diffDelta(gate.baselineDiffStats, repo.readDiffStats(worktree)),
           config.thresholds,
         );
-        if (volumeReason)
+        if (volumeReason) {
           journal(ports, runId, turn, {
             event: "checkpoint_volume_nudge",
             reason: volumeReason,
             toolCalls: toolCallsSinceDecision,
           });
+        }
 
         const mins = checkpointNudgeDue(gate, clock.now(), config.thresholds.checkpointNudgeMs);
         next =

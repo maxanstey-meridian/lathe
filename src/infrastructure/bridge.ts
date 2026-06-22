@@ -199,13 +199,17 @@ const checkpointProblems = (
   const checkpointIds = new Set(checkpoint.outcomes.map((o) => o.id));
 
   for (const id of packetIds) {
-    if (!checkpointIds.has(id))
+    if (!checkpointIds.has(id)) {
       problems.push(`checkpoint omits outcome ${id} — every outcome must be accounted for`);
+    }
   }
   for (const o of checkpoint.outcomes) {
-    if (!packetIds.has(o.id)) problems.push(`checkpoint names unknown outcome ${o.id}`);
-    if (o.status === "done" && o.evidence.length === 0)
+    if (!packetIds.has(o.id)) {
+      problems.push(`checkpoint names unknown outcome ${o.id}`);
+    }
+    if (o.status === "done" && o.evidence.length === 0) {
       problems.push(`done outcome ${o.id} has no evidence`);
+    }
   }
   return problems;
 };
@@ -275,17 +279,26 @@ export type GetDecisionsInput = {
 
 export const handleAskPlanner = async (ref: RunRef, input: AskPlannerInput) => {
   const ctx = ref.current;
-  if (!ctx) return errorText(JSON.stringify({ error: "no active run" }));
+  if (!ctx) {
+    return errorText(JSON.stringify({ error: "no active run" }));
+  }
 
   // M2: argument failures must be visible. The SDK validates shapes before
   // this handler, but content-level emptiness slips through — and an
   // invisible rejection reads as "planner unreachable" to the executor.
   const argProblems: string[] = [];
-  if (!input.question.trim()) argProblems.push("question is empty");
-  if (!input.currentSlice.trim()) argProblems.push("currentSlice is empty");
-  if (!input.approach.trim())
+  if (!input.question.trim()) {
+    argProblems.push("question is empty");
+  }
+  if (!input.currentSlice.trim()) {
+    argProblems.push("currentSlice is empty");
+  }
+  if (!input.approach.trim()) {
     argProblems.push("approach is empty — state your design decisions and intended next steps");
-  if (input.evidence.every((e) => !e.trim())) argProblems.push("evidence is empty");
+  }
+  if (input.evidence.every((e) => !e.trim())) {
+    argProblems.push("evidence is empty");
+  }
   if (argProblems.length > 0) {
     journal(ctx, { event: "driver_note", note: `ask_planner rejected: ${argProblems.join("; ")}` });
     return errorText(
@@ -334,7 +347,9 @@ export const handleAskPlanner = async (ref: RunRef, input: AskPlannerInput) => {
 
 export const handleUpdateOutcomes = async (ref: RunRef, input: UpdateOutcomesInput) => {
   const ctx = ref.current;
-  if (!ctx) return errorText(JSON.stringify({ error: "no active run" }));
+  if (!ctx) {
+    return errorText(JSON.stringify({ error: "no active run" }));
+  }
 
   const ledger = ctx.store.readLedger(ctx.packet.runId);
   const problems: string[] = [];
@@ -352,13 +367,21 @@ export const handleUpdateOutcomes = async (ref: RunRef, input: UpdateOutcomesInp
       continue;
     }
     entry.status = update.status as typeof entry.status;
-    if (update.evidence && !evidenceIsBlank) entry.evidence = update.evidence;
-    if (update.state !== undefined) entry.state = update.state;
-    if (update.nextAction !== undefined) entry.nextAction = update.nextAction;
+    if (update.evidence && !evidenceIsBlank) {
+      entry.evidence = update.evidence;
+    }
+    if (update.state !== undefined) {
+      entry.state = update.state;
+    }
+    if (update.nextAction !== undefined) {
+      entry.nextAction = update.nextAction;
+    }
     entry.updatedAt = nowIso();
   }
 
-  if (problems.length > 0) return errorText(JSON.stringify({ ok: false, problems }));
+  if (problems.length > 0) {
+    return errorText(JSON.stringify({ ok: false, problems }));
+  }
 
   ctx.store.writeLedger(ledger);
   journal(ctx, {
@@ -376,7 +399,9 @@ export const handleUpdateOutcomes = async (ref: RunRef, input: UpdateOutcomesInp
 
 export const handleWriteCheckpoint = async (ref: RunRef, input: WriteCheckpointInput) => {
   const ctx = ref.current;
-  if (!ctx) return errorText(JSON.stringify({ error: "no active run" }));
+  if (!ctx) {
+    return errorText(JSON.stringify({ error: "no active run" }));
+  }
 
   const ledger = ctx.store.readLedger(ctx.packet.runId);
   const checkpoint = {
@@ -434,7 +459,9 @@ export const handleWriteCheckpoint = async (ref: RunRef, input: WriteCheckpointI
 
 export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) => {
   const ctx = ref.current;
-  if (!ctx) return errorText(JSON.stringify({ error: "no active run" }));
+  if (!ctx) {
+    return errorText(JSON.stringify({ error: "no active run" }));
+  }
 
   // A re-submit while the deferred final review is still running is a no-op
   // hold (the driver is mid-review off the MCP path).
@@ -555,7 +582,9 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
 
 export const handleGetDecisions = async (ref: RunRef, input: GetDecisionsInput) => {
   const ctx = ref.current;
-  if (!ctx) return errorText(JSON.stringify({ error: "no active run" }));
+  if (!ctx) {
+    return errorText(JSON.stringify({ error: "no active run" }));
+  }
 
   const decisions = ctx.store.readDecisions(ctx.packet.runId);
   const gateState = ctx.store.readGateState(ctx.packet.runId);
@@ -566,7 +595,9 @@ export const handleGetDecisions = async (ref: RunRef, input: GetDecisionsInput) 
         ACCEPTED_STATUSES.some((s) => s === d.status) &&
         (gateState.lastAcceptedDecisionAt ?? "") < d.timestamp,
     );
-  if (accepted) clearGate(ctx);
+  if (accepted) {
+    clearGate(ctx);
+  }
   return text(JSON.stringify({ decisions: decisions.slice(-(input.limit ?? 20)) }, null, 2));
 };
 
@@ -728,7 +759,9 @@ export const startBridgeServer = (config: Config, ref: RunRef): Server => {
     }
     try {
       const chunks: Buffer[] = [];
-      for await (const chunk of req) chunks.push(chunk as Buffer);
+      for await (const chunk of req) {
+        chunks.push(chunk as Buffer);
+      }
       const body =
         chunks.length > 0 ? JSON.parse(Buffer.concat(chunks).toString("utf-8")) : undefined;
 

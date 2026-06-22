@@ -144,7 +144,9 @@ const TailApp = ({ store, budget, subscribe, runId }: TailUiDeps) => {
   const label = runLabel(runId, meta?.summary);
 
   useInput((input, key) => {
-    if (input === "q" || (key.ctrl && input === "c")) exit();
+    if (input === "q" || (key.ctrl && input === "c")) {
+      exit();
+    }
   });
 
   useEffect(() => {
@@ -163,7 +165,9 @@ const TailApp = ({ store, budget, subscribe, runId }: TailUiDeps) => {
           const lines = fresh
             .filter(isDriverEvent)
             .map((e: JournalEvent) => renderJournalEvent(e).split("\n")[0] ?? "");
-          if (lines.length > 0) setEvents((prev) => [...prev, ...lines].slice(-50));
+          if (lines.length > 0) {
+            setEvents((prev) => [...prev, ...lines].slice(-50));
+          }
           for (const e of fresh) {
             if (e.event === "turn_ended") {
               charsThisTurn.current = 0;
@@ -193,13 +197,21 @@ const TailApp = ({ store, budget, subscribe, runId }: TailUiDeps) => {
   // SSE: live deltas and tool lines into the panes.
   useEffect(() => {
     const worktree = store.readMetaIfExists(runId)?.worktree;
-    if (!worktree) return;
+    if (!worktree) {
+      return;
+    }
     const speakerFor = (sessionID: string): "baby" | "daddy" | undefined => {
       const active = store.readActiveRun();
-      if (active?.runId === runId && sessionID === active.babySessionId) return "baby";
+      if (active?.runId === runId && sessionID === active.babySessionId) {
+        return "baby";
+      }
       const m = store.readMetaIfExists(runId);
-      if (m?.daddySessionId === sessionID) return "daddy";
-      if (m?.babySessionId === sessionID) return "baby";
+      if (m?.daddySessionId === sessionID) {
+        return "daddy";
+      }
+      if (m?.babySessionId === sessionID) {
+        return "baby";
+      }
       return undefined;
     };
     const apply = (speaker: "baby" | "daddy", fn: (p: PaneState) => PaneState) =>
@@ -207,20 +219,30 @@ const TailApp = ({ store, budget, subscribe, runId }: TailUiDeps) => {
 
     const sub = subscribe(worktree, (event) => {
       const props = event.properties;
-      if (!props) return;
+      if (!props) {
+        return;
+      }
       if (event.type === "message.part.updated") {
         const part = (props.part ?? {}) as Record<string, unknown>;
         const partId = typeof part.id === "string" ? part.id : undefined;
         const type = typeof part.type === "string" ? part.type : "";
         const sessionID = typeof part.sessionID === "string" ? part.sessionID : undefined;
-        if (partId) partTypes.current.set(partId, type);
-        if (type !== "tool" || !partId || !sessionID) return;
+        if (partId) {
+          partTypes.current.set(partId, type);
+        }
+        if (type !== "tool" || !partId || !sessionID) {
+          return;
+        }
         const state = (part.state ?? {}) as Record<string, unknown>;
         const status = typeof state.status === "string" ? state.status : "";
-        if ((status !== "completed" && status !== "error") || toolSeen.current.has(partId)) return;
+        if ((status !== "completed" && status !== "error") || toolSeen.current.has(partId)) {
+          return;
+        }
         toolSeen.current.add(partId);
         const speaker = speakerFor(sessionID);
-        if (!speaker) return;
+        if (!speaker) {
+          return;
+        }
         const inputObj = (state.input ?? {}) as Record<string, unknown>;
         const detail =
           typeof inputObj.command === "string"
@@ -239,14 +261,22 @@ const TailApp = ({ store, budget, subscribe, runId }: TailUiDeps) => {
         return;
       }
       if (event.type === "message.part.delta") {
-        if (props.field !== "text") return;
+        if (props.field !== "text") {
+          return;
+        }
         const sessionID = typeof props.sessionID === "string" ? props.sessionID : undefined;
         const partId = typeof props.partID === "string" ? props.partID : undefined;
         const delta = typeof props.delta === "string" ? props.delta : "";
-        if (!sessionID || !partId || !delta) return;
+        if (!sessionID || !partId || !delta) {
+          return;
+        }
         const speaker = speakerFor(sessionID);
-        if (!speaker) return;
-        if (speaker === "baby") charsThisTurn.current += delta.length;
+        if (!speaker) {
+          return;
+        }
+        if (speaker === "baby") {
+          charsThisTurn.current += delta.length;
+        }
         const style: LineStyle = partTypes.current.get(partId) === "reasoning" ? "think" : "text";
         apply(speaker, (p) => pushDelta(p, delta, style));
       }

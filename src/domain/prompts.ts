@@ -67,7 +67,9 @@ const renderOutcomes = (ledger: OutcomeLedger): string =>
 
 export const renderSealedFiles = (packet: Packet): string => {
   const ro = packet.frontmatter.regression_outcomes ?? [];
-  if (ro.length === 0) return "";
+  if (ro.length === 0) {
+    return "";
+  }
   return `## Sealed files (prior converged work)
 
 ${ro.map((o) => `- [${o.id}]: ${o.description}`).join("\n")}
@@ -82,7 +84,9 @@ const renderObligations = (review: ReviewState): string =>
 
 const renderRecentDecisions = (decisions: Decision[], n: number): string => {
   const recent = decisions.slice(-n);
-  if (recent.length === 0) return "- None yet";
+  if (recent.length === 0) {
+    return "- None yet";
+  }
   return recent
     .map((d) => `- [${d.status}] Q: ${d.question.slice(0, 160)} → A: ${d.answer.slice(0, 200)}`)
     .join("\n");

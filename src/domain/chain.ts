@@ -77,9 +77,12 @@ export const decidePromotion = (
   parentRunId: string | undefined,
   parentCampaign: Campaign | undefined,
 ): PromotionDecision => {
-  if (!parentRunId) return { action: "promote-now" };
-  if (!parentCampaign)
+  if (!parentRunId) {
+    return { action: "promote-now" };
+  }
+  if (!parentCampaign) {
     return { action: "wait", reason: `parent campaign ${parentRunId} has not started` };
+  }
   if (parentCampaign.status === "needs_max") {
     return {
       action: "hold",
@@ -92,10 +95,11 @@ export const decidePromotion = (
   const tip = convergedTip(parentCampaign);
   // Stop condition (CONTRACT §19): a campaign marked converged with no accepted
   // pass is incoherent — hold, never invent a tip, so a stuck chain is visible.
-  if (!tip)
+  if (!tip) {
     return {
       action: "hold",
       reason: `parent campaign ${parentRunId} is converged but has no accepted pass`,
     };
+  }
   return { action: "promote-with-base", tipRunId: tip, base: branchOf(tip) };
 };

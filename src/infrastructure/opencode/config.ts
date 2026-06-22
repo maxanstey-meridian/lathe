@@ -245,7 +245,9 @@ export const spawnOpencodeServer = (config: Config, paths: Paths): ChildProcess 
 // §18: the opencode version is pinned by expectation, not hope — a silent
 // upgrade changes plugin hooks, session APIs, and event shapes under us.
 export const warnOnVersionDrift = (config: Config): void => {
-  if (!config.opencode.expectedVersion) return;
+  if (!config.opencode.expectedVersion) {
+    return;
+  }
   try {
     const version = execSync(`${config.opencode.binary} --version`, { encoding: "utf-8" }).trim();
     if (!version.includes(config.opencode.expectedVersion)) {
@@ -264,7 +266,9 @@ export const waitForServer = async (config: Config, timeoutMs = 30_000): Promise
   while (Date.now() < deadline) {
     try {
       const res = await fetch(url);
-      if (res.ok) return;
+      if (res.ok) {
+        return;
+      }
     } catch {
       /* not up yet */
     }

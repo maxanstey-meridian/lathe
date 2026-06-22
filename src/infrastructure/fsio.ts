@@ -59,7 +59,9 @@ export const appendJsonl = <S extends z.ZodTypeAny>(
 };
 
 export const readJsonl = <S extends z.ZodTypeAny>(path: string, schema: S): z.infer<S>[] => {
-  if (!existsSync(path)) return [];
+  if (!existsSync(path)) {
+    return [];
+  }
   const lines = readFileSync(path, "utf-8")
     .split("\n")
     .map((l) => l.trim())
@@ -72,7 +74,9 @@ export const readJsonl = <S extends z.ZodTypeAny>(path: string, schema: S): z.in
     } catch {
       continue;
     }
-    if (parsed.success) out.push(parsed.data!);
+    if (parsed.success) {
+      out.push(parsed.data!);
+    }
     // Invalid journal lines are skipped, not fatal: the journal is observability,
     // and one bad line must not brick replay of the rest. Durable *state* files
     // (meta, outcomes, gate) go through readValidated and DO fail closed.

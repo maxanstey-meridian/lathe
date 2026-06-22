@@ -171,7 +171,9 @@ export const runDriver = async (config: Config, paths: Paths): Promise<void> => 
       r.current = undefined;
     },
     close: () => {
-      if (serve) stopServe(serve);
+      if (serve) {
+        stopServe(serve);
+      }
     },
   };
 
@@ -225,10 +227,14 @@ const waitForWork =
   (paths: Paths): WaitForWorkCallback =>
   (signal: AbortSignal): Promise<void> =>
     new Promise((resolve) => {
-      if (signal.aborted) return resolve();
+      if (signal.aborted) {
+        return resolve();
+      }
       let done = false;
       const finish = (): void => {
-        if (done) return;
+        if (done) {
+          return;
+        }
         done = true;
         clearInterval(poll);
         queueWatcher.close();
@@ -353,8 +359,12 @@ export const superReviewOnce = async (
     });
 
     console.log(`super-daddy verdict: ${result.review.verdict}`);
-    for (const f of result.review.findings) console.log(`  - [${f.severity}] ${f.title}`);
-    if (result.review.notes) console.log(`notes: ${result.review.notes}`);
+    for (const f of result.review.findings) {
+      console.log(`  - [${f.severity}] ${f.title}`);
+    }
+    if (result.review.notes) {
+      console.log(`notes: ${result.review.notes}`);
+    }
     return 0;
   });
 

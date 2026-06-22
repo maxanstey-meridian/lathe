@@ -20,7 +20,9 @@ export const createEvents = (config: Config): Events => ({
         while ((idx = buffer.indexOf("\n")) !== -1) {
           const line = buffer.slice(0, idx).trim();
           buffer = buffer.slice(idx + 1);
-          if (!line.startsWith("data:")) continue;
+          if (!line.startsWith("data:")) {
+            continue;
+          }
           try {
             onEvent(JSON.parse(line.slice(5).trim()) as OpencodeEvent);
           } catch {

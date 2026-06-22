@@ -116,7 +116,9 @@ const makeFakePorts = (
     config: defaultConfig(skillPath),
     store: {
       readMeta: (runId: string) => {
-        if (runId !== RUN_ID) throw new Error(`unknown runId: ${runId}`);
+        if (runId !== RUN_ID) {
+          throw new Error(`unknown runId: ${runId}`);
+        }
         return metaStore;
       },
       writeMeta: (m: RunMeta) => {

@@ -65,6 +65,18 @@ const renderOutcomes = (ledger: OutcomeLedger): string =>
     })
     .join("\n")
 
+export const renderSealedFiles = (packet: Packet): string => {
+  const ro = packet.frontmatter.regression_outcomes ?? []
+  if (ro.length === 0) return ""
+  return `## Sealed files (prior converged work)
+
+${ro.map((o) => `- [${o.id}]: ${o.description}`).join("\n")}
+
+These outcomes were delivered by prior packets in the chain and converged — their files are sealed.
+Read them to integrate against; do NOT modify them. Your new work goes only in this packet's
+expected_surface (already shown in the packet above).`
+}
+
 const renderObligations = (review: ReviewState): string =>
   review.obligations.length > 0
     ? review.obligations.map((o) => `- ${o}`).join("\n")
@@ -94,6 +106,7 @@ ${renderOutcomes(ledger)}
 ## The handoff packet
 
 ${redactPacketInfra(packet.raw)}
+${renderSealedFiles(packet)}
 
 ## Start
 

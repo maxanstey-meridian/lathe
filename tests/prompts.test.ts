@@ -1,5 +1,5 @@
 import { describe, it } from "node:test"
-import { match } from "node:assert"
+import { match, strictEqual } from "node:assert"
 import {
   q1InitialSeed,
   q2RotationSeed,
@@ -18,6 +18,7 @@ import {
   renderPlannerQuestion,
   renderSuperReview,
   renderFinalReview,
+  renderSealedFiles,
   type DriverFacts,
   type SuperReviewInput,
 } from "../src/domain/prompts.js"
@@ -103,6 +104,29 @@ describe("prompts — Q-table renderers", () => {
       const prompt = q1InitialSeed(minPacket(), minLedger())
       match(prompt, /meridian-bridge_ask_planner/)
       match(prompt, /## Outcome ledger/)
+    })
+
+    it("includes sealed-files section when packet has regression_outcomes", () => {
+      const packet = { ...minPacket(), frontmatter: { ...minPacket().frontmatter, regression_outcomes: [{ id: "prior-outcome", description: "prior work delivered" }] } }
+      const prompt = q1InitialSeed(packet, minLedger())
+      match(prompt, /## Sealed files \(prior converged work\)/)
+      match(prompt, /\[prior-outcome\]: prior work delivered/)
+      match(prompt, /do NOT modify/)
+    })
+
+    it("omits sealed-files section when regression_outcomes is empty", () => {
+      const prompt = q1InitialSeed(minPacket(), minLedger())
+      const sealedIdx = prompt.indexOf("## Sealed files")
+      strictEqual(sealedIdx, -1)
+    })
+
+    it("places sealed-files section between handoff packet and Start", () => {
+      const packet = { ...minPacket(), frontmatter: { ...minPacket().frontmatter, regression_outcomes: [{ id: "a", description: "b" }] } }
+      const prompt = q1InitialSeed(packet, minLedger())
+      const packetIdx = prompt.indexOf("## The handoff packet")
+      const sealedIdx = prompt.indexOf("## Sealed files")
+      const startIdx = prompt.indexOf("## Start")
+      match(prompt, /## The handoff packet[\s\S]*## Sealed files[\s\S]*## Start/)
     })
   })
 

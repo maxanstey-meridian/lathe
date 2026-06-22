@@ -41,14 +41,14 @@ export const Config = z.object({
   }).default({}),
   // Super-daddy: the convergence reviewer — the strongest frontier "pseudo-Max"
   // tier, the ONE reviewer that MUST execute (bash enabled). Default is
-  // openai/gpt-5.5-pro: it resolves through opencode's global auth (NOT
+  // openai/gpt-5.5: it resolves through opencode's global auth (NOT
   // declared in the generated config, like daddy), it's the strongest reviewer
   // currently authed, and it mirrors Max's manual loop (today he reviews by
-  // hand with GPT). Override modelId in config.json — e.g. "gpt-5.5" for a
-  // faster, cheaper pass — exactly as daddy.modelId is overridden today.
+  // hand with GPT). Override modelId in config.json — e.g. "gpt-5.5-pro" for a
+  // heavier pass — exactly as daddy.modelId is overridden today.
   superdaddy: z.object({
     providerId: z.string().default("openai"),
-    modelId: z.string().default("gpt-5.5-pro"),
+    modelId: z.string().default("gpt-5.5"),
     agent: z.string().default("superdaddy"),
     timeoutMs: z.number().int().default(1_800_000),
     // The reviewer provider's API host and header-timeout window, applied only

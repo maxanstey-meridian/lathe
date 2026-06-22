@@ -491,6 +491,7 @@ export type SuperReviewInput = {
   skillText: string // Max's meridian skill — injected verbatim as the rubric
   pass: number // which convergence pass produced this run
   maxPasses: number // the hard cap, for the reviewer's urgency calibration
+  campaignId: string // session-scoping key: reuse session within, reset between
 }
 
 // The must-execute mandate and the shared body (rubric, packet, diff, grounding

@@ -16,6 +16,7 @@ import type { Config } from "../../config/schemas.js"
 import { expandHome, type Paths } from "../../config/paths.js"
 import { babyContextBudget } from "../../config/config.js"
 import { parsePacketShape } from "../../domain/packet.js"
+import { campaignIdForRun } from "../../domain/campaign.js"
 
 import { systemClock } from "../../infrastructure/clock.js"
 import { StoreAdapter } from "../../infrastructure/store.js"
@@ -291,6 +292,7 @@ export const superReviewOnce = async (config: Config, paths: Paths, runId: strin
     const reportText = existsSync(paths.reportFile(runId)) ? readFileSync(paths.reportFile(runId), "utf-8") : ""
     const skillText = readFileSync(expandHome(config.superdaddy.skillPath), "utf-8")
 
+    const campaignId = campaignIdForRun(shape.packet, runId)
     const result = await reviewer.superReview({
       packet: shape.packet,
       diff,
@@ -298,6 +300,7 @@ export const superReviewOnce = async (config: Config, paths: Paths, runId: strin
       skillText,
       pass: shape.packet.frontmatter.pass,
       maxPasses: config.thresholds.maxPasses,
+      campaignId,
     })
 
     console.log(`super-daddy verdict: ${result.review.verdict}`)

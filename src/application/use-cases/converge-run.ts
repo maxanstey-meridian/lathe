@@ -176,6 +176,7 @@ export const convergeRun = (deps: ConvergeDeps): (runId: string) => Promise<void
         skillText,
         pass,
         maxPasses,
+        campaignId,
       })
 
       // 3. Pure decision.

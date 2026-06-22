@@ -55,11 +55,22 @@ export const createReviewer = (
   directory: string,
 ): Reviewer => {
   let reviewerSessionId: string | undefined
+  let currentCampaignId: string | undefined
 
   const superReview = async (input: SuperReviewInput): Promise<SuperReviewResult> => {
-    // Sessions are scoped to a directory. Created lazily on first superReview call.
+    // Campaign-scoped session rebind: delete the prior campaign's session when
+    // the campaignId changes, so reviewer context doesn't leak across campaigns.
+    // On the very first call both are undefined — skip deleteSession.
+    if (reviewerSessionId !== undefined && input.campaignId !== currentCampaignId) {
+      try { await executor.deleteSession(reviewerSessionId) } catch {}
+      reviewerSessionId = undefined
+    }
+
+    // Sessions are scoped to a directory. Created lazily on first superReview call,
+    // or after a cross-campaign rebind.
     if (!reviewerSessionId) {
       reviewerSessionId = await executor.createSession("meridian-superdaddy", directory)
+      currentCampaignId = input.campaignId
     }
 
     const prompt = renderSuperReview(input)

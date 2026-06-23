@@ -50,6 +50,7 @@ body
   if (result.ok) {
     assert.strictEqual(result.packet.runId, "");
     assert.strictEqual(result.packet.frontmatter.outcomes.length, 1);
+    assert.strictEqual(result.packet.frontmatter.promoted, false);
   }
 });
 
@@ -147,6 +148,47 @@ body
   assert.strictEqual(result.ok, true);
 });
 
+test("parse: promoted defaults false, explicit true round-trips", () => {
+  const rawWithoutPromoted = `---
+repo: /tmp/repo
+base: main
+outcomes:
+  - id: feature-a
+    description: Adds feature A
+expected_surface:
+  - src/**
+verification:
+  - command: pnpm test
+---
+body
+`;
+  const result1 = parsePacketShape(rawWithoutPromoted);
+  assert.strictEqual(result1.ok, true);
+  if (result1.ok) {
+    assert.strictEqual(result1.packet.frontmatter.promoted, false);
+  }
+
+  const rawWithPromoted = `---
+repo: /tmp/repo
+base: main
+outcomes:
+  - id: feature-a
+    description: Adds feature A
+expected_surface:
+  - src/**
+verification:
+  - command: pnpm test
+promoted: true
+---
+body
+`;
+  const result2 = parsePacketShape(rawWithPromoted);
+  assert.strictEqual(result2.ok, true);
+  if (result2.ok) {
+    assert.strictEqual(result2.packet.frontmatter.promoted, true);
+  }
+});
+
 test("parse: negative outcomes count rejected by schema", () => {
   const raw = `---
 repo: /tmp/repo
@@ -165,13 +207,14 @@ body
 
 // ---- redactPacketInfra ----
 
-test("redact: strips all five infra keys", () => {
+test("redact: strips all six infra keys", () => {
   const raw = `---
 repo: /home/user/proj
 base: main
 campaign_id: my-campaign
 parent_run_id: 20260617-010000-parent
 pass: 2
+promoted: true
 summary: test packet
 outcomes:
   - id: feature-a
@@ -189,11 +232,44 @@ body content
   assert(!result.includes("campaign_id:"));
   assert(!result.includes("parent_run_id:"));
   assert(!result.includes("pass:"));
+  assert(!result.includes("promoted:"));
   assert(result.includes("summary:"));
   assert(result.includes("outcomes:"));
   assert(result.includes("expected_surface:"));
   assert(result.includes("verification:"));
   assert(result.includes("body content"));
+});
+
+test("redact: parsed packet carries promoted=true; redaction strips the key (two independent paths)", () => {
+  const raw = `---
+repo: /tmp/repo
+base: main
+outcomes:
+  - id: feature-a
+    description: Adds feature A
+expected_surface:
+  - src/**
+verification:
+  - command: pnpm test
+promoted: true
+---
+body
+`;
+  // Path 1: parse the original raw — promoted is read as true.
+  const parsed = parsePacketShape(raw);
+  assert.strictEqual(parsed.ok, true);
+  if (parsed.ok) {
+    assert.strictEqual(parsed.packet.frontmatter.promoted, true);
+  }
+  // Path 2: redaction strips ALL infra keys (including repo/base) from the raw,
+  // so re-parsing would fail for missing required fields — that is the point:
+  // the parsed object is decoupled from the redacted raw text.
+  const redacted = redactPacketInfra(raw);
+  assert(!redacted.includes("promoted:"));
+  // Confirm infra keys are stripped (repo/base gone → re-parse fails, proving
+  // the parsed object was built from the original raw, not the redacted one).
+  assert(!redacted.includes("repo:"));
+  assert(!redacted.includes("base:"));
 });
 
 test("redact: preserves forbidden infra keys in other contexts", () => {

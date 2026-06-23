@@ -41,6 +41,11 @@ export const PacketFrontmatter = z.object({
   parent_run_id: z.string().optional(),
   pass: z.number().int().min(1).default(1),
   regression_outcomes: z.array(OutcomeDef).default([]),
+  // Secret n+1 promotion flag — set by Daddy's follow-up render when promoting
+  // Baby's harness onto Daddy's model at the convergence cap. Defaults false so
+  // existing packets and the whole test corpus still parse unchanged. Stripped by
+  // redactPacketInfra (INFRA_KEYS_RE) so the models never see it.
+  promoted: z.boolean().default(false),
 });
 export type PacketFrontmatter = z.infer<typeof PacketFrontmatter>;
 
@@ -61,7 +66,7 @@ export type AdmissionResult = { ok: true; packet: Packet } | { ok: false; proble
 
 export const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/;
 const RUNID_RE = /^\d{8}-\d{6}-[a-z0-9-]+$/;
-const INFRA_KEYS_RE = /^(repo|base|campaign_id|parent_run_id|pass):/;
+const INFRA_KEYS_RE = /^(repo|base|campaign_id|parent_run_id|pass|promoted):/;
 
 // ---------------------------------------------------------------------------
 // parsePacketShape — pure parse, no fs, no child_process (CONTRACT K3, D5)

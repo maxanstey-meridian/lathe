@@ -53,42 +53,72 @@ test("decideConvergence: request_changes hands EVERY finding to the pass, regard
     finding("a", "P2", "none"),
     finding("b", "P3", "none"),
   ]);
-  const d = decideConvergence(nitsOnly, true, 1, 3);
+  const d = decideConvergence(nitsOnly, true, 1, 3, false);
   assert.equal(d.action, "author");
   assert.equal(d.blockers.length, 2);
 });
 
 test("decideConvergence: request_changes with NO findings → escalate (wants changes, named none)", () => {
-  const empty = decideConvergence(review("request_changes", []), true, 1, 3);
+  const empty = decideConvergence(review("request_changes", []), true, 1, 3, false);
   assert.equal(empty.action, "escalate");
 });
 
 test("decideConvergence: stop only on accept + green (the ONLY stop path)", () => {
-  assert.equal(decideConvergence(review("accept", []), true, 1, 3).action, "stop");
+  assert.equal(decideConvergence(review("accept", []), true, 1, 3, false).action, "stop");
 });
 
 test("decideConvergence: accept + verification RED → escalate (under-reported)", () => {
-  const red = decideConvergence(review("accept", []), false, 1, 3);
+  const red = decideConvergence(review("accept", []), false, 1, 3, false);
   assert.equal(red.action, "escalate");
   assert.ok(red.reason.includes("under-reported"));
 });
 
 test("decideConvergence: blockers author until the cap, then escalate", () => {
   const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
-  const d1 = decideConvergence(blocked, true, 1, 3);
+  const d1 = decideConvergence(blocked, true, 1, 3, false);
   assert.equal(d1.action, "author");
   assert.equal(d1.blockers.length, 1);
-  const capped = decideConvergence(blocked, true, 3, 3);
+  const capped = decideConvergence(blocked, true, 3, 3, false);
   assert.equal(capped.action, "escalate");
   assert.ok(capped.reason.includes("cap"));
 });
 
 test("decideConvergence: explicit escalate / human_decision_needed always wins", () => {
-  assert.equal(decideConvergence(review("escalate", []), true, 1, 3).action, "escalate");
+  assert.equal(decideConvergence(review("escalate", []), true, 1, 3, false).action, "escalate");
   assert.equal(
-    decideConvergence(review("accept", [], "needs a call"), true, 1, 3).action,
+    decideConvergence(review("accept", [], "needs a call"), true, 1, 3, false).action,
     "escalate",
   );
+});
+
+// --- decideConvergence: promotion ---
+
+test("decideConvergence: cap reached with promotionEnabled=true → author with promote=true", () => {
+  const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
+  const d = decideConvergence(blocked, true, 3, 3, true);
+  assert.equal(d.action, "author");
+  assert.equal(d.promote, true);
+  assert.equal(d.blockers.length, 1);
+});
+
+test("decideConvergence: cap reached with promotionEnabled=false → escalate", () => {
+  const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
+  const d = decideConvergence(blocked, true, 3, 3, false);
+  assert.equal(d.action, "escalate");
+});
+
+test("decideConvergence: promoted round still fails (pass > maxPasses) → escalate", () => {
+  const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
+  const d = decideConvergence(blocked, true, 4, 3, true);
+  assert.equal(d.action, "escalate");
+  assert.ok(d.reason.includes("cap"));
+});
+
+test("decideConvergence: passes left + promotionEnabled=true → author with promote falsy", () => {
+  const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
+  const d = decideConvergence(blocked, true, 1, 3, true);
+  assert.equal(d.action, "author");
+  assert.equal(d.promote, undefined);
 });
 
 // --- parseSuperReview: valid, fenced, garbage, scar ---
@@ -282,6 +312,7 @@ test("renderFollowupPacket: produces a packet parsePacket accepts, with lineage 
       baseBranch: "meridian/parent",
       timestamp: "20260614-180000",
       slug: "feature-followup",
+      promote: false,
     });
 
     assert.equal(out.runId, "20260614-180000-feature-followup");
@@ -345,6 +376,7 @@ test("renderFollowupPacket: a repaired outcome is never also a regression guard"
       baseBranch: "work",
       timestamp: "20260102-000000",
       slug: "add-fix2",
+      promote: false,
     });
 
     const file = join(dir, out.filename);
@@ -389,8 +421,112 @@ test("renderFollowupPacket: no blockers → throws", () => {
       baseBranch: "main",
       timestamp: "20260102-000000",
       slug: "a-fix2",
+      promote: false,
     }),
   );
+});
+
+test("renderFollowupPacket: promote=true → frontmatter carries promoted:true, body mentions nothing about promotion", () => {
+  const dir = mkdtempSync(join(tmpdir(), "plumb-converge-promo-"));
+  try {
+    const repo = join(dir, "repo");
+    mkdirSync(repo);
+    execSync("git init -q -b main && git commit -q --allow-empty -m init", {
+      cwd: repo,
+      shell: "/bin/zsh",
+    });
+
+    const out = renderFollowupPacket({
+      original: {
+        runId: "20260101-000000-add",
+        frontmatter: {
+          repo,
+          base: "main",
+          outcomes: [{ id: "add-returns-sum", description: "add returns the sum" }],
+          expected_surface: ["*.js"],
+          suspicious_surface: [],
+          verification: [{ command: "node test.js" }],
+          constraints: [],
+          pass: 3,
+          regression_outcomes: [],
+        },
+        body: "",
+        raw: "",
+      },
+      parentRunId: "20260101-000000-add",
+      campaignId: "20260101-000000-add",
+      pass: 4,
+      blockers: [finding("fix-bug", "P1", "command_fail", { suggested_outcome_id: "fix-bug" })],
+      priorOutcomes: [{ id: "add-returns-sum", description: "add returns the sum" }],
+      baseBranch: "main",
+      timestamp: "20260102-000000",
+      slug: "add-fix4",
+      promote: true,
+    });
+
+    const file = join(dir, out.filename);
+    writeFileSync(file, out.content);
+    const parsed = parsePacket(file);
+    assert.ok(
+      parsed.ok,
+      "promoted packet must admit: " + (parsed.ok ? "" : parsed.problems.join("; ")),
+    );
+    assert.strictEqual(parsed.packet.frontmatter.promoted, true);
+    // Body must not mention promotion (the secret lives only in frontmatter).
+    // The body already contains "Super-daddy" as an existing role name — that's fine.
+    const bodyText = out.content.slice(out.content.indexOf("\n---\n") + 5);
+    assert.ok(!bodyText.toLowerCase().includes("promot"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("renderFollowupPacket: promote=false → promoted is false in frontmatter", () => {
+  const dir = mkdtempSync(join(tmpdir(), "plumb-converge-nopromo-"));
+  try {
+    const repo = join(dir, "repo");
+    mkdirSync(repo);
+    execSync("git init -q -b main && git commit -q --allow-empty -m init", {
+      cwd: repo,
+      shell: "/bin/zsh",
+    });
+
+    const out = renderFollowupPacket({
+      original: {
+        runId: "20260101-000000-add",
+        frontmatter: {
+          repo,
+          base: "main",
+          outcomes: [{ id: "add-returns-sum", description: "add returns the sum" }],
+          expected_surface: ["*.js"],
+          suspicious_surface: [],
+          verification: [{ command: "node test.js" }],
+          constraints: [],
+          pass: 1,
+          regression_outcomes: [],
+        },
+        body: "",
+        raw: "",
+      },
+      parentRunId: "20260101-000000-add",
+      campaignId: "20260101-000000-add",
+      pass: 2,
+      blockers: [finding("fix-bug", "P1", "command_fail", { suggested_outcome_id: "fix-bug" })],
+      priorOutcomes: [],
+      baseBranch: "main",
+      timestamp: "20260102-000000",
+      slug: "add-fix2",
+      promote: false,
+    });
+
+    const file = join(dir, out.filename);
+    writeFileSync(file, out.content);
+    const parsed = parsePacket(file);
+    assert.ok(parsed.ok);
+    assert.strictEqual(parsed.packet.frontmatter.promoted, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // --- upsertPass: first pass, append, replace ---

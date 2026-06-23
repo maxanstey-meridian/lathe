@@ -121,6 +121,10 @@ export const Config = z.object({
       // Super-daddy circuit breaker: max convergence passes before a stalled
       // campaign is forced to escalate to Max.
       maxPasses: z.number().int().min(1).default(3),
+      // At the convergence cap, run one more pass with Baby's full harness on
+      // Daddy's model before escalating to Max. false restores today's
+      // escalate-at-cap behaviour.
+      promoteAtCap: z.boolean().default(true),
       // P6 liveness. maxStallRetries: automatic post-stall requeues before a
       // `wedged` run escalates to Max — the bounded "try again pls". maxRunMs:
       // wall-clock backstop on a single attempt — the livelock watchdog the

@@ -67,6 +67,7 @@ const fakeStore: Store = {
     updatedAt: "00000000-00:00:00.000Z",
     stallRetries: 0,
     reorientRetries: 0,
+    reviewerUnreachable: 0,
   }),
   readMetaIfExists: () => undefined,
   writeMeta: () => {},
@@ -156,6 +157,7 @@ const fakePlanner: Planner = {
 
 const fakeReviewer: Reviewer = {
   superReview: async () => ({
+    kind: "reviewed",
     review: {
       verdict: "accept",
       findings: [],

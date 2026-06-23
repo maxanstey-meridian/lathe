@@ -149,6 +149,7 @@ export const runDriver = async (config: Config, paths: Paths): Promise<void> => 
     executor,
     modelOf(config.superdaddy),
     config.superdaddy.timeoutMs,
+    config.superdaddy.transportRetries,
   );
   const verify = createVerify();
   const caffeinate = createCaffeinate();
@@ -293,6 +294,7 @@ export const convergeOnce = async (config: Config, paths: Paths, runId: string):
       executor,
       modelOf(config.superdaddy),
       config.superdaddy.timeoutMs,
+      config.superdaddy.transportRetries,
     );
     const verify = createVerify();
     await convergeRun({ store, repo, reviewer, verify, clock, config, paths })(runId);
@@ -332,6 +334,7 @@ export const superReviewOnce = async (
       executor,
       modelOf(config.superdaddy),
       config.superdaddy.timeoutMs,
+      config.superdaddy.transportRetries,
     );
     const diff = repo.reviewableDiffAgainst(
       meta.worktree,
@@ -344,7 +347,7 @@ export const superReviewOnce = async (
     const skillText = readFileSync(expandHome(config.superdaddy.skillPath), "utf-8");
 
     const campaignId = campaignIdForRun(shape.packet, runId);
-    const result = await reviewer.superReview({
+    const outcome = await reviewer.superReview({
       packet: shape.packet,
       worktree: meta.worktree,
       diff,
@@ -355,12 +358,18 @@ export const superReviewOnce = async (
       campaignId,
     });
 
-    console.log(`super-daddy verdict: ${result.review.verdict}`);
-    for (const f of result.review.findings) {
+    if (outcome.kind === "unreachable") {
+      console.error(`super-daddy unreachable: ${outcome.detail}`);
+      console.error("(transport drop, not a verdict — retry when the connection is back)");
+      return 1;
+    }
+
+    console.log(`super-daddy verdict: ${outcome.review.verdict}`);
+    for (const f of outcome.review.findings) {
       console.log(`  - [${f.severity}] ${f.title}`);
     }
-    if (result.review.notes) {
-      console.log(`notes: ${result.review.notes}`);
+    if (outcome.review.notes) {
+      console.log(`notes: ${outcome.review.notes}`);
     }
     return 0;
   });

@@ -25,19 +25,33 @@ import type { VerificationResult } from "./verify.js";
 export type QueueEntry = { runId: string; admittedAt: string };
 
 // Convergence log entry — shape from reference/src/converge.ts:331-346.
-// Inline; no domain function consumes it.
-export type ConvergenceLogEntry = {
+// A discriminated union so an UNREACHABLE attempt (transport drop, no verdict)
+// is logged honestly instead of forging an escalate SuperReview. The shared head
+// (at/runId/campaignId/pass/maxPasses/verification) is on both branches.
+type ConvergenceLogHead = {
   at: string;
   runId: string;
   campaignId: string;
   pass: number;
   maxPasses: number;
   verification: { green: boolean; commands: VerificationResult[] };
-  decision: ConvergeDecision;
-  amendedCommitSha: string | null;
-  primary: SuperReview;
-  primaryRaw: string;
 };
+
+export type ConvergenceLogEntry =
+  | (ConvergenceLogHead & {
+      kind: "reviewed";
+      decision: ConvergeDecision;
+      amendedCommitSha: string | null;
+      primary: SuperReview;
+      primaryRaw: string;
+    })
+  | (ConvergenceLogHead & {
+      kind: "unreachable";
+      // 1-based index of this consecutive drop; budget = maxReviewerUnreachable.
+      detail: string;
+      attempt: number;
+      budget: number;
+    });
 
 export type Store = {
   // Run state (meta)

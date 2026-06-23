@@ -6,7 +6,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import type { Clock } from "../src/application/ports/clock.js";
 import type { Repo } from "../src/application/ports/repo.js";
-import type { Reviewer, SuperReviewResult } from "../src/application/ports/reviewer.js";
+import type {
+  Reviewer,
+  SuperReviewResult,
+  SuperReviewOutcome,
+} from "../src/application/ports/reviewer.js";
 import type { Store } from "../src/application/ports/store.js";
 import type { Verify, VerificationResult } from "../src/application/ports/verify.js";
 import { convergeRun } from "../src/application/use-cases/converge-run.js";
@@ -82,7 +86,7 @@ const defaultConfig = (skillPath: string): Config =>
       skillPath,
       diffCapBytes: 131_072,
     },
-    thresholds: { maxPasses: 3, verificationTimeoutMs: 600_000 },
+    thresholds: { maxPasses: 3, maxReviewerUnreachable: 3, verificationTimeoutMs: 600_000 },
     mutationCommandPatterns: [],
   }) as unknown as Config;
 
@@ -148,8 +152,8 @@ const makeFakePorts = (
       fetchBranchFromClone: () => {},
     } as unknown as Repo,
     reviewer: {
-      superReview: async () =>
-        reviewOverride ?? {
+      superReview: async (): Promise<SuperReviewOutcome> => {
+        const reviewed: SuperReviewResult = reviewOverride ?? {
           review: {
             verdict: "accept",
             findings: [],
@@ -163,7 +167,9 @@ const makeFakePorts = (
             human_decision_needed: null,
           },
           raw: "ok",
-        },
+        };
+        return { kind: "reviewed", ...reviewed };
+      },
     } as Reviewer,
     verify: {
       run: async () => verifyOverride ?? [{ command: "echo ok", exitCode: 0, outputTail: "" }],
@@ -613,6 +619,85 @@ test("convergeRun: failure → meta reset to ready_for_review", async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Test: super-daddy unreachable BELOW budget → retryable, no pass recorded
+
+test("convergeRun: unreachable below budget → counter bumped, no pass, stays retryable", async () => {
+  const skillPath = createSkillFile();
+  const ports = makeFakePorts(skillPath, { status: "ready_for_review" as const });
+
+  const unreachableReviewer = {
+    superReview: async (): Promise<SuperReviewOutcome> => ({
+      kind: "unreachable",
+      detail: "Connection dropped: socket hang up",
+      raw: "«reviewer unreachable»: socket hang up",
+    }),
+  };
+
+  await convergeRun({
+    store: ports.store,
+    repo: ports.repo,
+    reviewer: unreachableReviewer as Reviewer,
+    verify: ports.verify,
+    clock: ports.clock,
+    config: ports.config,
+    paths: ports.paths,
+  })(RUN_ID);
+
+  const meta = ports.getMeta();
+  // Run stays where it was (retryable) — a non-result must not park or converge.
+  equal(meta.status, "ready_for_review", "stays ready_for_review for the next retry");
+  equal(meta.reviewerUnreachable, 1, "consecutive-unreachable counter bumped");
+  // NEVER record a campaign pass — that is what makes a retry a no-op.
+  equal(ports.getCampaign(), undefined, "no campaign pass recorded");
+  // Logged honestly as unreachable, not a forged verdict.
+  equal(ports.convergenceStore.length, 1);
+  const entry = ports.convergenceStore[0] as { kind: string; attempt: number; detail: string };
+  equal(entry.kind, "unreachable");
+  equal(entry.attempt, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Test: super-daddy unreachable AT budget → park for Max, counter reset, no pass
+
+test("convergeRun: unreachable at budget → parks blocked, resets counter, no pass", async () => {
+  const skillPath = createSkillFile();
+  // budget = 3 (defaultConfig); start at 2 so this attempt is the 3rd.
+  const ports = makeFakePorts(skillPath, {
+    status: "ready_for_review" as const,
+    reviewerUnreachable: 2,
+  });
+
+  const unreachableReviewer = {
+    superReview: async (): Promise<SuperReviewOutcome> => ({
+      kind: "unreachable",
+      detail: "Connection dropped: socket hang up",
+      raw: "x",
+    }),
+  };
+
+  await convergeRun({
+    store: ports.store,
+    repo: ports.repo,
+    reviewer: unreachableReviewer as Reviewer,
+    verify: ports.verify,
+    clock: ports.clock,
+    config: ports.config,
+    paths: ports.paths,
+  })(RUN_ID);
+
+  const meta = ports.getMeta();
+  equal(meta.status, "blocked", "durable unreachable parks for Max");
+  equal(meta.blockedReason, "human_decision");
+  ok(meta.blockedQuestion?.includes("unreachable"), "park message names the cause");
+  equal(meta.reviewerUnreachable, 0, "counter reset so a manual re-run starts fresh");
+  // Still no campaign pass — a manual converge after fixing the connection works.
+  equal(ports.getCampaign(), undefined, "no campaign pass recorded even at budget");
+  const entry = ports.convergenceStore[0] as { kind: string; attempt: number };
+  equal(entry.kind, "unreachable");
+  equal(entry.attempt, 3);
+});
+
+// ---------------------------------------------------------------------------
 // Test: pass cap reached → escalate
 
 test("convergeRun: pass cap reached → escalate", async () => {
@@ -743,7 +828,8 @@ test("convergeRun: stop with meta already ready_for_review — no unnecessary wr
       fetchBranchFromClone: () => {},
     } as unknown as Repo,
     reviewer: {
-      superReview: async () => ({
+      superReview: async (): Promise<SuperReviewOutcome> => ({
+        kind: "reviewed",
         review: {
           verdict: "accept",
           findings: [],

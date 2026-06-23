@@ -82,6 +82,11 @@ export const Config = z.object({
       // Opus has a large window; give it more of the diff inline than daddy's
       // 64KB.
       diffCapBytes: z.number().int().default(131_072),
+      // In-adapter immediate retries on a TRANSIENT transport drop (socket hang
+      // up, 5xx, reset) before giving up and returning an unreachable outcome.
+      // The Codex backend drops sockets often enough that one extra attempt
+      // usually lands; a fatal error (auth/400) is never retried.
+      transportRetries: z.number().int().min(0).default(2),
     })
     .default({}),
   thresholds: z
@@ -121,6 +126,11 @@ export const Config = z.object({
       // Super-daddy circuit breaker: max convergence passes before a stalled
       // campaign is forced to escalate to Max.
       maxPasses: z.number().int().min(1).default(3),
+      // Convergence-level budget for CONSECUTIVE unreachable (transport-dropped)
+      // super-daddy attempts. Below it the run self-retries (stays ready, no pass
+      // recorded); at it the run parks for Max as a real "Codex durably down".
+      // Distinct from maxPasses, which counts real verdicts.
+      maxReviewerUnreachable: z.number().int().min(1).default(3),
       // At the convergence cap, run one more pass with Baby's full harness on
       // Daddy's model before escalating to Max. false restores today's
       // escalate-at-cap behaviour.

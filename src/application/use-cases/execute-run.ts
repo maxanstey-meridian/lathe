@@ -127,6 +127,7 @@ export const makeExecuteRun =
       daddySessionId,
       stallRetries: priorMeta?.stallRetries ?? 0,
       reorientRetries: priorMeta?.reorientRetries ?? 0,
+      reviewerUnreachable: priorMeta?.reviewerUnreachable ?? 0,
       startedAt: priorMeta?.startedAt ?? clock.nowIso(),
       updatedAt: clock.nowIso(),
     });

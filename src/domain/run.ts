@@ -51,6 +51,12 @@ export const RunMeta = z.object({
   // any accepted consult (the reseeded Baby recovered); at maxReorientRetries the
   // driver stops rotating and parks for Max.
   reorientRetries: z.number().int().min(0).default(0),
+  // Count of CONSECUTIVE convergence attempts where super-daddy was UNREACHABLE
+  // (a transport drop, not a verdict). A non-result is never recorded as a pass,
+  // so the run stays retryable; this counter is the only memory of the drops.
+  // Reset to 0 on any reviewed outcome. At thresholds.maxReviewerUnreachable the
+  // driver stops self-retrying and parks for Max (Codex durably down/misconfig).
+  reviewerUnreachable: z.number().int().min(0).default(0),
   startedAt: z.string().optional(),
   endedAt: z.string().optional(),
   updatedAt: z.string(),

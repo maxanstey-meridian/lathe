@@ -76,6 +76,7 @@ const makeConvergenceEntry = (
   amendedSha: string | null,
   atIso: string,
 ): ConvergenceLogEntry => ({
+  kind: "reviewed",
   at: atIso,
   runId,
   campaignId,
@@ -86,6 +87,31 @@ const makeConvergenceEntry = (
   amendedCommitSha: amendedSha,
   primary: review.review,
   primaryRaw: review.raw,
+});
+
+// An UNREACHABLE attempt — logged honestly (no forged verdict/decision) so
+// reading convergence.jsonl shows the transport drop for what it was.
+const makeUnreachableEntry = (
+  runId: string,
+  campaignId: string,
+  pass: number,
+  maxPasses: number,
+  verification: VerificationResult[],
+  detail: string,
+  attempt: number,
+  budget: number,
+  atIso: string,
+): ConvergenceLogEntry => ({
+  kind: "unreachable",
+  at: atIso,
+  runId,
+  campaignId,
+  pass,
+  maxPasses,
+  verification: { green: allGreen(verification), commands: verification },
+  detail,
+  attempt,
+  budget,
 });
 
 const slugFromRunId = (runId: string, pass: number): string => {
@@ -191,7 +217,7 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
       const skillPath = expandHome(config.superdaddy.skillPath);
       const skillText = readFileSync(skillPath, "utf-8");
 
-      const result: SuperReviewResult = await reviewer.superReview({
+      const outcome = await reviewer.superReview({
         packet,
         worktree: meta.worktree,
         diff,
@@ -201,6 +227,49 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
         maxPasses,
         campaignId,
       });
+
+      // 3a. Transport failure — NOT a verdict. Never record a campaign pass (that
+      // would make alreadyReviewed no-op the retry), never author/stop from a
+      // non-result. Self-heal: bump the counter and leave the run as-is so the
+      // next drive-loop sweep / a manual `lathe converge` retries. Only after
+      // maxReviewerUnreachable consecutive drops do we park for Max — Codex is
+      // durably down or misconfigured — resetting the counter (and NOT recording
+      // a pass) so a manual re-run works once the connection is fixed.
+      if (outcome.kind === "unreachable") {
+        const attempt = (meta.reviewerUnreachable ?? 0) + 1;
+        const budget = config.thresholds.maxReviewerUnreachable;
+        if (attempt >= budget) {
+          const { blockedReason: _br, blockedQuestion: _bq, ...rest } = meta;
+          store.writeMeta({
+            ...rest,
+            status: "blocked",
+            blockedReason: "human_decision",
+            blockedQuestion: `Super-daddy unreachable after ${attempt} attempts — last: ${outcome.detail}. Check the Codex connection, then re-run \`lathe converge ${runId}\`.`,
+            reviewerUnreachable: 0,
+            updatedAt: atIso,
+          });
+        } else {
+          store.writeMeta({ ...meta, reviewerUnreachable: attempt, updatedAt: atIso });
+        }
+        store.appendConvergence(
+          runId,
+          makeUnreachableEntry(
+            runId,
+            campaignId,
+            pass,
+            maxPasses,
+            verificationResults,
+            outcome.detail,
+            attempt,
+            budget,
+            atIso,
+          ),
+        );
+        return;
+      }
+
+      // 3b. A real verdict arrived — the unreachable streak (if any) is broken.
+      const result: SuperReviewResult = outcome;
 
       // 3. Pure decision.
       const decision = decideConvergence(
@@ -216,11 +285,17 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
 
       switch (decision.action) {
         case "stop": {
-          // Campaign converged; run STAYS ready_for_review (S9/R3).
-          // Un-park a previously-blocked run.
-          if (meta.status !== "ready_for_review") {
+          // Campaign converged; run STAYS ready_for_review (S9/R3). Un-park a
+          // previously-blocked run, and clear any unreachable streak now that a
+          // real verdict landed.
+          if (meta.status !== "ready_for_review" || (meta.reviewerUnreachable ?? 0) !== 0) {
             const { blockedReason: _br, blockedQuestion: _bq, ...rest } = meta;
-            store.writeMeta({ ...rest, status: "ready_for_review", updatedAt: atIso });
+            store.writeMeta({
+              ...rest,
+              status: "ready_for_review",
+              reviewerUnreachable: 0,
+              updatedAt: atIso,
+            });
           }
           // Amend commit message — best effort, not fatal.
           if (result.review.commit_message) {
@@ -271,12 +346,14 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
         }
 
         case "escalate": {
-          // Park blocked/human_decision.
+          // Park blocked/human_decision. A real verdict landed, so clear any
+          // unreachable streak.
           const blockedMeta = {
             ...meta,
             status: "blocked" as const,
             blockedReason: "human_decision" as const,
             blockedQuestion: decision.reason,
+            reviewerUnreachable: 0,
             updatedAt: atIso,
           };
           store.writeMeta(blockedMeta);

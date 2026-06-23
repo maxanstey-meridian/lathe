@@ -87,18 +87,39 @@ const ConvergeDecisionSchema = z.union([
   z.object({ action: z.literal("escalate"), reason: z.string() }),
 ]);
 
-const ConvergenceLogEntrySchema = z.object({
+const ConvergenceLogHeadSchema = {
   at: z.string(),
   runId: z.string(),
   campaignId: z.string(),
   pass: z.number().int(),
   maxPasses: z.number().int(),
   verification: VerificationResultSchema,
+};
+
+const ReviewedConvergenceSchema = z.object({
+  // Default to "reviewed" so pre-union entries on disk (no kind) still parse.
+  kind: z.literal("reviewed").default("reviewed"),
+  ...ConvergenceLogHeadSchema,
   decision: ConvergeDecisionSchema,
   amendedCommitSha: z.string().nullable(),
   primary: SuperReview,
   primaryRaw: z.string(),
 });
+
+const UnreachableConvergenceSchema = z.object({
+  kind: z.literal("unreachable"),
+  ...ConvergenceLogHeadSchema,
+  detail: z.string(),
+  attempt: z.number().int(),
+  budget: z.number().int(),
+});
+
+// Unreachable first (its kind literal is required); reviewed second catches the
+// pre-union entries via the kind default.
+const ConvergenceLogEntrySchema = z.union([
+  UnreachableConvergenceSchema,
+  ReviewedConvergenceSchema,
+]);
 
 // ---------------------------------------------------------------------------
 // Archive helper — collision-safe with numeric suffix and .problems.txt sidecar
@@ -557,6 +578,7 @@ export class StoreAdapter implements Store {
       worktree: join(this.paths.runDir(runId), "worktree"),
       stallRetries: 0,
       reorientRetries: 0,
+      reviewerUnreachable: 0,
       updatedAt: this.clock.nowIso(),
     };
   }

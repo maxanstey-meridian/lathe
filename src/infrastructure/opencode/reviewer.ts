@@ -1,14 +1,18 @@
 // Reviewer adapter: super-daddy convergence reviewer (CONTRACT §18 S2, S11).
 // harvestReview gathers text from EVERY assistant message (the 0-char-final-message scar).
-// superReview catches ALL errors and fail-closes to an escalate verdict.
+// superReview separates a real REVIEW from an UNREACHABLE transport failure:
+// transient drops are retried, then resolve to an `unreachable` outcome (never a
+// forged escalate verdict). The use case decides what unreachable means for run
+// state. A parse failure stays a reviewed escalate (parseSuperReview fails closed).
 
 import type { Executor, ModelConfig } from "../../application/ports/executor.js";
-import type { Reviewer, SuperReviewResult } from "../../application/ports/reviewer.js";
+import type { Reviewer, SuperReviewOutcome } from "../../application/ports/reviewer.js";
 import type { TurnResponse } from "../../domain/agent-response.js";
 import { extractText, messageError } from "../../domain/agent-response.js";
 import { parseSuperReview } from "../../domain/convergence.js";
 import type { SuperReviewInput } from "../../domain/prompts.js";
 import { renderSuperReview } from "../../domain/prompts.js";
+import { classifyReviewerError, describeUnreachable } from "../../domain/reviewer-transport.js";
 
 // ---------------------------------------------------------------------------
 // Reviewer adapter implementation
@@ -48,15 +52,21 @@ const harvestReview = async (
   }
 };
 
+// Small backoff between transport retries — a fresh connection after a dropped
+// socket usually lands; the delay just avoids hammering a flapping backend.
+const backoff = (attempt: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+
 export const createReviewer = (
   executor: Executor,
   superdaddyModel: ModelConfig,
   timeoutMs: number,
+  maxTransportRetries = 2,
 ): Reviewer => {
   let reviewerSessionId: string | undefined;
   let currentWorktree: string | undefined;
 
-  const superReview = async (input: SuperReviewInput): Promise<SuperReviewResult> => {
+  const superReview = async (input: SuperReviewInput): Promise<SuperReviewOutcome> => {
     // The session's cwd is fixed at creation, and super-daddy MUST run verification
     // and `git diff HEAD` in the run's worktree (renderSuperReview promises "your cwd
     // is the run's worktree"). Each run/pass has its own worktree, so when it changes
@@ -80,46 +90,53 @@ export const createReviewer = (
 
     const prompt = renderSuperReview(input);
 
-    try {
-      const response = await executor.sendMessage(
-        reviewerSessionId,
-        prompt,
-        superdaddyModel,
-        timeoutMs,
-      );
-      const { text: raw, error } = await harvestReview(executor, reviewerSessionId, response);
+    // A transport drop is NOT a verdict — it must be retried, never recorded as
+    // a pass. Classify each failure: TRANSIENT (socket hang up, 5xx, reset) →
+    // retry up to maxTransportRetries; FATAL (auth, 400) → stop immediately.
+    // Either way the call resolves to an `unreachable` outcome the use case can
+    // treat as retryable; we never forge an escalate SuperReview here. A parse
+    // failure is different — parseSuperReview fails closed to an escalate VERDICT
+    // (a real reviewed outcome), so it stays on the reviewed branch below.
+    let lastDetail = "unknown error";
+    for (let attempt = 0; ; attempt++) {
+      let detail: string;
+      try {
+        const response = await executor.sendMessage(
+          reviewerSessionId,
+          prompt,
+          superdaddyModel,
+          timeoutMs,
+        );
+        const { text: raw, error } = await harvestReview(executor, reviewerSessionId, response);
 
-      // A provider/transport failure (model unavailable, 400, auth, rate-limit)
-      // returns HTTP 200 with the failure on the turn's `error` and no text —
-      // that is NOT the model returning a bad verdict. Throw the real reason so
-      // the escalate below says e.g. "APIError (HTTP 400): …" instead of the
-      // "unparseable" a 0-char parse would invent. (A timeout or a dead socket
-      // already rejects out of sendMessage into the same catch.)
-      if (error) {
-        throw new Error(error);
+        // A provider/transport failure returns HTTP 200 with the failure on the
+        // turn's `error` and no text — not the model returning a bad verdict.
+        // Surface the real reason ("APIError (HTTP 503): …") for classification.
+        if (error) {
+          detail = error;
+        } else {
+          return { kind: "reviewed", review: parseSuperReview(raw), raw };
+        }
+      } catch (err) {
+        // A timeout or dead socket rejects out of sendMessage to here.
+        detail = err instanceof Error ? err.message : String(err);
       }
 
-      return { review: parseSuperReview(raw), raw };
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
-      // Unreachable reviewer fails CLOSED to escalate — never silently converge,
-      // never author from no findings.
-      return {
-        review: {
-          verdict: "escalate",
-          findings: [],
-          convergence: {
-            recommend_stop: false,
-            profile: { p0: 0, p1: 0, p2: 0, p3: 0 },
-            rationale: "reviewer unreachable",
-          },
-          commit_message: null,
-          notes: `super-review unavailable: ${detail}`,
-          human_decision_needed: "Super-daddy was unreachable — review the run manually.",
-        },
-        raw: `«reviewer threw before producing text»: ${detail}`,
-      };
+      lastDetail = detail;
+      const isTransient = classifyReviewerError(detail) === "transient";
+      if (isTransient && attempt < maxTransportRetries) {
+        await backoff(attempt);
+        continue;
+      }
+      break;
     }
+
+    // Retries exhausted (or a fatal error) — unreachable, NOT escalate.
+    return {
+      kind: "unreachable",
+      detail: describeUnreachable(lastDetail),
+      raw: `«reviewer unreachable»: ${lastDetail}`,
+    };
   };
 
   return { superReview };

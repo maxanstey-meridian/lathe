@@ -1,0 +1,25 @@
+{
+  "name": "@lathe/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "lathe": "dist/index.js"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@lathe/core": "workspace:*",
+    "@lathe/contract": "workspace:*",
+    "@lathe/server": "workspace:*",
+    "@hono/node-server": "^1.13.0",
+    "openapi-fetch": "^0.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.7.0"
+  }
+}

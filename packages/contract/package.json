@@ -1,0 +1,25 @@
+{
+  "name": "@lathe/contract",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./generated/api.contract.json": "./generated/api.contract.json"
+  },
+  "scripts": {
+    "gen:reflect": "rivet-ts --entry src/lathe.contract.ts --out generated/api.contract.json",
+    "gen:openapi": "rivet-ts rivet -- --from generated/api.contract.json --output ./generated",
+    "gen:client": "rivet-ts generate --generated-root ./generated",
+    "gen": "pnpm gen:reflect && pnpm gen:openapi && pnpm gen:client",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "rivet-ts": "file:/Users/max/Sites/medway/rivet-ts",
+    "typescript": "^5.7.0",
+    "@types/node": "^22.10.0"
+  }
+}

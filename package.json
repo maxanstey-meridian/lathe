@@ -3,33 +3,13 @@
   "version": "0.0.0",
   "private": true,
   "description": "Meridian v3 — sequential overnight executor of human-written specs.",
-  "bin": {
-    "meridian": "dist/interfaces/cli/index.js"
-  },
   "type": "module",
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/*.test.ts",
-    "lint": "oxlint src tests",
-    "lint:fix": "oxlint --fix src tests",
-    "fmt": "oxfmt src tests",
-    "fmt:check": "oxfmt --check src tests"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.0",
-    "ink": "^5.1.0",
-    "react": "^18.3.1",
-    "yaml": "^2.8.0",
-    "zod": "^3.24.0"
-  },
-  "devDependencies": {
-    "@types/node": "^22.10.0",
-    "@types/react": "^18.3.12",
-    "oxfmt": "^0.55.0",
-    "oxlint": "^1.70.0",
-    "tsx": "^4.20.0",
-    "typescript": "^5.7.0"
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "fmt": "pnpm -r fmt"
   },
   "engines": {
     "node": ">=22"

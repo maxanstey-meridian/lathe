@@ -1,0 +1,678 @@
+{
+  "types": [
+    {
+      "name": "ConfigDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "models",
+          "type": {
+            "kind": "ref",
+            "name": "ModelConfigDto"
+          },
+          "optional": false
+        },
+        {
+          "name": "thresholds",
+          "type": {
+            "kind": "inlineObject",
+            "properties": [
+              {
+                "name": "ladderParkAt",
+                "type": {
+                  "kind": "primitive",
+                  "type": "number"
+                }
+              },
+              {
+                "name": "ladderRotateAt",
+                "type": {
+                  "kind": "primitive",
+                  "type": "number"
+                }
+              },
+              {
+                "name": "maxPasses",
+                "type": {
+                  "kind": "primitive",
+                  "type": "number"
+                }
+              },
+              {
+                "name": "turnSteps",
+                "type": {
+                  "kind": "primitive",
+                  "type": "number"
+                }
+              }
+            ]
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "EnqueueChainRequest",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "chainDir",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "EnqueueRunRequest",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "packetPath",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "ModelConfigDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "baby",
+          "type": {
+            "kind": "inlineObject",
+            "properties": [
+              {
+                "name": "modelId",
+                "type": {
+                  "kind": "primitive",
+                  "type": "string"
+                }
+              },
+              {
+                "name": "baseUrl",
+                "type": {
+                  "kind": "primitive",
+                  "type": "string"
+                }
+              },
+              {
+                "name": "contextWindow",
+                "type": {
+                  "kind": "primitive",
+                  "type": "number"
+                }
+              }
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "daddy",
+          "type": {
+            "kind": "inlineObject",
+            "properties": [
+              {
+                "name": "modelId",
+                "type": {
+                  "kind": "primitive",
+                  "type": "string"
+                }
+              },
+              {
+                "name": "provider",
+                "type": {
+                  "kind": "primitive",
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "superdaddy",
+          "type": {
+            "kind": "inlineObject",
+            "properties": [
+              {
+                "name": "modelId",
+                "type": {
+                  "kind": "primitive",
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "RejectRunRequest",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "reason",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": true
+        }
+      ]
+    },
+    {
+      "name": "RunDetailDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "campaignId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "packet",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "status",
+          "type": {
+            "kind": "ref",
+            "name": "RunStatus"
+          },
+          "optional": false
+        },
+        {
+          "name": "pass",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "turn",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "contextTokens",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "contextWindow",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "isChainTip",
+          "type": {
+            "kind": "primitive",
+            "type": "boolean"
+          },
+          "optional": false
+        },
+        {
+          "name": "startedAt",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "updatedAt",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "base",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "branch",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "worktreePath",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "parentRunId",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "expectedSurface",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "lastVerdict",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "RunSummaryDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "campaignId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "packet",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "status",
+          "type": {
+            "kind": "ref",
+            "name": "RunStatus"
+          },
+          "optional": false
+        },
+        {
+          "name": "pass",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "turn",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "contextTokens",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "contextWindow",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "isChainTip",
+          "type": {
+            "kind": "primitive",
+            "type": "boolean"
+          },
+          "optional": false
+        },
+        {
+          "name": "startedAt",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "updatedAt",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    }
+  ],
+  "enums": [
+    {
+      "name": "RunStatus",
+      "values": [
+        "queued",
+        "running",
+        "paused",
+        "converged",
+        "accepted",
+        "rejected",
+        "aborted",
+        "failed"
+      ]
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "enqueueRun",
+      "httpMethod": "POST",
+      "routeTemplate": "/runs",
+      "params": [
+        {
+          "name": "body",
+          "type": {
+            "kind": "ref",
+            "name": "EnqueueRunRequest"
+          },
+          "source": "body",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "ref",
+        "name": "RunSummaryDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 202,
+          "dataType": {
+            "kind": "ref",
+            "name": "RunSummaryDto"
+          }
+        }
+      ]
+    },
+    {
+      "name": "enqueueChain",
+      "httpMethod": "POST",
+      "routeTemplate": "/chains",
+      "params": [
+        {
+          "name": "body",
+          "type": {
+            "kind": "ref",
+            "name": "EnqueueChainRequest"
+          },
+          "source": "body",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "array",
+        "element": {
+          "kind": "ref",
+          "name": "RunSummaryDto"
+        }
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 202,
+          "dataType": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "RunSummaryDto"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "listRuns",
+      "httpMethod": "GET",
+      "routeTemplate": "/runs",
+      "params": [],
+      "returnType": {
+        "kind": "array",
+        "element": {
+          "kind": "ref",
+          "name": "RunSummaryDto"
+        }
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "RunSummaryDto"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "getRun",
+      "httpMethod": "GET",
+      "routeTemplate": "/runs/{runId}",
+      "params": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "source": "route",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "ref",
+        "name": "RunDetailDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "ref",
+            "name": "RunDetailDto"
+          }
+        }
+      ]
+    },
+    {
+      "name": "abortRun",
+      "httpMethod": "POST",
+      "routeTemplate": "/runs/{runId}/abort",
+      "params": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "source": "route",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "ref",
+        "name": "RunSummaryDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 201,
+          "dataType": {
+            "kind": "ref",
+            "name": "RunSummaryDto"
+          }
+        }
+      ]
+    },
+    {
+      "name": "acceptRun",
+      "httpMethod": "POST",
+      "routeTemplate": "/runs/{runId}/accept",
+      "params": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "source": "route",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "ref",
+        "name": "RunSummaryDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 201,
+          "dataType": {
+            "kind": "ref",
+            "name": "RunSummaryDto"
+          }
+        }
+      ]
+    },
+    {
+      "name": "rejectRun",
+      "httpMethod": "POST",
+      "routeTemplate": "/runs/{runId}/reject",
+      "params": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "source": "route",
+          "isOptional": false
+        },
+        {
+          "name": "body",
+          "type": {
+            "kind": "ref",
+            "name": "RejectRunRequest"
+          },
+          "source": "body",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "ref",
+        "name": "RunSummaryDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 201,
+          "dataType": {
+            "kind": "ref",
+            "name": "RunSummaryDto"
+          }
+        }
+      ]
+    },
+    {
+      "name": "getConfig",
+      "httpMethod": "GET",
+      "routeTemplate": "/config",
+      "params": [],
+      "returnType": {
+        "kind": "ref",
+        "name": "ConfigDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "ref",
+            "name": "ConfigDto"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -7,6 +7,7 @@ export const expandHome = (p: string): string =>
 export type Paths = {
   root: string;
   configFile: string;
+  dbFile: string;
   queueDir: string;
   rejectedDir: string;
   stagedDir: string;
@@ -42,6 +43,7 @@ export const makePaths = (stateRoot: string): Paths => {
   return {
     root,
     configFile: join(root, "config.json"),
+    dbFile: join(root, "lathe.db"),
     queueDir: join(root, "queue"),
     rejectedDir: join(root, "rejected"),
     stagedDir: join(root, "staged"),

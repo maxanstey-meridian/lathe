@@ -1,0 +1,539 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "API",
+    "version": "1.0.0"
+  },
+  "tags": [
+    {
+      "name": "Lathe"
+    }
+  ],
+  "paths": {
+    "/runs": {
+      "post": {
+        "operationId": "lathe_enqueueRun",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "enqueueRun",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnqueueRunRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Status 202",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunSummaryDto"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "lathe_listRuns",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "listRuns",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RunSummaryDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chains": {
+      "post": {
+        "operationId": "lathe_enqueueChain",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "enqueueChain",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnqueueChainRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Status 202",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RunSummaryDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/runs/{runId}": {
+      "get": {
+        "operationId": "lathe_getRun",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "getRun",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetailDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/runs/{runId}/abort": {
+      "post": {
+        "operationId": "lathe_abortRun",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "abortRun",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunSummaryDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/runs/{runId}/accept": {
+      "post": {
+        "operationId": "lathe_acceptRun",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "acceptRun",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunSummaryDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/runs/{runId}/reject": {
+      "post": {
+        "operationId": "lathe_rejectRun",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "rejectRun",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejectRunRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunSummaryDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/config": {
+      "get": {
+        "operationId": "lathe_getConfig",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "getConfig",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ConfigDto": {
+        "type": "object",
+        "properties": {
+          "models": {
+            "$ref": "#/components/schemas/ModelConfigDto"
+          },
+          "thresholds": {
+            "type": "object",
+            "properties": {
+              "ladderParkAt": {
+                "type": "number"
+              },
+              "ladderRotateAt": {
+                "type": "number"
+              },
+              "maxPasses": {
+                "type": "number"
+              },
+              "turnSteps": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "ladderParkAt",
+              "ladderRotateAt",
+              "maxPasses",
+              "turnSteps"
+            ]
+          }
+        },
+        "required": [
+          "models",
+          "thresholds"
+        ]
+      },
+      "EnqueueChainRequest": {
+        "type": "object",
+        "properties": {
+          "chainDir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "chainDir"
+        ]
+      },
+      "EnqueueRunRequest": {
+        "type": "object",
+        "properties": {
+          "packetPath": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "packetPath"
+        ]
+      },
+      "ModelConfigDto": {
+        "type": "object",
+        "properties": {
+          "baby": {
+            "type": "object",
+            "properties": {
+              "modelId": {
+                "type": "string"
+              },
+              "baseUrl": {
+                "type": "string"
+              },
+              "contextWindow": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "modelId",
+              "baseUrl",
+              "contextWindow"
+            ]
+          },
+          "daddy": {
+            "type": "object",
+            "properties": {
+              "modelId": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "modelId",
+              "provider"
+            ]
+          },
+          "superdaddy": {
+            "type": "object",
+            "properties": {
+              "modelId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "modelId"
+            ]
+          }
+        },
+        "required": [
+          "baby",
+          "daddy",
+          "superdaddy"
+        ]
+      },
+      "RejectRunRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "RunDetailDto": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "campaignId": {
+            "type": "string"
+          },
+          "packet": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "pass": {
+            "type": "number"
+          },
+          "turn": {
+            "type": "number"
+          },
+          "contextTokens": {
+            "type": "number"
+          },
+          "contextWindow": {
+            "type": "number"
+          },
+          "isChainTip": {
+            "type": "boolean"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "base": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "worktreePath": {
+            "type": "string"
+          },
+          "parentRunId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expectedSurface": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "lastVerdict": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "runId",
+          "campaignId",
+          "packet",
+          "status",
+          "pass",
+          "turn",
+          "contextTokens",
+          "contextWindow",
+          "isChainTip",
+          "startedAt",
+          "updatedAt",
+          "base",
+          "branch",
+          "worktreePath",
+          "parentRunId",
+          "expectedSurface",
+          "lastVerdict"
+        ]
+      },
+      "RunSummaryDto": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "campaignId": {
+            "type": "string"
+          },
+          "packet": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "pass": {
+            "type": "number"
+          },
+          "turn": {
+            "type": "number"
+          },
+          "contextTokens": {
+            "type": "number"
+          },
+          "contextWindow": {
+            "type": "number"
+          },
+          "isChainTip": {
+            "type": "boolean"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "campaignId",
+          "packet",
+          "status",
+          "pass",
+          "turn",
+          "contextTokens",
+          "contextWindow",
+          "isChainTip",
+          "startedAt",
+          "updatedAt"
+        ]
+      },
+      "RunStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "running",
+          "paused",
+          "converged",
+          "accepted",
+          "rejected",
+          "aborted",
+          "failed"
+        ]
+      }
+    }
+  }
+}

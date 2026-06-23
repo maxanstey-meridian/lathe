@@ -2,6 +2,7 @@ import { equal, strictEqual, ok, match, rejects } from "node:assert";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { mkdtemp, writeFile, mkdir, rm, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { Clock } from "../src/application/ports/clock.js";
@@ -20,6 +21,7 @@ import { ReviewState as ReviewStateSchema } from "../src/domain/run.js";
 import { Decision as DecisionSchema } from "../src/domain/run.js";
 import { ActiveRun as ActiveRunSchema } from "../src/domain/run.js";
 import { StoreAdapter } from "../src/infrastructure/store.js";
+import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -870,5 +872,510 @@ test("store: journal skips invalid lines (J3)", async () => {
   strictEqual(events.length, 2);
   equal(events[0].event, "run_started");
   equal(events[1].event, "turn_ended");
+  await cleanTemp(tmp);
+});
+
+// ---------------------------------------------------------------------------
+// Parity: contract tests over both adapters
+// ---------------------------------------------------------------------------
+
+const createSqliteStore = (tmp: string, repo: Repo, clock: Clock) =>
+  SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
+
+const runContractTests = async (
+  label: string,
+  createStore: (tmp: string, repo: Repo, clock: Clock) => typeof StoreAdapter,
+) => {
+  // Meta round-trip
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-meta-`));
+    const clock = fixedClock();
+    const store = createStore(tmp, fakeRepo(), clock);
+    const meta = {
+      runId: "20260101-000000-meta",
+      status: "queued" as const,
+      attempt: 1,
+      repo: "/tmp/repo",
+      base: "main",
+      branch: "meridian/20260101-000000-meta",
+      worktree: join(tmp, "worktree"),
+      updatedAt: clock.nowIso(),
+    };
+    store.writeMeta(meta);
+    const read = store.readMeta(meta.runId);
+    equal(read.runId, meta.runId);
+    equal(read.status, "queued");
+    equal(read.attempt, 1);
+    await cleanTemp(tmp);
+  }
+
+  // readMetaIfExists returns undefined for absent run
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-meta-if-`));
+    const store = createStore(tmp, fakeRepo(), fixedClock());
+    equal(store.readMetaIfExists("20990101-000000-absent"), undefined);
+    await cleanTemp(tmp);
+  }
+
+  // Outcome ledger round-trip
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-ledger-`));
+    const clock = fixedClock();
+    const store = createStore(tmp, fakeRepo(), clock);
+    const ledger = {
+      runId: "20260101-000000-test",
+      outcomes: [
+        {
+          id: "test-outcome",
+          description: "A test outcome",
+          status: "done" as const,
+          evidence: ["evidence.txt"],
+          updatedAt: clock.nowIso(),
+        },
+      ],
+      updatedAt: clock.nowIso(),
+    };
+    store.writeLedger(ledger);
+    const read = store.readLedger(ledger.runId);
+    equal(read.runId, ledger.runId);
+    equal(read.outcomes[0].status, "done");
+    equal(read.outcomes[0].evidence[0], "evidence.txt");
+    await cleanTemp(tmp);
+  }
+
+  // Review state round-trip
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-review-`));
+    const clock = fixedClock();
+    const store = createStore(tmp, fakeRepo(), clock);
+    const initial = store.initialReviewState("20260101-000000-test");
+    equal(initial.runId, "20260101-000000-test");
+    strictEqual(initial.obligations.length, 0);
+    const replaced = store.replaceObligations(initial.runId, ["fix x", "  ", "fix y"]);
+    equal(replaced.obligations.length, 2);
+    equal(replaced.obligations[0], "fix x");
+    equal(replaced.obligations[1], "fix y");
+    ok(replaced.lastDecisionAt);
+    await cleanTemp(tmp);
+  }
+
+  // Decisions append and read
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-dec-`));
+    const clock = fixedClock();
+    const store = createStore(tmp, fakeRepo(), clock);
+    const d1 = {
+      timestamp: "2026-01-01T00:00:00.000Z",
+      source: "daddy" as const,
+      questionType: "other",
+      question: "q1",
+      status: "proceed",
+      answer: "a1",
+      constraints: [],
+    };
+    store.appendDecision("20260101-000000-test", d1);
+    const decisions = store.readDecisions("20260101-000000-test");
+    strictEqual(decisions.length, 1);
+    equal(decisions[0].question, "q1");
+    await cleanTemp(tmp);
+  }
+
+  // Checkpoints
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-ckp-`));
+    const clock = fixedClock();
+    const store = createStore(tmp, fakeRepo(), clock);
+    equal(store.nextCheckpointNumber("20260101-000000-test"), 1);
+    const c1 = {
+      number: 1,
+      reason: "checkpoint",
+      summary: "s1",
+      outcomes: [{ id: "o1", status: "done" as const, evidence: [] }],
+      writtenAt: clock.nowIso(),
+    };
+    const c2 = {
+      number: 2,
+      reason: "checkpoint",
+      summary: "s2",
+      outcomes: [{ id: "o1", status: "done" as const, evidence: [] }],
+      writtenAt: clock.nowIso(),
+    };
+    store.writeCheckpoint("20260101-000000-test", c1);
+    store.writeCheckpoint("20260101-000000-test", c2);
+    equal(store.nextCheckpointNumber("20260101-000000-test"), 3);
+    const latest = store.latestCheckpoint("20260101-000000-test");
+    equal(latest?.number, 2);
+    equal(latest?.summary, "s2");
+    equal(store.latestCheckpoint("nonexistent"), undefined);
+    await cleanTemp(tmp);
+  }
+
+  // Gate state round-trip
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-gate-`));
+    const clock = fixedClock();
+    const store = createStore(tmp, fakeRepo(), clock);
+    const state = {
+      runId: "20260101-000000-test",
+      latched: false,
+      firstEditApproved: true,
+      reconciliationRequired: false,
+      expectedGlobs: ["src/**/*.ts"],
+      suspiciousGlobs: [],
+      baselineDiffStats: {},
+      updatedAt: clock.nowIso(),
+      mutationCommandPatterns: [],
+    };
+    store.writeGateState(state.runId, state);
+    const read = store.readGateState(state.runId);
+    equal(read.runId, state.runId);
+    equal(read.latched, false);
+    equal(read.firstEditApproved, true);
+    await cleanTemp(tmp);
+  }
+
+  // Report read/write
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-rep-`));
+    const clock = fixedClock();
+    const store = createStore(tmp, fakeRepo(), clock);
+    const report = {
+      status: "ready_for_review" as const,
+      summary: "done",
+      filesChanged: [],
+      behaviourChanged: [],
+      sourceOfTruthFollowed: [],
+      outcomeClaims: [],
+      verificationClaims: [],
+      escalations: [],
+      remainingUncertainty: [],
+    };
+    store.writeReport("20260101-000000-test", report, "# Report\n\ndone");
+    equal(store.readReport("20260101-000000-test"), "# Report\n\ndone");
+    equal(store.readReport("nonexistent"), "");
+    await cleanTemp(tmp);
+  }
+
+  // Nits read/write
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-nits-`));
+    const store = createStore(tmp, fakeRepo(), fixedClock());
+    store.writeNits("20260101-000000-test", "# Nits\n\nnone");
+    equal(store.readNits("20260101-000000-test"), "# Nits\n\nnone");
+    equal(store.readNits("nonexistent"), "");
+    await cleanTemp(tmp);
+  }
+
+  // Convergence round-trip
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-conv-`));
+    const store = createStore(tmp, fakeRepo(), fixedClock());
+    const entry = makeValidConvergenceEntry();
+    store.appendConvergence(entry.runId, entry);
+    const entries = store.readConvergence(entry.runId);
+    strictEqual(entries.length, 1);
+    equal(entries[0].runId, entry.runId);
+    equal(entries[0].decision.action, "stop");
+    await cleanTemp(tmp);
+  }
+
+  // Packet freeze round-trip
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-freeze-`));
+    const store = createStore(tmp, fakeRepo(), fixedClock());
+    store.freezePacket("20260101-000000-test", "---\nfrontmatter\n---\n\nfrozen body");
+    equal(store.readFrozenPacket("20260101-000000-test"), "---\nfrontmatter\n---\n\nfrozen body");
+    equal(store.readFrozenPacket("nonexistent"), "");
+    await cleanTemp(tmp);
+  }
+
+  // Active run lifecycle
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-active-`));
+    const clock = fixedClock();
+    const store = createStore(tmp, fakeRepo(), clock);
+    equal(store.readActiveRun(), undefined);
+    const run = {
+      runId: "20260101-000000-test",
+      runDir: join(tmp, "runs/20260101-000000-test"),
+      worktree: join(tmp, "worktree"),
+      babySessionId: "sess1",
+      startedAt: clock.nowIso(),
+    };
+    store.writeActiveRun(run);
+    const read = store.readActiveRun();
+    ok(read);
+    equal(read!.runId, run.runId);
+    store.clearActiveRun();
+    equal(store.readActiveRun(), undefined);
+    await cleanTemp(tmp);
+  }
+
+  // Campaign round-trip
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-camp-`));
+    const clock = fixedClock();
+    const store = createStore(tmp, fakeRepo(), clock);
+    equal(store.readCampaign("test-campaign"), undefined);
+    const campaign = {
+      campaignId: "test-campaign",
+      originalRunId: "20260101-000000-test",
+      originalIntent: "do a thing",
+      status: "open" as const,
+      maxPasses: 5,
+      passes: [],
+      updatedAt: clock.nowIso(),
+    };
+    store.writeCampaign(campaign);
+    const read = store.readCampaign("test-campaign");
+    ok(read);
+    equal(read!.campaignId, "test-campaign");
+    equal(read!.originalIntent, "do a thing");
+    await cleanTemp(tmp);
+  }
+
+  // Queue — list empty
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-qlist-`));
+    const store = createStore(tmp, fakeRepo(), fixedClock());
+    strictEqual(store.listQueue().length, 0);
+    await cleanTemp(tmp);
+  }
+
+  // Queue — admit
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-adm-`));
+    const clock = fixedClock();
+    const store = createStore(tmp, fakeRepo(), clock);
+    const packet = `---
+repo: /tmp/test-repo
+base: main
+summary: admit me
+outcomes:
+  - id: o1
+    description: outcome 1
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+`;
+    store.admitQueue("20260101-000000-test", packet);
+    const queueFiles = await readdir(join(tmp, "queue"));
+    strictEqual(queueFiles.length, 1);
+    await cleanTemp(tmp);
+  }
+
+  // Queue — archive
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-arch-`));
+    const clock = fixedClock();
+    const store = createStore(tmp, fakeRepo(), clock);
+    const packet = `---
+repo: /tmp/test-repo
+base: main
+summary: archive me
+outcomes:
+  - id: o1
+    description: outcome 1
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+`;
+    await mkdir(join(tmp, "queue"), { recursive: true });
+    await writeFile(join(tmp, "queue", "20260101-000000-test.md"), packet);
+    store.archiveQueue("20260101-000000-test");
+    strictEqual((await readdir(join(tmp, "queue"))).length, 0);
+    ok(existsSync(join(tmp, "rejected", "20260101-000000-test.md")));
+    await cleanTemp(tmp);
+  }
+
+  // Staged write/read/list/remove
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-staged-`));
+    const store = createStore(tmp, fakeRepo(), fixedClock());
+    const packet = `---
+repo: /tmp/test-repo
+summary: staged child
+parent_run_id: 20260101-000000-parent
+outcomes:
+  - id: o1
+    description: outcome 1
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+`;
+    strictEqual(store.listStaged().length, 0);
+    strictEqual(store.readStaged("20260101-000000-child"), undefined);
+    store.writeStaged("20260101-000000-child", packet);
+    equal(store.readStaged("20260101-000000-child"), packet);
+    const staged = store.listStaged();
+    strictEqual(staged.length, 1);
+    equal(staged[0].runId, "20260101-000000-child");
+    equal(staged[0].parentRunId, "20260101-000000-parent");
+    equal(staged[0].repo, "/tmp/test-repo");
+    store.removeStaged("20260101-000000-child");
+    strictEqual(store.readStaged("20260101-000000-child"), undefined);
+    strictEqual(store.listStaged().length, 0);
+    await cleanTemp(tmp);
+  }
+
+  // Journal append and read
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-jrnl-`));
+    const clock = fixedClock();
+    const store = createStore(tmp, fakeRepo(), clock);
+    const event = {
+      at: clock.nowIso(),
+      event: "run_started" as const,
+      runId: "20260101-000000-test",
+      attempt: 1,
+    };
+    store.appendJournal("20260101-000000-test", event);
+    const events = store.readJournal("20260101-000000-test");
+    strictEqual(events.length, 1);
+    equal(events[0].event, "run_started");
+    strictEqual(store.readJournal("nonexistent").length, 0);
+    await cleanTemp(tmp);
+  }
+
+  // readJournalSince returns empty when no events
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-jrs-`));
+    const clock = fixedClock();
+    const store = createStore(tmp, fakeRepo(), clock);
+    strictEqual(store.readJournalSince(0).length, 0);
+    strictEqual(store.readJournalSince(999).length, 0);
+    await cleanTemp(tmp);
+  }
+};
+
+// Run contract tests against file adapter
+test("store: parity — file adapter", async () => {
+  await runContractTests("file", (tmp, repo, clock) =>
+    StoreAdapter.create(makePaths(tmp), repo, clock),
+  );
+});
+
+// Run contract tests against SQLite adapter
+test("store: parity — sqlite adapter", async () => {
+  await runContractTests("sqlite", (tmp, repo, clock) =>
+    SqliteStoreAdapter.create(makePaths(tmp), repo, clock),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// SQLite-specific: WAL snapshot isolation
+// ---------------------------------------------------------------------------
+
+test("store: sqlite — WAL snapshot isolation", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-sqlite-wal-"));
+  const dbPath = join(tmp, "data.db");
+
+  // Connection A: writer
+  const connA = new DatabaseSync(dbPath);
+  connA.exec("PRAGMA journal_mode=WAL;");
+  connA.exec("PRAGMA synchronous=NORMAL;");
+
+  // Connection B: reader
+  const connB = new DatabaseSync(dbPath);
+  connB.exec("PRAGMA journal_mode=WAL;");
+  connB.exec("PRAGMA synchronous=NORMAL;");
+
+  // Create table and insert initial row (committed)
+  connA.exec(`CREATE TABLE IF NOT EXISTS items (id TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+  connA.prepare("INSERT INTO items (id, value) VALUES (?, ?)").run("1", "initial");
+
+  // Writer begins a transaction and inserts a new row WITHOUT committing
+  connA.exec("BEGIN");
+  connA.prepare("INSERT INTO items (id, value) VALUES (?, ?)").run("2", "uncommitted");
+
+  // Reader should NOT see the uncommitted row (WAL snapshot isolation)
+  const beforeCommit = connB.prepare("SELECT id, value FROM items ORDER BY id").all();
+  strictEqual(beforeCommit.length, 1);
+  equal(beforeCommit[0].id, "1");
+  equal(beforeCommit[0].value, "initial");
+
+  // Commit the write
+  connA.exec("COMMIT");
+
+  // Reader should now see both rows
+  const afterCommit = connB.prepare("SELECT id, value FROM items ORDER BY id").all();
+  strictEqual(afterCommit.length, 2);
+  equal(afterCommit[0].id, "1");
+  equal(afterCommit[1].id, "2");
+  equal(afterCommit[1].value, "uncommitted");
+
+  connA.close();
+  connB.close();
+  await cleanTemp(tmp);
+});
+
+// ---------------------------------------------------------------------------
+// SQLite-specific: readJournalSince global seq ordering/resumption
+// ---------------------------------------------------------------------------
+
+test("store: sqlite — readJournalSince ordering across runIds", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-sqlite-jrs-"));
+  const clock = fixedClock();
+  const repo = fakeRepo();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
+
+  // Append events to two different runs
+  const eventA1 = {
+    at: "2026-01-01T00:00:01.000Z",
+    event: "run_started",
+    runId: "run-a",
+    attempt: 1,
+  };
+  const eventB1 = {
+    at: "2026-01-01T00:00:02.000Z",
+    event: "turn_ended",
+    runId: "run-b",
+    messageId: "m1",
+    tokens: { input: 100, output: 50, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+    contextTokens: 150,
+    text: "hello",
+  };
+  const eventA2 = {
+    at: "2026-01-01T00:00:03.000Z",
+    event: "turn_ended",
+    runId: "run-a",
+    messageId: "m2",
+    tokens: { input: 200, output: 100, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+    contextTokens: 250,
+    text: "world",
+  };
+
+  store.appendJournal("run-a", eventA1);
+  store.appendJournal("run-b", eventB1);
+  store.appendJournal("run-a", eventA2);
+
+  // readJournalSince(0) returns all events in seq order
+  const all = store.readJournalSince(0);
+  strictEqual(all.length, 3);
+  equal(all[0].seq, 1);
+  equal(all[0].runId, "run-a");
+  equal(all[0].event.event, "run_started");
+  equal(all[1].seq, 2);
+  equal(all[1].runId, "run-b");
+  equal(all[1].event.event, "turn_ended");
+  equal(all[2].seq, 3);
+  equal(all[2].runId, "run-a");
+  equal(all[2].event.event, "turn_ended");
+
+  // readJournalSince(1) returns events after seq 1 (resumption)
+  const resumed = store.readJournalSince(1);
+  strictEqual(resumed.length, 2);
+  equal(resumed[0].seq, 2);
+  equal(resumed[1].seq, 3);
+
+  // readJournalSince(3) returns empty
+  strictEqual(store.readJournalSince(3).length, 0);
+
   await cleanTemp(tmp);
 });

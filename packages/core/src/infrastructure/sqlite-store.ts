@@ -164,7 +164,8 @@ export class SqliteStoreAdapter implements Store {
     db.exec("PRAGMA busy_timeout=5000;");
 
     // Schema versioning via PRAGMA user_version
-    const version = Number(db.prepare("PRAGMA user_version").get());
+    const row = db.prepare("PRAGMA user_version").get() as { user_version: number } | undefined;
+    const version = row?.user_version ?? 0;
     if (version === 0) {
       createSchema(db);
       db.exec("PRAGMA user_version = 1;");
@@ -450,6 +451,8 @@ export class SqliteStoreAdapter implements Store {
   // ---------------------------------------------------------------------------
 
   listQueue(): QueueEntry[] {
+    mkdirSync(this.paths.queueDir, { recursive: true });
+
     // Requeued runs: meta.status === "queued", listed first (F2).
     // Query runs table instead of scanning meta.json files.
     const requeued: QueueEntry[] = this.db

@@ -75,7 +75,7 @@ export type SuperReview = z.infer<typeof SuperReview>;
 // The loop decision (single reviewer: super-daddy) — CONTRACT §18 S5
 
 export type ConvergeDecision =
-  | { action: "author"; blockers: Finding[] }
+  | { action: "author"; blockers: Finding[]; promote?: boolean }
   | { action: "stop" }
   | { action: "escalate"; reason: string };
 
@@ -91,6 +91,7 @@ export const decideConvergence = (
   verificationGreen: boolean,
   pass: number,
   maxPasses: number,
+  promotionEnabled: boolean,
 ): ConvergeDecision => {
   if (review.verdict === "escalate" || review.human_decision_needed) {
     return { action: "escalate", reason: review.human_decision_needed ?? "reviewer escalated" };
@@ -114,6 +115,9 @@ export const decideConvergence = (
     };
   }
   if (pass >= maxPasses) {
+    if (promotionEnabled && pass === maxPasses) {
+      return { action: "author", blockers: review.findings, promote: true };
+    }
     return {
       action: "escalate",
       reason: `hard cap reached (${pass}/${maxPasses}) and the reviewer still wants changes — convergence failed`,
@@ -209,6 +213,7 @@ export type FollowupPacketInput = {
   baseBranch: string; // base for the follow-up = parent run's branch tip
   timestamp: string; // YYYYMMDD-HHMMSS — caller supplies so this stays pure
   slug: string; // kebab slug for the run id / filename
+  promote: boolean; // secret n+1: Baby harness on Daddy's model
 };
 
 export type FollowupPacket = { runId: string; filename: string; content: string };
@@ -247,6 +252,7 @@ export const renderFollowupPacket = (input: FollowupPacketInput): FollowupPacket
     baseBranch,
     timestamp,
     slug,
+    promote,
   } = input;
   if (blockers.length === 0) {
     throw new Error("renderFollowupPacket: no blockers — nothing to author (converged)");
@@ -310,6 +316,7 @@ export const renderFollowupPacket = (input: FollowupPacketInput): FollowupPacket
     campaign_id: campaignId,
     parent_run_id: parentRunId,
     pass,
+    promoted: promote,
     outcomes,
     regression_outcomes: regression,
     expected_surface: original.frontmatter.expected_surface,

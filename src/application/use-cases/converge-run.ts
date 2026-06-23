@@ -142,6 +142,7 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
           autofix_commands: [],
           pass: 1,
           regression_outcomes: [],
+          promoted: false,
         },
         body: "",
         raw: "",
@@ -201,7 +202,7 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
       });
 
       // 3. Pure decision.
-      const decision = decideConvergence(result.review, verificationGreen, pass, maxPasses);
+      const decision = decideConvergence(result.review, verificationGreen, pass, maxPasses, config.thresholds.promoteAtCap);
 
       // 4. Act on the decision.
       let amendedSha: string | null = null;
@@ -246,16 +247,17 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
           ];
 
           const followup = renderFollowupPacket({
-            original: packet,
-            parentRunId: runId,
-            campaignId,
-            pass: pass + 1,
-            blockers: decision.blockers,
-            priorOutcomes,
-            baseBranch: meta.branch,
-            timestamp: isoToTimestamp(atIso),
-            slug: slugFromRunId(runId, pass + 1),
-          });
+             original: packet,
+             parentRunId: runId,
+             campaignId,
+             pass: pass + 1,
+             blockers: decision.blockers,
+             priorOutcomes,
+             baseBranch: meta.branch,
+             timestamp: isoToTimestamp(atIso),
+             slug: slugFromRunId(runId, pass + 1),
+             promote: decision.promote ?? false,
+           });
 
           store.admitQueue(followup.runId, followup.content);
           break;

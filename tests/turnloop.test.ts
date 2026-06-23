@@ -9,7 +9,7 @@ import type { Planner } from "../src/application/ports/planner.js";
 import type { Repo } from "../src/application/ports/repo.js";
 import type { Store } from "../src/application/ports/store.js";
 import type { RunPorts, RunChannel } from "../src/application/use-cases/run-runtime.js";
-import { turnLoop } from "../src/application/use-cases/turn-loop.js";
+import { turnLoop, resolveBabyModel } from "../src/application/use-cases/turn-loop.js";
 import { makePaths } from "../src/config/paths.js";
 import { Config } from "../src/config/schemas.js";
 import type { MessagePart } from "../src/domain/agent-response.js";
@@ -877,4 +877,23 @@ test("turnLoop: rotationPending with no checkpoint → re_demand_teardown Q5, la
     equal(prompts[2].promptName, "Q5");
     await cleanTemp(tmp);
   })();
+});
+
+// ---------------------------------------------------------------------------
+// resolveBabyModel — pure helper
+
+test("resolveBabyModel: promoted=false returns baby provider/model/agent", () => {
+  const config = Config.parse({});
+  const model = resolveBabyModel(config, false);
+  equal(model.providerId, "omlx");
+  equal(model.modelId, "Qwen3.6-35B-A3B-UD-MLX-4bit");
+  equal(model.agent, "baby");
+});
+
+test("resolveBabyModel: promoted=true returns daddy provider/model with baby agent", () => {
+  const config = Config.parse({});
+  const model = resolveBabyModel(config, true);
+  equal(model.providerId, "zai-coding-plan");
+  equal(model.modelId, "glm-5.1");
+  equal(model.agent, "baby");
 });

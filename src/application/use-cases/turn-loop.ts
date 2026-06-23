@@ -10,6 +10,7 @@
 // ---------------------------------------------------------------------------
 
 import { babyContextBudget } from "../../config/config.js";
+import type { Config } from "../../config/schemas.js";
 import { extractText, extractReasoning, gateDeniedPart } from "../../domain/agent-response.js";
 import type { TurnResponse, MessagePart } from "../../domain/agent-response.js";
 import { diffDelta } from "../../domain/gate-classification.js";
@@ -194,6 +195,16 @@ const reseedFromCheckpoint = (
 };
 
 // ---------------------------------------------------------------------------
+// resolveBabyModel — pure helper for the promoted round model swap
+
+import type { ModelConfig } from "../ports/executor.js";
+
+export const resolveBabyModel = (config: Config, promoted: boolean): ModelConfig =>
+  promoted
+    ? { providerId: config.daddy.providerId, modelId: config.daddy.modelId, agent: config.baby.agent }
+    : { providerId: config.baby.providerId, modelId: config.baby.modelId, agent: config.baby.agent };
+
+// ---------------------------------------------------------------------------
 // turnLoop — run one attempt to a terminal outcome.
 //
 // `channel` is the bridge's per-turn intent channel (the keystone seam): the
@@ -211,11 +222,7 @@ export const turnLoop = async (
 ): Promise<TurnLoopResult> => {
   const { config, store, repo, executor, planner, clock } = ports;
   const runId = packet.runId;
-  const babyModel = {
-    providerId: config.baby.providerId,
-    modelId: config.baby.modelId,
-    agent: config.baby.agent,
-  };
+  const babyModel = resolveBabyModel(config, packet.frontmatter.promoted);
   const contextBudget = babyContextBudget(config);
 
   let next = seed;

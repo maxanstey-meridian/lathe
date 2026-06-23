@@ -55,7 +55,10 @@ const makeMockExecutor = (
 // ---------------------------------------------------------------------------
 // Shared input helper
 
-const makeInput = (campaignId: string): SuperReviewInput => ({
+// The session rebinds on WORKTREE change (each run/pass has its own worktree, and
+// the session cwd is fixed at creation). campaignId still rides along for context
+// but no longer drives the session lifecycle.
+const makeInput = (worktree: string, campaignId = "campaign-a"): SuperReviewInput => ({
   packet: {
     runId: "20260101-000000-test",
     frontmatter: {
@@ -72,6 +75,7 @@ const makeInput = (campaignId: string): SuperReviewInput => ({
     body: "",
     raw: "",
   },
+  worktree,
   diff: "diff",
   reportText: "",
   skillText: "rubric",
@@ -83,53 +87,54 @@ const makeInput = (campaignId: string): SuperReviewInput => ({
 const model: ModelConfig = { providerId: "openai", modelId: "gpt-5.5", agent: "superdaddy" };
 
 // ---------------------------------------------------------------------------
-// Test: same campaign — session created once, reused across calls
+// Test: same worktree — session created once (scoped to the worktree), reused
 
-test("reviewer: same campaign reuses session", async () => {
+test("reviewer: same worktree reuses session scoped to it", async () => {
   const { executor, sessionsCreated, sessionsDeleted } = makeMockExecutor();
-  const reviewer = createReviewer(executor, model, 5000, "/tmp/root");
+  const reviewer = createReviewer(executor, model, 5000);
 
-  await reviewer.superReview(makeInput("campaign-a"));
-  await reviewer.superReview(makeInput("campaign-a"));
-  await reviewer.superReview(makeInput("campaign-a"));
+  await reviewer.superReview(makeInput("/wt/run-a"));
+  await reviewer.superReview(makeInput("/wt/run-a"));
+  await reviewer.superReview(makeInput("/wt/run-a"));
 
-  equal(sessionsCreated.length, 1, "session should be created only once within a campaign");
+  equal(sessionsCreated.length, 1, "session should be created only once for a worktree");
   equal(sessionsCreated[0].title, "meridian-superdaddy");
-  equal(sessionsCreated[0].directory, "/tmp/root");
-  equal(sessionsDeleted.length, 0, "no sessions deleted within same campaign");
+  equal(
+    sessionsCreated[0].directory,
+    "/wt/run-a",
+    "session cwd is the run's worktree, not paths.root",
+  );
+  equal(sessionsDeleted.length, 0, "no sessions deleted while the worktree is unchanged");
 });
 
 // ---------------------------------------------------------------------------
-// Test: different campaign — prior session deleted, new one created
+// Test: different worktree (next pass/run) — prior session deleted, new one created
 
-test("reviewer: cross-campaign resets session", async () => {
+test("reviewer: new worktree resets session", async () => {
   const { executor, sessionsCreated, sessionsDeleted } = makeMockExecutor();
-  const reviewer = createReviewer(executor, model, 5000, "/tmp/root");
+  const reviewer = createReviewer(executor, model, 5000);
 
-  await reviewer.superReview(makeInput("campaign-a"));
-  const sessionAId = sessionsCreated[0].title; // We can't get the actual ID from makeMockExecutor
-  // Actually the session ID is returned from createSession. Let's verify deletion happened.
+  await reviewer.superReview(makeInput("/wt/run-a"));
+  await reviewer.superReview(makeInput("/wt/run-b"));
 
-  await reviewer.superReview(makeInput("campaign-b"));
-
-  equal(sessionsCreated.length, 2, "new session created after campaign change");
-  ok(sessionsCreated[1].title === sessionsCreated[0].title, "both sessions share the same title");
-  ok(sessionsDeleted.length >= 1, "prior campaign session was deleted");
+  equal(sessionsCreated.length, 2, "new session created when the worktree changes");
+  equal(sessionsCreated[1].directory, "/wt/run-b", "new session scoped to the new worktree");
+  ok(sessionsDeleted.length >= 1, "prior worktree's session was deleted");
 });
 
 // ---------------------------------------------------------------------------
-// Test: campaign-a, campaign-b, campaign-a — each switch triggers rebind
+// Test: run-a, run-b, run-a — each worktree switch triggers a rebind
 
-test("reviewer: repeated campaign switches rebid each time", async () => {
+test("reviewer: repeated worktree switches rebind each time", async () => {
   const { executor, sessionsCreated, sessionsDeleted } = makeMockExecutor();
-  const reviewer = createReviewer(executor, model, 5000, "/tmp/root");
+  const reviewer = createReviewer(executor, model, 5000);
 
-  await reviewer.superReview(makeInput("camp-1"));
-  await reviewer.superReview(makeInput("camp-2"));
-  await reviewer.superReview(makeInput("camp-1"));
-  await reviewer.superReview(makeInput("camp-3"));
+  await reviewer.superReview(makeInput("/wt/run-1"));
+  await reviewer.superReview(makeInput("/wt/run-2"));
+  await reviewer.superReview(makeInput("/wt/run-1"));
+  await reviewer.superReview(makeInput("/wt/run-3"));
 
-  equal(sessionsCreated.length, 4, "session recreated on every campaign switch");
+  equal(sessionsCreated.length, 4, "session recreated on every worktree switch");
   equal(sessionsDeleted.length, 3, "prior session deleted on every switch");
 });
 
@@ -138,9 +143,9 @@ test("reviewer: repeated campaign switches rebid each time", async () => {
 
 test("reviewer: first call does not call deleteSession", async () => {
   const { executor, sessionsCreated, sessionsDeleted } = makeMockExecutor();
-  const reviewer = createReviewer(executor, model, 5000, "/tmp/root");
+  const reviewer = createReviewer(executor, model, 5000);
 
-  await reviewer.superReview(makeInput("camp-x"));
+  await reviewer.superReview(makeInput("/wt/run-x"));
 
   equal(sessionsDeleted.length, 0, "deleteSession not called on first review");
   equal(sessionsCreated.length, 1);

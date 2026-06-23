@@ -134,12 +134,11 @@ export const runDriver = async (config: Config, paths: Paths): Promise<void> => 
   const repo = buildRepo();
   const store = StoreAdapter.create(paths, repo, clock);
   const executor = createOpencodeClient(config);
-  // Daddy and super-daddy sessions are process-singletons reused across runs, so
-  // they root in a fixed directory, not a per-run worktree. By design neither
-  // needs worktree file access: Daddy consults on intent (approach + evidence
-  // arrive inline) and super-daddy reviews the diff inline (the driver runs the
-  // verification itself, in the worktree, via the Verify port). paths.root is the
-  // stable, always-present home for both.
+  // Daddy roots in a fixed directory (paths.root): he consults on intent — approach
+  // and evidence arrive inline, no worktree access needed. Super-daddy is different:
+  // it MUST execute verification and inspect the tree (renderSuperReview promises
+  // "your cwd is the run's worktree"), so its session is scoped per-call to the run's
+  // worktree — passed via SuperReviewInput, NOT fixed here.
   const planner = createPlanner(
     executor,
     modelOf(config.daddy),
@@ -150,7 +149,6 @@ export const runDriver = async (config: Config, paths: Paths): Promise<void> => 
     executor,
     modelOf(config.superdaddy),
     config.superdaddy.timeoutMs,
-    paths.root,
   );
   const verify = createVerify();
   const caffeinate = createCaffeinate();
@@ -295,7 +293,6 @@ export const convergeOnce = async (config: Config, paths: Paths, runId: string):
       executor,
       modelOf(config.superdaddy),
       config.superdaddy.timeoutMs,
-      paths.root,
     );
     const verify = createVerify();
     await convergeRun({ store, repo, reviewer, verify, clock, config, paths })(runId);
@@ -335,7 +332,6 @@ export const superReviewOnce = async (
       executor,
       modelOf(config.superdaddy),
       config.superdaddy.timeoutMs,
-      paths.root,
     );
     const diff = repo.reviewableDiffAgainst(
       meta.worktree,
@@ -350,6 +346,7 @@ export const superReviewOnce = async (
     const campaignId = campaignIdForRun(shape.packet, runId);
     const result = await reviewer.superReview({
       packet: shape.packet,
+      worktree: meta.worktree,
       diff,
       reportText,
       skillText,

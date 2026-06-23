@@ -192,6 +192,7 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
 
       const result: SuperReviewResult = await reviewer.superReview({
         packet,
+        worktree: meta.worktree,
         diff,
         reportText,
         skillText,

@@ -526,6 +526,8 @@ Return ONLY JSON. No markdown fences, no prose outside JSON.
 // SuperReviewInput — the structured input for renderSuperReview
 export type SuperReviewInput = {
   packet: Packet; // the ORIGINAL packet — the intent super-daddy anchors to
+  worktree: string; // the run's worktree — super-daddy's session cwd, so its bash
+  // can run verification and `git diff HEAD` (the prompt promises "cwd is the worktree")
   diff: string; // run branch vs base (committed WIP included)
   reportText: string; // the run's report.md, as supplementary context (not trusted)
   skillText: string; // Max's meridian skill — injected verbatim as the rubric

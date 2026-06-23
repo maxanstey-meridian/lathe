@@ -52,27 +52,30 @@ export const createReviewer = (
   executor: Executor,
   superdaddyModel: ModelConfig,
   timeoutMs: number,
-  directory: string,
 ): Reviewer => {
   let reviewerSessionId: string | undefined;
-  let currentCampaignId: string | undefined;
+  let currentWorktree: string | undefined;
 
   const superReview = async (input: SuperReviewInput): Promise<SuperReviewResult> => {
-    // Campaign-scoped session rebind: delete the prior campaign's session when
-    // the campaignId changes, so reviewer context doesn't leak across campaigns.
+    // The session's cwd is fixed at creation, and super-daddy MUST run verification
+    // and `git diff HEAD` in the run's worktree (renderSuperReview promises "your cwd
+    // is the run's worktree"). Each run/pass has its own worktree, so when it changes
+    // the prior session points at a stale cwd — delete and rebind. This also isolates
+    // context across campaigns: different campaigns never share a worktree.
     // On the very first call both are undefined — skip deleteSession.
-    if (reviewerSessionId !== undefined && input.campaignId !== currentCampaignId) {
+    if (reviewerSessionId !== undefined && input.worktree !== currentWorktree) {
       try {
         await executor.deleteSession(reviewerSessionId);
       } catch {}
       reviewerSessionId = undefined;
     }
 
-    // Sessions are scoped to a directory. Created lazily on first superReview call,
-    // or after a cross-campaign rebind.
+    // Created lazily on first superReview call, or after a worktree rebind. Scoped to
+    // the run's worktree so super-daddy's bash + read tools land inside the change
+    // surface — NOT paths.root, which is not a git repo (the cwd-escalate bug).
     if (!reviewerSessionId) {
-      reviewerSessionId = await executor.createSession("meridian-superdaddy", directory);
-      currentCampaignId = input.campaignId;
+      reviewerSessionId = await executor.createSession("meridian-superdaddy", input.worktree);
+      currentWorktree = input.worktree;
     }
 
     const prompt = renderSuperReview(input);

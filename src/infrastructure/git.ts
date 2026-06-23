@@ -142,12 +142,19 @@ export const diffStat = (worktree: string, base: string): string => {
 // Carried from v1 watchdog-core (proven): numstat plus untracked text files, so
 // junk files count toward the work interval and the surface check (v1 seam,
 // accepted again in v2 §18).
+//
+// `ref` is the diff reference (default HEAD). The gate's per-turn churn baseline
+// wants HEAD (uncommitted delta since the last snapshot). But a report's/
+// checkpoint's "files changed this run" must pass `base`: the executor WIP-commits
+// each pass (R3), so a HEAD diff reads clean and strands the committed work — the
+// same trap `diffStat` documents above. Untracked files are ref-independent.
 export const readDiffStats = (
   worktree: string,
+  ref = "HEAD",
 ): Record<string, { added: number; removed: number }> => {
   const stats: Record<string, { added: number; removed: number }> = {};
   try {
-    const output = git(worktree, ["diff", "--numstat", "HEAD"]);
+    const output = git(worktree, ["diff", "--numstat", ref]);
     for (const line of output.split("\n")) {
       const trimmed = line.trim();
       if (!trimmed) {

@@ -13,6 +13,7 @@ const def = (overrides: Record<string, unknown>) => {
     contextTokens: 10_000,
     contextBudget: 100_000,
     contextTokensFloor: 128,
+    priorContextTokens: 0,
     isFirstTurn: false,
     gateDemandsCheckpoint: false,
     gateReason: undefined,
@@ -606,6 +607,61 @@ test("evaluateTurn: dead-session guard — tokens above floor does not trip", ()
   const result = run(facts);
   // Falls through to branch 10 no-progress (nudge)
   assert.notStrictEqual(result.kind, "park");
+});
+
+test("evaluateTurn: dead-session guard — empty turn after HIGH prior context recovers (overflow, not park)", () => {
+  // A working session whose request overflowed the server window: this turn lands
+  // empty (0 tokens) but the PREVIOUS turn carried real context (89k of a 100k
+  // budget). That is a recoverable overflow, not a dead reseed — rotate.
+  const facts = def({
+    contextTokens: 0,
+    contextBudget: 100_000,
+    contextTokensFloor: 128,
+    priorContextTokens: 89_000,
+    isFirstTurn: false,
+    hadAllowedToolCall: false,
+    worktreeChanged: false,
+  });
+  const result = run(facts);
+  assert.strictEqual(result.kind, "recover_overflow");
+});
+
+test("evaluateTurn: dead-session guard — empty turn after LOW prior context still parks (dead reseed)", () => {
+  // The v2 scar: the reseed itself never landed, so prior context is low. Rotating
+  // again would just repeat the dead reseed — park.
+  const facts = def({
+    contextTokens: 0,
+    contextBudget: 100_000,
+    contextTokensFloor: 128,
+    priorContextTokens: 5_000,
+    isFirstTurn: false,
+    hadAllowedToolCall: false,
+    worktreeChanged: false,
+  });
+  const result = run(facts);
+  assert.strictEqual(result.kind, "park");
+  assert.strictEqual(result.reason, "wedged");
+});
+
+test("evaluateTurn: dead-session guard — overflow/dead split is at contextBudget/2", () => {
+  const at = run({
+    contextTokens: 0,
+    contextBudget: 100_000,
+    priorContextTokens: 50_000,
+    isFirstTurn: false,
+    hadAllowedToolCall: false,
+    worktreeChanged: false,
+  });
+  assert.strictEqual(at.kind, "recover_overflow");
+  const below = run({
+    contextTokens: 0,
+    contextBudget: 100_000,
+    priorContextTokens: 49_999,
+    isFirstTurn: false,
+    hadAllowedToolCall: false,
+    worktreeChanged: false,
+  });
+  assert.strictEqual(below.kind, "park");
 });
 
 test("evaluateTurn: dead-session guard — precedence over no-progress ladder", () => {

@@ -18,7 +18,6 @@ import type { Store } from "../application/ports/store.js";
 import type { Paths } from "../config/paths.js";
 import type { Config } from "../config/schemas.js";
 import { classifyChangedFiles } from "../domain/gate-classification.js";
-import { isTestPath } from "../domain/report.js";
 import {
   OutcomeStatus,
   SubmitReport,
@@ -31,6 +30,7 @@ import {
   type BridgeIntent,
 } from "../domain/index.js";
 import { JournalEvent } from "../domain/journal.js";
+import { isTestPath } from "../domain/report.js";
 import type { QuestionType } from "../domain/review.js";
 import { nowIso } from "./fsio.js";
 import { readDiffStats } from "./git.js";
@@ -59,6 +59,9 @@ export type ActiveRunRef = {
   packet: Packet;
   store: Store;
   turn: number;
+  // The driver-supplied turn aborter (see RunChannel). The bridge trips it right
+  // after recording a stop-and-wait intent so the in-flight turn ends now.
+  endTurn?: () => void;
 };
 
 // RunRef holder — the reference the bridge receives. Matches the reference
@@ -316,6 +319,7 @@ export const handleAskPlanner = async (ref: RunRef, input: AskPlannerInput) => {
   // the consult here: it records the submission and returns at once.
   if (ctx.pendingConsult) {
     ctx.intents.push({ kind: "consult-requested" });
+    ctx.endTurn?.();
     return text(
       JSON.stringify({
         status: "already_submitted",
@@ -340,6 +344,7 @@ export const handleAskPlanner = async (ref: RunRef, input: AskPlannerInput) => {
     event: "driver_note",
     note: `ask_planner submitted (${input.questionType}) — consult deferred to the driver`,
   });
+  ctx.endTurn?.();
 
   return text(
     JSON.stringify({
@@ -420,10 +425,10 @@ export const handleWriteCheckpoint = async (ref: RunRef, input: WriteCheckpointI
       ...(o.state !== undefined ? { state: o.state } : {}),
       ...(o.nextAction !== undefined ? { nextAction: o.nextAction } : {}),
     })),
-    // Untracked-aware: worktree files are uncommitted until finalize, so a
-    // tracked-only `git diff HEAD` would report none. The successor must see
-    // what exists.
-    filesChanged: Object.keys(readDiffStats(ctx.worktree))
+    // Untracked-aware AND base-relative: the executor WIP-commits each pass (R3),
+    // so a `git diff HEAD` reads clean and the successor sees "(clean)". Diff
+    // against `base` to report every file touched this run — committed work too.
+    filesChanged: Object.keys(readDiffStats(ctx.worktree, ctx.packet.frontmatter.base))
       .sort()
       .map((path) => ({ path })),
     filesInspected: [],
@@ -468,9 +473,16 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
     return errorText(JSON.stringify({ error: "no active run" }));
   }
 
-  // A re-submit while the deferred final review is still running is a no-op
-  // hold (the driver is mid-review off the MCP path).
+  // A re-submit while a final review is still pending. `pendingFinalReview` is
+  // STICKY across turns, but the `final-review-requested` intent that triggers
+  // `run_final_review` is per-turn (channel.intents is wiped each turn). If the
+  // turn that first pushed it resolved to a higher-precedence branch (e.g. a
+  // same-turn report-rejected, branch 4 > final-review branch 6) the review was
+  // never run and the state is orphaned. Re-arm the intent every turn Baby pokes
+  // submit_report so the trigger tracks the sticky state.
   if (ctx.pendingFinalReview) {
+    ctx.intents.push({ kind: "final-review-requested" });
+    ctx.endTurn?.();
     return text(
       JSON.stringify({
         status: "review_pending",
@@ -500,8 +512,12 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
     ...(input.blockedReason !== undefined ? { blockedReason: input.blockedReason } : {}),
     ...(input.blockedQuestion !== undefined ? { blockedQuestion: input.blockedQuestion } : {}),
     summary: input.summary,
+    // Base-relative (not HEAD): the executor WIP-commits each pass (R3), so a
+    // HEAD diff reads clean once work is committed — leaving filesChanged empty
+    // and making V8A reject every named regression test. `base` shows the run's
+    // full surface (committed + uncommitted).
     filesChanged: classifyChangedFiles(
-      Object.keys(readDiffStats(ctx.worktree)),
+      Object.keys(readDiffStats(ctx.worktree, ctx.packet.frontmatter.base)),
       ctx.packet.frontmatter.expected_surface,
       ctx.packet.frontmatter.suspicious_surface,
     ),
@@ -533,41 +549,41 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
   }
 
   // Verification failures from the driver's own run.
-   for (const r of verificationResults) {
-     if (r.exitCode !== 0) {
-       problems.push(
-         `verification failed (exit ${r.exitCode}): ${r.command}\n  output: ${r.outputTail.slice(-200)}`,
-       );
-     }
-   }
+  for (const r of verificationResults) {
+    if (r.exitCode !== 0) {
+      problems.push(
+        `verification failed (exit ${r.exitCode}): ${r.command}\n  output: ${r.outputTail.slice(-200)}`,
+      );
+    }
+  }
 
-   // V8A: anti-fabrication — fires on ANY ready_for_review, regardless of pass.
-   // Each named test's file must be in the diff.
-   if (report.status === "ready_for_review") {
-     const changedPaths = new Set(report.filesChanged.map((f) => f.path));
-     for (const t of report.regressionGuard.tests) {
-       if (!changedPaths.has(t.file)) {
-         problems.push(
-           `named regression test \`${t.name}\` in \`${t.file}\` is not among your changed files — name the test you actually added or changed`,
-         );
-       }
-     }
-   }
+  // V8A: anti-fabrication — fires on ANY ready_for_review, regardless of pass.
+  // Each named test's file must be in the diff.
+  if (report.status === "ready_for_review") {
+    const changedPaths = new Set(report.filesChanged.map((f) => f.path));
+    for (const t of report.regressionGuard.tests) {
+      if (!changedPaths.has(t.file)) {
+        problems.push(
+          `named regression test \`${t.name}\` in \`${t.file}\` is not among your changed files — name the test you actually added or changed`,
+        );
+      }
+    }
+  }
 
-   // V8B: repair-pass requirement — fires ONLY on ready_for_review with pass >= 2.
-   if (report.status === "ready_for_review" && ctx.packet.frontmatter.pass >= 2) {
-     const changedPaths = new Set(report.filesChanged.map((f) => f.path));
-     const hasQualifying = report.regressionGuard.tests.some(
-       (t) => changedPaths.has(t.file) && isTestPath(t.file),
-     );
-     if (!hasQualifying && !report.regressionGuard.noTestJustification) {
-       problems.push(
-         `repair pass (pass ${ctx.packet.frontmatter.pass}): a fix without a regression test that would have failed before the fix and passes after is incomplete — add/extend a test in your surface and name it in regressionGuard.tests, or set regressionGuard.noTestJustification if a regression test is genuinely infeasible (and say why).`,
-       );
-     }
-   }
+  // V8B: repair-pass requirement — fires ONLY on ready_for_review with pass >= 2.
+  if (report.status === "ready_for_review" && ctx.packet.frontmatter.pass >= 2) {
+    const changedPaths = new Set(report.filesChanged.map((f) => f.path));
+    const hasQualifying = report.regressionGuard.tests.some(
+      (t) => changedPaths.has(t.file) && isTestPath(t.file),
+    );
+    if (!hasQualifying && !report.regressionGuard.noTestJustification) {
+      problems.push(
+        `repair pass (pass ${ctx.packet.frontmatter.pass}): a fix without a regression test that would have failed before the fix and passes after is incomplete — add/extend a test in your surface and name it in regressionGuard.tests, or set regressionGuard.noTestJustification if a regression test is genuinely infeasible (and say why).`,
+      );
+    }
+  }
 
-   // Mechanical floor (V1/V6): synchronous rejection — no planner needed.
+  // Mechanical floor (V1/V6): synchronous rejection — no planner needed.
   if (problems.length > 0) {
     ctx.reportRejectionCount += 1;
     journal(ctx, { event: "report_rejected", problems });
@@ -580,11 +596,18 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
   // this handler. Defer it: record the report and return; the driver runs the
   // review off the MCP path.
   if (report.status === "ready_for_review") {
+    // A report that passes the floor SUPERSEDES any report-rejected intent from
+    // an earlier submit THIS turn — that earlier report is no longer the truth.
+    // Drop it so final-review-requested is the highest pending intent and
+    // run_final_review fires this turn (else branch 4 > branch 6 orphans the
+    // review and Baby livelocks on review_pending forever).
+    ctx.intents = ctx.intents.filter((i) => i.kind !== "report-rejected");
     ctx.pendingFinalReview = report;
     // No journal here — the actual final_review event is written by the
     // driver-side runner when the review completes. The report_submitted
     // event above is already sufficient tracking.
     ctx.intents.push({ kind: "final-review-requested" });
+    ctx.endTurn?.();
     return text(
       JSON.stringify({
         status: "review_pending",
@@ -603,6 +626,7 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
     blockedQuestion: report.blockedQuestion,
     summary: report.summary,
   });
+  ctx.endTurn?.();
   return text(
     JSON.stringify({
       ok: true,

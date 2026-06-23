@@ -85,7 +85,7 @@ export const JournalEvent = z.discriminatedUnion("event", [
   z.object({
     ...base,
     event: z.literal("rotation"),
-    phase: z.enum(["teardown_demanded", "session_replaced", "no_progress"]),
+    phase: z.enum(["teardown_demanded", "session_replaced", "no_progress", "context_overflow"]),
     contextTokens: z.number().optional(),
     newSessionId: z.string().optional(),
   }),

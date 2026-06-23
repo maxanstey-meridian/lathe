@@ -314,6 +314,69 @@ test("turnLoop: final review request_changes → re-prompt Q7, then accept", () 
 });
 
 // ---------------------------------------------------------------------------
+// abort-on-submit: the bridge trips channel.endTurn mid-send → the driver aborts
+// the in-flight turn (NOT a send failure) and runs the recorded intent this turn.
+
+test("turnLoop: Baby submits mid-turn → driver aborts the send, runs final review, terminal", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-abort-"));
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+
+    const channel = emptyChannel();
+    const report = aSubmitReport();
+    let sends = 0;
+    // Mirrors the real handler: submit_report records the intent, then trips
+    // endTurn (which aborts this turn's signal); the executor then rejects the
+    // way the node:http adapter does on an aborted socket.
+    const abortingExecutor: Executor = {
+      createSession: async () => "baby-0",
+      sendMessage: async (_sid, _text, _model, _timeout, signal) => {
+        sends += 1;
+        channel.pendingFinalReview = report;
+        channel.intents.push({ kind: "final-review-requested" });
+        channel.endTurn?.();
+        if (signal?.aborted) {
+          throw new Error("request cancelled by caller (abandoned)");
+        }
+        return { info: { id: `m${sends}`, sessionID: "s", tokens: {} }, parts: [] };
+      },
+      listMessages: async () => [],
+      deleteSession: async () => {},
+    };
+    const ports = makePorts(store, fakeRepo(), abortingExecutor, fakePlanner());
+
+    const result = await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    // The abort was NOT a send failure: the run reached the terminal accept, in a
+    // single send, off the recorded intent.
+    equal(result.outcome.status, "ready_for_review");
+    equal(result.finalReview?.verdict, "accept");
+    equal(sends, 1);
+    const journal = store.readJournal(RUN_ID);
+    ok(
+      journal.some((e) => e.event === "driver_note" && e.note.includes("turn ended on submit")),
+      "should journal the deliberate-abort driver note",
+    );
+    ok(
+      !journal.some((e) => e.event === "driver_note" && e.note.includes("turn send failed")),
+      "an aborted-on-submit turn must NOT be counted as a send failure",
+    );
+    ok(journal.some((e) => e.event === "report_accepted"));
+    await cleanTemp(tmp);
+  })();
+});
+
+// ---------------------------------------------------------------------------
 // consult round-trip
 
 test("turnLoop: consult round-trip — accepted decision clears the gate", () => {

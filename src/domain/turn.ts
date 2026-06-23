@@ -54,8 +54,12 @@ export const TurnFacts = z.object({
   contextBudget: z.number(),
 
   // Dead-session guard (complementary to branch 7 send-failure path):
-  // floor of acceptable context tokens; first-turn exempt.
+  // floor of acceptable context tokens; first-turn exempt. priorContextTokens is
+  // the PREVIOUS turn's contextTokens — it splits an empty landing into a
+  // recoverable overflow (real context was in flight → rotate) vs a dead reseed
+  // (low context → park).
   contextTokensFloor: z.number(),
+  priorContextTokens: z.number(),
   isFirstTurn: z.boolean(),
 
   // Gate state (branch 9): demands checkpoint (latched OR triggered)
@@ -127,6 +131,11 @@ export type TurnDecision =
   // 10a/7c. No-progress rotate / rotation in-flight without checkpoint →
   //         rotate without checkpoint (seeds Q2 if checkpoint available, Q8 if not)
   | { kind: "rotate"; checkpoint: { number: number } | null }
+  // Overflow recovery: a working session (substantial prior context) returned an
+  // empty turn — the request overflowed the server's hard window. Rotate to a
+  // fresh session (Q2/Q8 reseed lands low) WITHOUT climbing the no-progress
+  // ladder (work was done; the wall was the window, not a stall).
+  | { kind: "recover_overflow" }
 
   // 7c. Rotation in-flight with no checkpoint written, under bound →
   //     re-demand teardown Q5, ladder climbs
@@ -161,6 +170,7 @@ export const evaluateTurn = (facts: z.infer<typeof TurnFacts>): Dec => {
     contextTokens,
     contextBudget,
     contextTokensFloor,
+    priorContextTokens,
     isFirstTurn,
     gateDemandsCheckpoint,
     gateReason,
@@ -319,11 +329,20 @@ export const evaluateTurn = (facts: z.infer<typeof TurnFacts>): Dec => {
   }
 
   // ---- Dead-session guard (complementary to branch 7 send-failure path) ----
-  // A send that returns but with an empty/near-zero prompt landing — the v2
-  // reseed-dead-session scar. First-turn exempt (a fresh session always starts
-  // with the full seed). Fires BEFORE the no-progress ladder so a dead landing
-  // parks deliberately instead of spiralling up the ladder.
+  // A send that returns but with an empty/near-zero prompt landing. First-turn
+  // exempt (a fresh session always starts with the full seed). Fires BEFORE the
+  // no-progress ladder so a dead landing is handled deliberately instead of
+  // spiralling up the ladder. Two distinct causes, split on the PRIOR turn:
+  //   - High prior context → a working session whose request OVERFLOWED the
+  //     server window (opencode returns an empty completion on the 4xx). This is
+  //     RECOVERABLE: rotating reseeds low and continues. NOT the v2 scar.
+  //   - Low prior context → the v2 reseed-dead-session scar: the reseed itself
+  //     never landed, so rotating again just repeats it → park.
+  // The divide is contextBudget/2: above it, real context was in flight.
   if (!isFirstTurn && contextTokens < contextTokensFloor) {
+    if (priorContextTokens >= contextBudget / 2) {
+      return { kind: "recover_overflow" };
+    }
     return {
       kind: "park",
       reason: "wedged",

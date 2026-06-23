@@ -175,17 +175,11 @@ const cmdAnswer = (args: string[], deps: CliDeps): number => {
   return 0;
 };
 
-const cmdTail = (args: string[], deps: CliDeps): number => {
-  const follow = !args.includes("--no-follow");
-  const plain = args.includes("--plain");
-  const runId = args.find((a) => !a.startsWith("--")) ?? deps.store.readActiveRun()?.runId;
-  if (!runId) {
-    console.log("no active run");
-    return follow ? 0 : 1;
-  }
-  // On a real terminal the Ink split-pane UI takes over (Baby/Daddy panes, the
-  // context gauge, the status strip); the plain stream remains for pipes,
-  // --plain, and --no-follow replay (CONTRACT X3, D4).
+// Tail one known run: the Ink split-pane UI on a real terminal (Baby/Daddy panes,
+// the context gauge, the status strip), else the plain journal stream for pipes,
+// --plain, and --no-follow replay (CONTRACT X3, D4). Returns -1 to stay alive
+// while live-following, a terminal code otherwise.
+const tailRunId = (runId: string, deps: CliDeps, follow: boolean, plain: boolean): number => {
   if (follow && !plain && process.stdout.isTTY) {
     return deps.openTail(runId);
   }
@@ -219,6 +213,38 @@ const cmdTail = (args: string[], deps: CliDeps): number => {
   watchFile(file, { interval: 1000 }, flush);
   process.on("SIGINT", () => {
     unwatchFile(file);
+    process.exit(0);
+  });
+  return -1;
+};
+
+const cmdTail = (args: string[], deps: CliDeps): number => {
+  const follow = !args.includes("--no-follow");
+  const plain = args.includes("--plain");
+  const explicit = args.find((a) => !a.startsWith("--"));
+  const runId = explicit ?? deps.store.readActiveRun()?.runId;
+  if (runId !== undefined) {
+    return tailRunId(runId, deps, follow, plain);
+  }
+
+  // Nothing named and nothing active yet. Without --follow this is a one-shot
+  // query, so report and exit; with --follow, sit and poll for a run to start
+  // (e.g. the daemon hasn't picked up the queue yet), then tail it.
+  if (!follow) {
+    console.log("no active run");
+    return 1;
+  }
+  console.log("no active run — waiting for one to start…");
+  const poll = setInterval(() => {
+    const next = deps.store.readActiveRun()?.runId;
+    if (next !== undefined) {
+      clearInterval(poll);
+      console.log(`run ${next} started — tailing…`);
+      tailRunId(next, deps, follow, plain);
+    }
+  }, 1000);
+  process.on("SIGINT", () => {
+    clearInterval(poll);
     process.exit(0);
   });
   return -1;

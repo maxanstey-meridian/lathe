@@ -96,13 +96,10 @@ const Pane = ({
 }) => {
   // 10s window: tool gaps (installs, typechecks) shouldn't flip "active" to "waiting".
   const active = Date.now() - pane.lastAt < 10_000;
-  // Content area is height-2 (top+bottom border); the title takes one of those
-  // rows, so at most height-3 lines fit. Slicing tighter keeps the pane's natural
-  // height inside its box so it never pushes the frame past the terminal rows.
   const visible: PaneLine[] = [
     ...pane.lines,
     ...(pane.current.trim() ? [{ text: pane.current, style: pane.currentStyle }] : []),
-  ].slice(-(height - 3));
+  ].slice(-(height - 2));
   return (
     <Box
       flexDirection="column"
@@ -318,7 +315,7 @@ const TailApp = ({ store, budget, subscribe, runId, daddyDirectory }: TailUiDeps
   const terminal = ["ready_for_review", "blocked", "failed", "accepted"].includes(stats.status);
 
   return (
-    <Box flexDirection="column" height={rows} overflow="hidden">
+    <Box flexDirection="column">
       <Box>
         <Pane title="baby" pane={baby} height={paneHeight} accent="green" />
         <Pane title="daddy" pane={daddy} height={paneHeight} accent="magenta" />

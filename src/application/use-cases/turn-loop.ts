@@ -223,6 +223,9 @@ export const turnLoop = async (
   let turn = 0;
   let ladder = 0;
   let sendFailures = 0;
+  // Previous turn's measured context — lets the dead-session guard tell a
+  // recoverable overflow (real context was in flight) from a dead reseed.
+  let priorContextTokens = 0;
   let rotationPending = false;
   let toolCallsSinceDecision = 0;
   let lastSeenMessageId: string | undefined;
@@ -256,49 +259,91 @@ export const turnLoop = async (
       preview: next.text.slice(0, 200),
     });
 
-    let response: TurnResponse;
+    // Per-turn aborter: the bridge trips channel.endTurn the instant Baby records
+    // a stop-and-wait intent (submit_report / ask_planner), tearing down the
+    // in-flight send so the driver takes the next decision THIS turn — instead of
+    // Baby busy-looping the "review_pending"/"submitted" hold until opencode's
+    // max-steps cap. A fresh controller per turn; only this turn's send sees it.
+    const aborter = new AbortController();
+    channel.endTurn = () => aborter.abort();
+
+    let response: TurnResponse | undefined;
     try {
-      response = await executor.sendMessage(sessionId, next.text, babyModel, config.baby.timeoutMs);
+      response = await executor.sendMessage(
+        sessionId,
+        next.text,
+        babyModel,
+        config.baby.timeoutMs,
+        aborter.signal,
+      );
       sendFailures = 0;
     } catch (err) {
-      // A dead/timed-out turn is the crash path (R10): rotate to a fresh session
-      // via reconciliation (O6) once; a second consecutive failure parks wedged.
-      sendFailures += 1;
-      const detail = err instanceof Error ? err.message : String(err);
-      journal(ports, runId, turn, {
-        event: "driver_note",
-        note: `turn send failed (${sendFailures}): ${detail}`,
-      });
-      if (sendFailures >= 2) {
-        return finish({
-          status: "blocked",
-          reason: "wedged",
-          question:
-            "Two consecutive executor turns failed to complete (model/session failure). See journal.",
+      if (aborter.signal.aborted) {
+        // Deliberate abort: Baby submitted/consulted mid-turn and the bridge
+        // recorded the intent into channel.intents before tripping endTurn. This
+        // is NOT a send failure — fall through to gather+evaluate so the
+        // terminal/consult/review branch (3/5/6, above every token/gate/progress
+        // branch) runs this turn. No response payload to gather from.
+        journal(ports, runId, turn, {
+          event: "driver_note",
+          note: "turn ended on submit — aborted the in-flight send; the driver takes the next decision",
         });
+        sendFailures = 0;
+        response = undefined;
+      } else {
+        // A dead/timed-out turn is the crash path (R10): rotate to a fresh session
+        // via reconciliation (O6) once; a second consecutive failure parks wedged.
+        sendFailures += 1;
+        const detail = err instanceof Error ? err.message : String(err);
+        journal(ports, runId, turn, {
+          event: "driver_note",
+          note: `turn send failed (${sendFailures}): ${detail}`,
+        });
+        if (sendFailures >= 2) {
+          return finish({
+            status: "blocked",
+            reason: "wedged",
+            question:
+              "Two consecutive executor turns failed to complete (model/session failure). See journal.",
+          });
+        }
+        sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, false);
+        const ledger = store.readLedger(runId);
+        const review = store.readReviewState(runId);
+        const decisions = store.readDecisions(runId);
+        next = {
+          name: "Q8",
+          text: q8ReconciliationSeed(
+            packet,
+            ledger,
+            review,
+            decisions,
+            repo.diffStat(worktree, packet.frontmatter.base),
+          ),
+        };
+        continue;
       }
-      sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, false);
-      const ledger = store.readLedger(runId);
-      const review = store.readReviewState(runId);
-      const decisions = store.readDecisions(runId);
-      next = {
-        name: "Q8",
-        text: q8ReconciliationSeed(
-          packet,
-          ledger,
-          review,
-          decisions,
-          repo.diffStat(worktree, packet.frontmatter.base),
-        ),
-      };
-      continue;
     }
 
     // --- gather --------------------------------------------------------------
-    const turnParts = await collectTurnParts(ports, sessionId, lastSeenMessageId, response);
-    lastSeenMessageId = response.info.id;
-    const obs = journalTurn(ports, runId, turn, response, turnParts);
-    toolCallsSinceDecision += obs.toolCalls;
+    // Normal turn: re-fetch the turn's parts + journal them. Aborted-on-submit
+    // turn: no response payload — the recorded intents drive the decision, so
+    // neutral facts carrying the last-known context suffice (the intent branches
+    // sit above every token/gate/progress branch).
+    let obs: TurnObservations;
+    if (response) {
+      const turnParts = await collectTurnParts(ports, sessionId, lastSeenMessageId, response);
+      lastSeenMessageId = response.info.id;
+      obs = journalTurn(ports, runId, turn, response, turnParts);
+      toolCallsSinceDecision += obs.toolCalls;
+    } else {
+      obs = {
+        text: "",
+        contextTokens: priorContextTokens,
+        hadAllowedToolCall: false,
+        toolCalls: 0,
+      };
+    }
 
     const intents = channel.intents;
     const worktreeChanged = JSON.stringify(repo.readDiffStats(worktree)) !== diffBefore;
@@ -316,6 +361,7 @@ export const turnLoop = async (
       contextTokens: obs.contextTokens,
       contextBudget,
       contextTokensFloor: config.thresholds.contextTokensFloor,
+      priorContextTokens,
       isFirstTurn: turn === 1,
       gateDemandsCheckpoint: gateReason !== undefined,
       gateReason,
@@ -332,6 +378,10 @@ export const turnLoop = async (
       ladderParkAt: config.thresholds.ladderParkAt,
       softNudgeDue,
     });
+
+    // Carry this turn's context into the next iteration BEFORE any branch
+    // continues/returns — the dead-session guard reads it as priorContextTokens.
+    priorContextTokens = obs.contextTokens;
 
     // --- execute -------------------------------------------------------------
     switch (decision.kind) {
@@ -568,6 +618,26 @@ export const turnLoop = async (
             contextTokens: obs.contextTokens,
           });
         }
+        const { seed: reseed, hasCheckpoint } = reseedFromCheckpoint(ports, packet, worktree);
+        sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, hasCheckpoint);
+        next = reseed;
+        continue;
+      }
+
+      case "recover_overflow": {
+        // A working session's request overflowed the server's context window
+        // (opencode returns an empty completion on the 4xx). Recover by rotating
+        // to a fresh session that reseeds LOW — Q2 from the latest durable
+        // checkpoint, else Q8 worktree reconciliation; the worktree (committed +
+        // uncommitted work) survives the rotation, so progress is not lost. No
+        // ladder climb: the wall was the window, not a stall. If the reseed
+        // itself overflows, the next turn lands at 0 with priorContextTokens 0,
+        // which falls through to the dead-session park — so this cannot spin.
+        journal(ports, runId, turn, {
+          event: "rotation",
+          phase: "context_overflow",
+          contextTokens: priorContextTokens,
+        });
         const { seed: reseed, hasCheckpoint } = reseedFromCheckpoint(ports, packet, worktree);
         sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, hasCheckpoint);
         next = reseed;

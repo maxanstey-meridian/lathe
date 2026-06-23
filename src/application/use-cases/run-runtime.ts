@@ -51,6 +51,12 @@ export type RunChannel = {
   reportRejectionCount: number;
   checkpointBounceCount: number;
   turn: number;
+  // Set by the loop each turn to abort the in-flight send. The bridge trips it
+  // the instant it records a stop-and-wait intent (submit_report / ask_planner),
+  // so Baby's opencode turn is torn down at once — instead of Baby busy-looping
+  // the "review_pending"/"submitted" hold until opencode's max-steps cap. Optional:
+  // absent outside a live turn (and in tests that drive the channel directly).
+  endTurn?: () => void;
 };
 
 // What a finished attempt resolves to — the terminal lifecycle status the

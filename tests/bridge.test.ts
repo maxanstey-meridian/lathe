@@ -1,11 +1,11 @@
 // Tests for the MCP bridge tool handlers (CONTRACT §9, §8 O2/O4).
 // Uses real StoreAdapter with temp dirs — matches store.test.ts pattern.
 
+import { execSync } from "child_process";
 import { equal, strictEqual, ok, deepStrictEqual, match, rejects } from "node:assert";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { execSync } from "child_process";
 import { test } from "node:test";
 import type { Clock } from "../src/application/ports/clock.js";
 import type { Repo } from "../src/application/ports/repo.js";
@@ -552,7 +552,7 @@ test("submit_report: rejected when ready_for_review with incomplete outcomes", a
 // submit_report: already-reviewing hold
 // ===========================================================================
 
-test("submit_report: returns review_pending when pendingFinalReview is set", async () => {
+test("submit_report: returns review_pending and RE-ARMS the intent when pendingFinalReview is set", async () => {
   const { ref, tmp } = makeRef();
   ref.current.pendingFinalReview = {
     status: "ready_for_review",
@@ -565,7 +565,50 @@ test("submit_report: returns review_pending when pendingFinalReview is set", asy
   equal(result.isError, false);
   const body = JSON.parse(result.content[0].text);
   equal(body.status, "review_pending");
-  strictEqual(ref.current.intents.length, 0);
+  // The sticky pendingFinalReview must re-arm its one-shot trigger every turn,
+  // else a review orphaned by a prior higher-precedence branch never reruns.
+  strictEqual(ref.current.intents.length, 1);
+  equal(ref.current.intents[0].kind, "final-review-requested");
+  await cleanTemp(tmp);
+});
+
+// ===========================================================================
+// submit_report: reject-then-pass IN ONE TURN must not orphan the review
+// (regression: report-rejected (branch 4) outranks final-review (branch 6), so
+// a stale same-turn rejection would preempt the review forever → review_pending
+// livelock with zero final_review events)
+// ===========================================================================
+
+test("submit_report: a passing re-submit drops the same-turn report-rejected intent", async () => {
+  const { ref, tmp } = makeRef();
+  // First submit this turn: outcome not done → floor rejects → report-rejected.
+  const rejected = await handleSubmitReport(ref, {
+    status: "ready_for_review",
+    summary: "premature",
+  });
+  equal(rejected.isError, true);
+  strictEqual(ref.current.intents.length, 1);
+  equal(ref.current.intents[0].kind, "report-rejected");
+
+  // Same turn (intents NOT cleared): Baby fixes the outcome and re-submits → passes.
+  await handleUpdateOutcomes(ref, {
+    outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
+  });
+  const passed = await handleSubmitReport(ref, {
+    status: "ready_for_review",
+    summary: "fixed",
+  });
+  equal(passed.isError, false);
+  equal(JSON.parse(passed.content[0].text).status, "review_pending");
+
+  // The superseded rejection is gone; final-review-requested is the live intent.
+  ok(
+    !ref.current.intents.some((i) => i.kind === "report-rejected"),
+    "stale same-turn report-rejected must be dropped",
+  );
+  equal(ref.current.intents[ref.current.intents.length - 1].kind, "final-review-requested");
+  strictEqual(ref.current.pendingFinalReview !== null, true);
+  await cleanTemp(tmp);
 });
 
 // ===========================================================================
@@ -625,9 +668,7 @@ test("submit_report: pass-1 anti-fabrication — test not in diff → rejected",
   });
   equal(result.isError, true);
   const body = JSON.parse(result.content[0].text);
-  ok(
-    body.problems.some((p: string) => p.includes("is not among your changed files")),
-  );
+  ok(body.problems.some((p: string) => p.includes("is not among your changed files")));
   strictEqual(ref.current.intents[1].kind, "report-rejected");
   await cleanTemp(tmp);
 });
@@ -646,9 +687,7 @@ test("submit_report: pass-2 anti-fabrication — test not in diff → rejected",
   });
   equal(result.isError, true);
   const body = JSON.parse(result.content[0].text);
-  ok(
-    body.problems.some((p: string) => p.includes("is not among your changed files")),
-  );
+  ok(body.problems.some((p: string) => p.includes("is not among your changed files")));
   strictEqual(ref.current.intents[1].kind, "report-rejected");
   await cleanTemp(tmp);
 });
@@ -677,6 +716,48 @@ test("submit_report: pass-2 naming a real changed test file → floor clean", as
   // Create a real test file in the diff
   await seedWorktreeGit(tmp, "tests/fix.test.ts");
   // Override the worktree reference to ensure readDiffStats picks up the file
+  ref.current.worktree = tmp;
+  const result = await handleSubmitReport(ref, {
+    status: "ready_for_review",
+    summary: "Fixed it.",
+    regressionGuard: {
+      tests: [{ name: "fix-test", file: "tests/fix.test.ts", covers: "the broken path" }],
+    },
+  });
+  equal(result.isError, false);
+  const body = JSON.parse(result.content[0].text);
+  equal(body.status, "review_pending");
+  await cleanTemp(tmp);
+});
+
+// Helper: like seedWorktreeGit, but the work is WIP-COMMITTED on a branch off
+// `main`, so `git diff HEAD` reads clean and only `git diff main` (the packet
+// base) shows it — reproducing the live R3 condition.
+const seedWorktreeGitCommitted = async (worktree: string, addedFile: string) => {
+  execSync("git init -b main", { cwd: worktree, stdio: "ignore" });
+  execSync('git config user.email "test@test.com"', { cwd: worktree, stdio: "ignore" });
+  execSync('git config user.name "Test"', { cwd: worktree, stdio: "ignore" });
+  await writeFile(join(worktree, "seed.txt"), "base\n");
+  execSync("git add .", { cwd: worktree, stdio: "ignore" });
+  execSync('git commit -m "base"', { cwd: worktree, stdio: "ignore" });
+  // Branch off main, then commit the work — main stays at the base commit.
+  execSync("git checkout -b work", { cwd: worktree, stdio: "ignore" });
+  await mkdir(join(worktree, dirname(addedFile)), { recursive: true });
+  await writeFile(join(worktree, addedFile), "modified\n");
+  execSync("git add .", { cwd: worktree, stdio: "ignore" });
+  execSync('git commit -m "wip"', { cwd: worktree, stdio: "ignore" });
+};
+
+test("submit_report: named test in COMMITTED work (diff HEAD clean) → floor clean (regression: V8A vs WIP-commit)", async () => {
+  // Regression for the review livelock: the executor WIP-commits each pass (R3),
+  // so filesChanged built from `git diff HEAD` reads empty and V8A rejected every
+  // named regression test forever. filesChanged must diff `base`, which sees the
+  // committed work. Old (HEAD-relative) code rejects here; fixed code passes.
+  const { ref, tmp } = makeRef();
+  await handleUpdateOutcomes(ref, {
+    outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
+  });
+  await seedWorktreeGitCommitted(tmp, "tests/fix.test.ts");
   ref.current.worktree = tmp;
   const result = await handleSubmitReport(ref, {
     status: "ready_for_review",

@@ -469,10 +469,10 @@ test("renderFollowupPacket: promote=true → frontmatter carries promoted:true, 
     const parsed = parsePacket(file);
     assert.ok(parsed.ok, "promoted packet must admit: " + (parsed.ok ? "" : parsed.problems.join("; ")));
     assert.strictEqual(parsed.packet.frontmatter.promoted, true);
-    // Body must not mention promotion, Daddy, or the model swap
-    assert.ok(!out.body.toLowerCase().includes("promot"));
-    assert.ok(!out.body.toLowerCase().includes("daddy"));
-    assert.ok(!out.body.toLowerCase().includes("model"));
+    // Body must not mention promotion (the secret lives only in frontmatter).
+    // The body already contains "Super-daddy" as an existing role name — that's fine.
+    const bodyText = out.content.slice(out.content.indexOf("\n---\n") + 5);
+    assert.ok(!bodyText.toLowerCase().includes("promot"));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

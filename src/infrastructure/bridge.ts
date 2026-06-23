@@ -18,7 +18,6 @@ import type { Store } from "../application/ports/store.js";
 import type { Paths } from "../config/paths.js";
 import type { Config } from "../config/schemas.js";
 import { classifyChangedFiles } from "../domain/gate-classification.js";
-import { isTestPath } from "../domain/report.js";
 import {
   OutcomeStatus,
   SubmitReport,
@@ -31,6 +30,7 @@ import {
   type BridgeIntent,
 } from "../domain/index.js";
 import { JournalEvent } from "../domain/journal.js";
+import { isTestPath } from "../domain/report.js";
 import type { QuestionType } from "../domain/review.js";
 import { nowIso } from "./fsio.js";
 import { readDiffStats } from "./git.js";
@@ -533,41 +533,41 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
   }
 
   // Verification failures from the driver's own run.
-   for (const r of verificationResults) {
-     if (r.exitCode !== 0) {
-       problems.push(
-         `verification failed (exit ${r.exitCode}): ${r.command}\n  output: ${r.outputTail.slice(-200)}`,
-       );
-     }
-   }
+  for (const r of verificationResults) {
+    if (r.exitCode !== 0) {
+      problems.push(
+        `verification failed (exit ${r.exitCode}): ${r.command}\n  output: ${r.outputTail.slice(-200)}`,
+      );
+    }
+  }
 
-   // V8A: anti-fabrication — fires on ANY ready_for_review, regardless of pass.
-   // Each named test's file must be in the diff.
-   if (report.status === "ready_for_review") {
-     const changedPaths = new Set(report.filesChanged.map((f) => f.path));
-     for (const t of report.regressionGuard.tests) {
-       if (!changedPaths.has(t.file)) {
-         problems.push(
-           `named regression test \`${t.name}\` in \`${t.file}\` is not among your changed files — name the test you actually added or changed`,
-         );
-       }
-     }
-   }
+  // V8A: anti-fabrication — fires on ANY ready_for_review, regardless of pass.
+  // Each named test's file must be in the diff.
+  if (report.status === "ready_for_review") {
+    const changedPaths = new Set(report.filesChanged.map((f) => f.path));
+    for (const t of report.regressionGuard.tests) {
+      if (!changedPaths.has(t.file)) {
+        problems.push(
+          `named regression test \`${t.name}\` in \`${t.file}\` is not among your changed files — name the test you actually added or changed`,
+        );
+      }
+    }
+  }
 
-   // V8B: repair-pass requirement — fires ONLY on ready_for_review with pass >= 2.
-   if (report.status === "ready_for_review" && ctx.packet.frontmatter.pass >= 2) {
-     const changedPaths = new Set(report.filesChanged.map((f) => f.path));
-     const hasQualifying = report.regressionGuard.tests.some(
-       (t) => changedPaths.has(t.file) && isTestPath(t.file),
-     );
-     if (!hasQualifying && !report.regressionGuard.noTestJustification) {
-       problems.push(
-         `repair pass (pass ${ctx.packet.frontmatter.pass}): a fix without a regression test that would have failed before the fix and passes after is incomplete — add/extend a test in your surface and name it in regressionGuard.tests, or set regressionGuard.noTestJustification if a regression test is genuinely infeasible (and say why).`,
-       );
-     }
-   }
+  // V8B: repair-pass requirement — fires ONLY on ready_for_review with pass >= 2.
+  if (report.status === "ready_for_review" && ctx.packet.frontmatter.pass >= 2) {
+    const changedPaths = new Set(report.filesChanged.map((f) => f.path));
+    const hasQualifying = report.regressionGuard.tests.some(
+      (t) => changedPaths.has(t.file) && isTestPath(t.file),
+    );
+    if (!hasQualifying && !report.regressionGuard.noTestJustification) {
+      problems.push(
+        `repair pass (pass ${ctx.packet.frontmatter.pass}): a fix without a regression test that would have failed before the fix and passes after is incomplete — add/extend a test in your surface and name it in regressionGuard.tests, or set regressionGuard.noTestJustification if a regression test is genuinely infeasible (and say why).`,
+      );
+    }
+  }
 
-   // Mechanical floor (V1/V6): synchronous rejection — no planner needed.
+  // Mechanical floor (V1/V6): synchronous rejection — no planner needed.
   if (problems.length > 0) {
     ctx.reportRejectionCount += 1;
     journal(ctx, { event: "report_rejected", problems });

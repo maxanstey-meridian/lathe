@@ -135,7 +135,12 @@ export const renderReportMarkdown = (
       }
     }
     if (report.regressionGuard.noTestJustification) {
-      lines.push(`No regression test (justification):`, "", report.regressionGuard.noTestJustification, "");
+      lines.push(
+        `No regression test (justification):`,
+        "",
+        report.regressionGuard.noTestJustification,
+        "",
+      );
     }
   }
   if (finalReview) {

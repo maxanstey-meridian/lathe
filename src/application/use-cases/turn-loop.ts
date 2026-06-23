@@ -201,8 +201,16 @@ import type { ModelConfig } from "../ports/executor.js";
 
 export const resolveBabyModel = (config: Config, promoted: boolean): ModelConfig =>
   promoted
-    ? { providerId: config.daddy.providerId, modelId: config.daddy.modelId, agent: config.baby.agent }
-    : { providerId: config.baby.providerId, modelId: config.baby.modelId, agent: config.baby.agent };
+    ? {
+        providerId: config.daddy.providerId,
+        modelId: config.daddy.modelId,
+        agent: config.baby.agent,
+      }
+    : {
+        providerId: config.baby.providerId,
+        modelId: config.baby.modelId,
+        agent: config.baby.agent,
+      };
 
 // ---------------------------------------------------------------------------
 // turnLoop — run one attempt to a terminal outcome.

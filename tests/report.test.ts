@@ -99,7 +99,7 @@ describe("report-render — renderReportMarkdown", () => {
     match(output, /foo was broken/);
   });
 
- it("renders regression guard section when justification is present", () => {
+  it("renders regression guard section when justification is present", () => {
     const report: SubmitReport = {
       ...minReport(),
       regressionGuard: { tests: [], noTestJustification: "The fix is a config change only." },

@@ -1,11 +1,11 @@
 // Tests for the MCP bridge tool handlers (CONTRACT §9, §8 O2/O4).
 // Uses real StoreAdapter with temp dirs — matches store.test.ts pattern.
 
+import { execSync } from "child_process";
 import { equal, strictEqual, ok, deepStrictEqual, match, rejects } from "node:assert";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { execSync } from "child_process";
 import { test } from "node:test";
 import type { Clock } from "../src/application/ports/clock.js";
 import type { Repo } from "../src/application/ports/repo.js";
@@ -625,9 +625,7 @@ test("submit_report: pass-1 anti-fabrication — test not in diff → rejected",
   });
   equal(result.isError, true);
   const body = JSON.parse(result.content[0].text);
-  ok(
-    body.problems.some((p: string) => p.includes("is not among your changed files")),
-  );
+  ok(body.problems.some((p: string) => p.includes("is not among your changed files")));
   strictEqual(ref.current.intents[1].kind, "report-rejected");
   await cleanTemp(tmp);
 });
@@ -646,9 +644,7 @@ test("submit_report: pass-2 anti-fabrication — test not in diff → rejected",
   });
   equal(result.isError, true);
   const body = JSON.parse(result.content[0].text);
-  ok(
-    body.problems.some((p: string) => p.includes("is not among your changed files")),
-  );
+  ok(body.problems.some((p: string) => p.includes("is not among your changed files")));
   strictEqual(ref.current.intents[1].kind, "report-rejected");
   await cleanTemp(tmp);
 });

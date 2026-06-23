@@ -467,7 +467,10 @@ test("renderFollowupPacket: promote=true → frontmatter carries promoted:true, 
     const file = join(dir, out.filename);
     writeFileSync(file, out.content);
     const parsed = parsePacket(file);
-    assert.ok(parsed.ok, "promoted packet must admit: " + (parsed.ok ? "" : parsed.problems.join("; ")));
+    assert.ok(
+      parsed.ok,
+      "promoted packet must admit: " + (parsed.ok ? "" : parsed.problems.join("; ")),
+    );
     assert.strictEqual(parsed.packet.frontmatter.promoted, true);
     // Body must not mention promotion (the secret lives only in frontmatter).
     // The body already contains "Super-daddy" as an existing role name — that's fine.

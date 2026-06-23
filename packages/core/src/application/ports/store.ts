@@ -129,4 +129,8 @@ export type Store = {
   // Journal (append-only event log, CONTRACT §3)
   appendJournal(runId: string, event: JournalEvent): void;
   readJournal(runId: string): JournalEvent[];
+
+  // Global resumable journal — cross-run, gap-free, sorted by seq.
+  // The daemon's /events SSE spine consumes this for a single resuming stream.
+  readJournalSince(seq: number): { seq: number; runId: string; event: JournalEvent }[];
 };

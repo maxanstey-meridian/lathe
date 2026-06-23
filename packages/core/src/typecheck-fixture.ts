@@ -128,6 +128,7 @@ const fakeStore: Store = {
   removeStaged: () => {},
   appendJournal: () => {},
   readJournal: () => [],
+  readJournalSince: () => [],
 };
 
 // ---------------------------------------------------------------------------

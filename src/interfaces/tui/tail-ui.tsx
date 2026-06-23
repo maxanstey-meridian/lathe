@@ -357,5 +357,22 @@ const TailApp = ({ store, budget, subscribe, runId, daddyDirectory }: TailUiDeps
 };
 
 export const runTailUi = (deps: TailUiDeps): void => {
-  render(<TailApp {...deps} />);
+  if (!process.stdout.isTTY) {
+    render(<TailApp {...deps} />);
+    return;
+  }
+
+  let restored = false;
+  const restore = (): void => {
+    if (restored) {
+      return;
+    }
+    restored = true;
+    process.stdout.write("\x1b[?1049l");
+  };
+
+  process.stdout.write("\x1b[?1049h\x1b[2J\x1b[H");
+  process.once("exit", restore);
+  const instance = render(<TailApp {...deps} />);
+  void instance.waitUntilExit().then(restore);
 };

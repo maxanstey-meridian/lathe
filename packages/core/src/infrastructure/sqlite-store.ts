@@ -63,7 +63,7 @@ import { RunMeta as RunMetaSchema } from "../domain/run.js";
 import { ReviewState as ReviewStateSchema } from "../domain/run.js";
 import { Decision as DecisionSchema } from "../domain/run.js";
 import { ActiveRun as ActiveRunSchema } from "../domain/run.js";
-import { writeAtomic, nowIso } from "../infrastructure/fsio.js";
+import { writeAtomic, writeValidated } from "../infrastructure/fsio.js";
 
 // ---------------------------------------------------------------------------
 // Convergence log entry schema — local, matching the port's ConvergenceLogEntry
@@ -456,7 +456,7 @@ export class SqliteStoreAdapter implements Store {
     // Requeued runs: meta.status === "queued", listed first (F2).
     // Query runs table instead of scanning meta.json files.
     const requeued: QueueEntry[] = this.db
-      .prepare("SELECT meta FROM runs")
+      .prepare("SELECT meta FROM runs ORDER BY run_id")
       .all()
       .map((r) => {
         const meta = RunMetaSchema.parse(JSON.parse(String(r.meta)));
@@ -628,10 +628,11 @@ export class SqliteStoreAdapter implements Store {
   writeCheckpoint(runId: string, checkpoint: Checkpoint): void {
     const dir = this.paths.checkpointsDir(runId);
     mkdirSync(dir, { recursive: true });
-    const path = join(dir, `${String(checkpoint.number).padStart(4, "0")}.json`);
-    // Validate then write
-    CheckpointSchema.parse(checkpoint);
-    writeAtomic(path, jsonStringify(checkpoint));
+    writeValidated(
+      join(dir, `${String(checkpoint.number).padStart(4, "0")}.json`),
+      CheckpointSchema,
+      checkpoint,
+    );
   }
 
   nextCheckpointNumber(runId: string): number {

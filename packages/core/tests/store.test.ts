@@ -879,9 +879,6 @@ test("store: journal skips invalid lines (J3)", async () => {
 // Parity: contract tests over both adapters
 // ---------------------------------------------------------------------------
 
-const createSqliteStore = (tmp: string, repo: Repo, clock: Clock) =>
-  SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
-
 const runContractTests = async (
   label: string,
   createStore: (tmp: string, repo: Repo, clock: Clock) => typeof StoreAdapter,
@@ -1139,6 +1136,73 @@ const runContractTests = async (
     const tmp = await mkdtemp(join(tmpdir(), `${label}-qlist-`));
     const store = createStore(tmp, fakeRepo(), fixedClock());
     strictEqual(store.listQueue().length, 0);
+    await cleanTemp(tmp);
+  }
+
+  // Queue — multi-requeued ordering: requeued runs first in lexical order, then fresh
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-qlist2-`));
+    const clock = fixedClock();
+    const store = createStore(tmp, fakeRepo(), clock);
+    const packet = `---
+repo: /tmp/test-repo
+base: main
+summary: packet
+outcomes:
+  - id: o1
+    description: outcome 1
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+`;
+    // Write 3 requeued run metas in non-lexical order (z, a, b)
+    // The file adapter sorts requeued lexically via listRunIds().sort()
+    const zMeta = {
+      runId: "20260101-000000-z",
+      status: "queued" as const,
+      attempt: 1,
+      repo: "/tmp/r",
+      base: "main",
+      branch: "b",
+      worktree: join(tmp, "w"),
+      updatedAt: clock.nowIso(),
+    };
+    const aMeta = {
+      runId: "20260101-000000-a",
+      status: "queued" as const,
+      attempt: 1,
+      repo: "/tmp/r",
+      base: "main",
+      branch: "b",
+      worktree: join(tmp, "w"),
+      updatedAt: clock.nowIso(),
+    };
+    const bMeta = {
+      runId: "20260101-000000-b",
+      status: "queued" as const,
+      attempt: 1,
+      repo: "/tmp/r",
+      base: "main",
+      branch: "b",
+      worktree: join(tmp, "w"),
+      updatedAt: clock.nowIso(),
+    };
+    store.writeMeta(zMeta);
+    store.writeMeta(aMeta);
+    store.writeMeta(bMeta);
+    await mkdir(join(tmp, "queue"), { recursive: true });
+    // Write a fresh packet (not consumed into a run dir)
+    await writeFile(join(tmp, "queue", "20260101-000000-fresh.md"), packet);
+    const entries = store.listQueue();
+    strictEqual(entries.length, 4);
+    // Requeued runs come first, in lexical order: a, b, z
+    equal(entries[0].runId, "20260101-000000-a");
+    equal(entries[1].runId, "20260101-000000-b");
+    equal(entries[2].runId, "20260101-000000-z");
+    // Fresh packets come after requeued
+    equal(entries[3].runId, "20260101-000000-fresh");
     await cleanTemp(tmp);
   }
 

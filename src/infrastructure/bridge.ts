@@ -18,6 +18,7 @@ import type { Store } from "../application/ports/store.js";
 import type { Paths } from "../config/paths.js";
 import type { Config } from "../config/schemas.js";
 import { classifyChangedFiles } from "../domain/gate-classification.js";
+import { isTestPath } from "../domain/report.js";
 import {
   OutcomeStatus,
   SubmitReport,
@@ -271,6 +272,10 @@ export type SubmitReportInput = {
   sourceOfTruthFollowed?: string[];
   escalations?: string[];
   remainingUncertainty?: string[];
+  regressionGuard?: {
+    tests: Array<{ name: string; file: string; covers: string }>;
+    noTestJustification?: string;
+  };
 };
 
 export type GetDecisionsInput = {
@@ -506,6 +511,7 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
     verificationClaims: toVerificationClaims(verificationResults),
     escalations: input.escalations ?? [],
     remainingUncertainty: input.remainingUncertainty ?? [],
+    ...(input.regressionGuard !== undefined ? { regressionGuard: input.regressionGuard } : {}),
   });
 
   journal(ctx, { event: "report_submitted", status: report.status });
@@ -527,15 +533,41 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
   }
 
   // Verification failures from the driver's own run.
-  for (const r of verificationResults) {
-    if (r.exitCode !== 0) {
-      problems.push(
-        `verification failed (exit ${r.exitCode}): ${r.command}\n  output: ${r.outputTail.slice(-200)}`,
-      );
-    }
-  }
+   for (const r of verificationResults) {
+     if (r.exitCode !== 0) {
+       problems.push(
+         `verification failed (exit ${r.exitCode}): ${r.command}\n  output: ${r.outputTail.slice(-200)}`,
+       );
+     }
+   }
 
-  // Mechanical floor (V1/V6): synchronous rejection — no planner needed.
+   // V8A: anti-fabrication — fires on ANY ready_for_review, regardless of pass.
+   // Each named test's file must be in the diff.
+   if (report.status === "ready_for_review") {
+     const changedPaths = new Set(report.filesChanged.map((f) => f.path));
+     for (const t of report.regressionGuard.tests) {
+       if (!changedPaths.has(t.file)) {
+         problems.push(
+           `named regression test \`${t.name}\` in \`${t.file}\` is not among your changed files — name the test you actually added or changed`,
+         );
+       }
+     }
+   }
+
+   // V8B: repair-pass requirement — fires ONLY on ready_for_review with pass >= 2.
+   if (report.status === "ready_for_review" && ctx.packet.frontmatter.pass >= 2) {
+     const changedPaths = new Set(report.filesChanged.map((f) => f.path));
+     const hasQualifying = report.regressionGuard.tests.some(
+       (t) => changedPaths.has(t.file) && isTestPath(t.file),
+     );
+     if (!hasQualifying && !report.regressionGuard.noTestJustification) {
+       problems.push(
+         `repair pass (pass ${ctx.packet.frontmatter.pass}): a fix without a regression test that would have failed before the fix and passes after is incomplete — add/extend a test in your surface and name it in regressionGuard.tests, or set regressionGuard.noTestJustification if a regression test is genuinely infeasible (and say why).`,
+       );
+     }
+   }
+
+   // Mechanical floor (V1/V6): synchronous rejection — no planner needed.
   if (problems.length > 0) {
     ctx.reportRejectionCount += 1;
     journal(ctx, { event: "report_rejected", problems });
@@ -688,7 +720,7 @@ export const buildMcpServer = (ref: RunRef): McpServer => {
 
   server.tool(
     "submit_report",
-    "Submit the final report — the ONLY way a run reaches a terminal status. Supply your terminal DECISION (status) and your subjective account in prose; the driver records the objective facts itself — which files changed (from the diff), which outcomes are done (from the ledger), and the verification results (the driver runs the commands). Do not restate those. ready_for_review is accepted only if the driver's own verification is green and every outcome is done; if not, submit blocked or failed and say why.",
+    "Submit the final report — the ONLY way a run reaches a terminal status. Supply your terminal DECISION (status) and your subjective account in prose; the driver records the objective facts itself — which files changed (from the diff), which outcomes are done (from the ledger), and the verification results (the driver runs the commands). Do not restate those. ready_for_review is accepted only if the driver's own verification is green and every outcome is done; if not, submit blocked or failed and say why. On a repair pass (pass ≥ 2), name the regression test you added in regressionGuard.tests (or set regressionGuard.noTestJustification with your reason).",
     {
       status: z.enum(["ready_for_review", "blocked", "failed"]),
       blockedReason: BlockedReason.optional(),
@@ -718,6 +750,20 @@ export const buildMcpServer = (ref: RunRef): McpServer => {
         .array(z.string())
         .optional()
         .describe("What you remain unsure about."),
+      regressionGuard: z
+        .object({
+          tests: z
+            .array(
+              z.object({
+                name: z.string(),
+                file: z.string(),
+                covers: z.string(),
+              }),
+            )
+            .default([]),
+          noTestJustification: z.string().trim().min(1).optional(),
+        })
+        .optional(),
     },
     async (input) => handleSubmitReport(ref, input),
   );

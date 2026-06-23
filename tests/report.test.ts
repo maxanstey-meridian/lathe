@@ -13,6 +13,7 @@ const minReport = (): SubmitReport => ({
   verificationClaims: [],
   escalations: [],
   remainingUncertainty: [],
+  regressionGuard: { tests: [] },
 });
 
 const minFinalReview = (
@@ -82,6 +83,39 @@ describe("report-render — renderReportMarkdown", () => {
     match(output, /## Files changed/);
     match(output, /`src\/main\.ts`/);
     match(output, /expected/);
+  });
+
+  it("renders regression guard section when tests are present", () => {
+    const report: SubmitReport = {
+      ...minReport(),
+      regressionGuard: {
+        tests: [{ name: "test-foo", file: "tests/foo.test.ts", covers: "foo was broken" }],
+      },
+    };
+    const output = renderReportMarkdown(report, "20260618-070000-test");
+    match(output, /## Regression guard/);
+    match(output, /test-foo/);
+    match(output, /tests\/foo\.test\.ts/);
+    match(output, /foo was broken/);
+  });
+
+ it("renders regression guard section when justification is present", () => {
+    const report: SubmitReport = {
+      ...minReport(),
+      regressionGuard: { tests: [], noTestJustification: "The fix is a config change only." },
+    };
+    const output = renderReportMarkdown(report, "20260618-070000-test");
+    match(output, /## Regression guard/);
+    match(output, /No regression test \(justification\)/);
+    match(output, /config change only/);
+  });
+
+  it("omits regression guard section when empty", () => {
+    const report = minReport();
+    const output = renderReportMarkdown(report, "20260618-070000-test");
+    if (output.indexOf("## Regression guard") !== -1) {
+      throw new Error("Regresion guard section should not be present when empty");
+    }
   });
 
   it("renders blocked reason in status line", () => {

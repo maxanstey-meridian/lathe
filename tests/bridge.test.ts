@@ -2,9 +2,10 @@
 // Uses real StoreAdapter with temp dirs — matches store.test.ts pattern.
 
 import { equal, strictEqual, ok, deepStrictEqual, match, rejects } from "node:assert";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { execSync } from "child_process";
 import { test } from "node:test";
 import type { Clock } from "../src/application/ports/clock.js";
 import type { Repo } from "../src/application/ports/repo.js";
@@ -90,6 +91,7 @@ body
     suspicious_surface: [],
     verification: [{ command: "echo ok" }],
     constraints: [],
+    pass: 1,
     ...overrides,
   };
   return { runId: "20260101-000000-test", frontmatter: fm as any, body: "body\n", raw };
@@ -564,6 +566,230 @@ test("submit_report: returns review_pending when pendingFinalReview is set", asy
   const body = JSON.parse(result.content[0].text);
   equal(body.status, "review_pending");
   strictEqual(ref.current.intents.length, 0);
+});
+
+// ===========================================================================
+// submit_report: V8 floor — regression guard
+// ===========================================================================
+
+test("submit_report: pass-1 ready_for_review with no guard → floor clean", async () => {
+  const { ref, tmp } = makeRef();
+  await handleUpdateOutcomes(ref, {
+    outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
+  });
+  // pass-1: V8 does not fire; regressionGuard is optional
+  const result = await handleSubmitReport(ref, {
+    status: "ready_for_review",
+    summary: "All done.",
+  });
+  equal(result.isError, false);
+  const body = JSON.parse(result.content[0].text);
+  equal(body.status, "review_pending");
+  await cleanTemp(tmp);
+});
+
+test("submit_report: pass-2 ready_for_review with no test and no justification → rejected", async () => {
+  const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
+  await handleUpdateOutcomes(ref, {
+    outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
+  });
+  const result = await handleSubmitReport(ref, {
+    status: "ready_for_review",
+    summary: "Fixed it.",
+  });
+  equal(result.isError, true);
+  const body = JSON.parse(result.content[0].text);
+  ok(body.problems.some((p: string) => p.includes("repair pass (pass 2)")));
+  ok(body.problems.some((p: string) => p.includes("regression test")));
+  strictEqual(ref.current.intents[1].kind, "report-rejected");
+  await cleanTemp(tmp);
+});
+
+test("submit_report: pass-1 anti-fabrication — test not in diff → rejected", async () => {
+  // Anti-fabrication fires on ANY ready_for_review, regardless of pass number.
+  // We need the ref to have filesChanged that don't include the named test.
+  // Since filesChanged comes from readDiffStats (git diff), and the temp dir
+  // has no git repo, filesChanged will be empty. So any named test not in an
+  // empty list will trigger the anti-fabrication check.
+  // But we also need pass-1 (V8B should NOT fire).
+  const { ref, tmp } = makeRef();
+  await handleUpdateOutcomes(ref, {
+    outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
+  });
+  const result = await handleSubmitReport(ref, {
+    status: "ready_for_review",
+    summary: "All done.",
+    regressionGuard: {
+      tests: [{ name: "fake-test", file: "tests/not-changed.test.ts", covers: "nothing" }],
+    },
+  });
+  equal(result.isError, true);
+  const body = JSON.parse(result.content[0].text);
+  ok(
+    body.problems.some((p: string) => p.includes("is not among your changed files")),
+  );
+  strictEqual(ref.current.intents[1].kind, "report-rejected");
+  await cleanTemp(tmp);
+});
+
+test("submit_report: pass-2 anti-fabrication — test not in diff → rejected", async () => {
+  const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
+  await handleUpdateOutcomes(ref, {
+    outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
+  });
+  const result = await handleSubmitReport(ref, {
+    status: "ready_for_review",
+    summary: "Fixed it.",
+    regressionGuard: {
+      tests: [{ name: "fake-test", file: "tests/not-changed.test.ts", covers: "nothing" }],
+    },
+  });
+  equal(result.isError, true);
+  const body = JSON.parse(result.content[0].text);
+  ok(
+    body.problems.some((p: string) => p.includes("is not among your changed files")),
+  );
+  strictEqual(ref.current.intents[1].kind, "report-rejected");
+  await cleanTemp(tmp);
+});
+
+// Helper: set up a git repo in the temp dir so readDiffStats returns the
+// expected file (making the anti-fabrication check pass for that file).
+const seedWorktreeGit = async (worktree: string, addedFile: string) => {
+  // Initialize git repo
+  execSync("git init -b main", { cwd: worktree, stdio: "ignore" });
+  execSync('git config user.email "test@test.com"', { cwd: worktree, stdio: "ignore" });
+  execSync('git config user.name "Test"', { cwd: worktree, stdio: "ignore" });
+  // Ensure parent directory exists for nested paths like tests/fix.test.ts
+  await mkdir(join(worktree, dirname(addedFile)), { recursive: true });
+  await writeFile(join(worktree, addedFile), "base\n");
+  execSync("git add .", { cwd: worktree, stdio: "ignore" });
+  execSync('git commit -m "base"', { cwd: worktree, stdio: "ignore" });
+  // Now modify the file so it appears in the diff
+  await writeFile(join(worktree, addedFile), "modified\n");
+};
+
+test("submit_report: pass-2 naming a real changed test file → floor clean", async () => {
+  const { ref, tmp, clock } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
+  await handleUpdateOutcomes(ref, {
+    outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
+  });
+  // Create a real test file in the diff
+  await seedWorktreeGit(tmp, "tests/fix.test.ts");
+  // Override the worktree reference to ensure readDiffStats picks up the file
+  ref.current.worktree = tmp;
+  const result = await handleSubmitReport(ref, {
+    status: "ready_for_review",
+    summary: "Fixed it.",
+    regressionGuard: {
+      tests: [{ name: "fix-test", file: "tests/fix.test.ts", covers: "the broken path" }],
+    },
+  });
+  equal(result.isError, false);
+  const body = JSON.parse(result.content[0].text);
+  equal(body.status, "review_pending");
+  await cleanTemp(tmp);
+});
+
+test("submit_report: pass-2 with non-empty justification and no test → floor clean", async () => {
+  // For this test we need the worktree to have a git repo with some changed
+  // test file (to pass anti-fabrication: no tests to check) and pass >= 2.
+  // Actually, if no tests are named, there's nothing to anti-fabricate-check.
+  // We just need justification to be present.
+  const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
+  await handleUpdateOutcomes(ref, {
+    outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
+  });
+  const result = await handleSubmitReport(ref, {
+    status: "ready_for_review",
+    summary: "Fixed it.",
+    regressionGuard: { noTestJustification: "The fix is a config change only." },
+  });
+  equal(result.isError, false);
+  const body = JSON.parse(result.content[0].text);
+  equal(body.status, "review_pending");
+  await cleanTemp(tmp);
+});
+
+test("submit_report: whitespace-only noTestJustification → rejects at parse time", async () => {
+  // z.string().trim().min(1).optional() rejects whitespace-only strings at zod parse time.
+  // SubmitReport.parse at bridge.ts:498 has no try/catch, so this throws (not returns isError).
+  const { ref, tmp } = makeRef();
+  await handleUpdateOutcomes(ref, {
+    outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
+  });
+  await rejects(
+    () =>
+      handleSubmitReport(ref, {
+        status: "ready_for_review",
+        summary: "Fixed it.",
+        regressionGuard: { noTestJustification: "   " },
+      }),
+    { message: /noTestJustification/ },
+  );
+  await cleanTemp(tmp);
+});
+
+test("submit_report: pass-2 naming a real changed non-test file → V8B rejects (not V8A)", async () => {
+  // Seeds src/fix.ts (non-test path) in the diff, names it in regressionGuard.tests on pass 2.
+  // V8A anti-fabrication should NOT fire (file is in diff), but V8B should reject because
+  // isTestPath("src/fix.ts") === false and no justification is given.
+  const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
+  await handleUpdateOutcomes(ref, {
+    outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
+  });
+  await seedWorktreeGit(tmp, "src/fix.ts");
+  ref.current.worktree = tmp;
+  const result = await handleSubmitReport(ref, {
+    status: "ready_for_review",
+    summary: "Fixed it.",
+    regressionGuard: {
+      tests: [{ name: "fix-test", file: "src/fix.ts", covers: "the broken path" }],
+    },
+  });
+  equal(result.isError, true);
+  const body = JSON.parse(result.content[0].text);
+  ok(body.problems.some((p: string) => p.includes("repair pass (pass 2)")));
+  ok(body.problems.some((p: string) => p.includes("regression test")));
+  ok(
+    !body.problems.some((p: string) => p.includes("is not among your changed files")),
+    "anti-fabrication (V8A) should NOT fire — src/fix.ts is in the diff",
+  );
+  await cleanTemp(tmp);
+});
+
+test("submit_report: blocked report with no regressionGuard → unaffected", async () => {
+  const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
+  await handleUpdateOutcomes(ref, {
+    outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
+  });
+  const result = await handleSubmitReport(ref, {
+    status: "blocked",
+    blockedReason: "wedged",
+    blockedQuestion: "Should we proceed?",
+    summary: "Stuck.",
+  });
+  equal(result.isError, false);
+  const body = JSON.parse(result.content[0].text);
+  equal(body.ok, true);
+  equal(body.status, "blocked");
+  await cleanTemp(tmp);
+});
+
+test("submit_report: failed report with no regressionGuard → unaffected", async () => {
+  const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
+  await handleUpdateOutcomes(ref, {
+    outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
+  });
+  const result = await handleSubmitReport(ref, {
+    status: "failed",
+    summary: "Could not complete.",
+  });
+  equal(result.isError, false);
+  const body = JSON.parse(result.content[0].text);
+  equal(body.ok, true);
+  equal(body.status, "failed");
+  await cleanTemp(tmp);
 });
 
 // ===========================================================================

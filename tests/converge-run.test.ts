@@ -78,7 +78,7 @@ const createSkillFile = (): string => {
 
 const defaultConfig = (skillPath: string): Config =>
   ({
-    stateRoot: "~/.meridian/v2",
+    stateRoot: "/tmp/lathe-test-state",
     opencode: {},
     daddy: {},
     baby: {},

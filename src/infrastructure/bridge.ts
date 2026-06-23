@@ -59,9 +59,9 @@ export type ActiveRunRef = {
   packet: Packet;
   store: Store;
   turn: number;
-  // The driver-supplied turn aborter (see RunChannel). The bridge trips it right
-  // after recording a stop-and-wait intent so the in-flight turn ends now.
-  endTurn?: () => void;
+  // Set to true the instant a stop-and-wait intent is recorded. All subsequent
+  // tool calls return an "End your turn" error so Baby winds down cooperatively.
+  turnComplete: boolean;
 };
 
 // RunRef holder — the reference the bridge receives. Matches the reference
@@ -285,11 +285,19 @@ export type GetDecisionsInput = {
   limit?: number;
 };
 
+const turnCompleteError = () =>
+  errorText(
+    JSON.stringify({
+      error: "End your turn now — the driver has recorded your submission and will act on it.",
+    }),
+  );
+
 export const handleAskPlanner = async (ref: RunRef, input: AskPlannerInput) => {
   const ctx = ref.current;
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
+  if (ctx.turnComplete) return turnCompleteError();
 
   // M2: argument failures must be visible. The SDK validates shapes before
   // this handler, but content-level emptiness slips through — and an
@@ -319,7 +327,7 @@ export const handleAskPlanner = async (ref: RunRef, input: AskPlannerInput) => {
   // the consult here: it records the submission and returns at once.
   if (ctx.pendingConsult) {
     ctx.intents.push({ kind: "consult-requested" });
-    ctx.endTurn?.();
+    ctx.turnComplete = true;
     return text(
       JSON.stringify({
         status: "already_submitted",
@@ -340,11 +348,11 @@ export const handleAskPlanner = async (ref: RunRef, input: AskPlannerInput) => {
 
   // Record the intent for the turn loop to evaluate.
   ctx.intents.push({ kind: "consult-requested" });
+  ctx.turnComplete = true;
   journal(ctx, {
     event: "driver_note",
     note: `ask_planner submitted (${input.questionType}) — consult deferred to the driver`,
   });
-  ctx.endTurn?.();
 
   return text(
     JSON.stringify({
@@ -360,6 +368,7 @@ export const handleUpdateOutcomes = async (ref: RunRef, input: UpdateOutcomesInp
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
+  if (ctx.turnComplete) return turnCompleteError();
 
   const ledger = ctx.store.readLedger(ctx.packet.runId);
   const problems: string[] = [];
@@ -412,6 +421,7 @@ export const handleWriteCheckpoint = async (ref: RunRef, input: WriteCheckpointI
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
+  if (ctx.turnComplete) return turnCompleteError();
 
   const ledger = ctx.store.readLedger(ctx.packet.runId);
   const checkpoint = {
@@ -472,6 +482,7 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
+  if (ctx.turnComplete) return turnCompleteError();
 
   // A re-submit while a final review is still pending. `pendingFinalReview` is
   // STICKY across turns, but the `final-review-requested` intent that triggers
@@ -482,7 +493,7 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
   // submit_report so the trigger tracks the sticky state.
   if (ctx.pendingFinalReview) {
     ctx.intents.push({ kind: "final-review-requested" });
-    ctx.endTurn?.();
+    ctx.turnComplete = true;
     return text(
       JSON.stringify({
         status: "review_pending",
@@ -607,12 +618,12 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
     // driver-side runner when the review completes. The report_submitted
     // event above is already sufficient tracking.
     ctx.intents.push({ kind: "final-review-requested" });
-    ctx.endTurn?.();
+    ctx.turnComplete = true;
     return text(
       JSON.stringify({
         status: "review_pending",
         instruction:
-          "Report received and the mechanical floor is green. Daddy's final review runs now — STOP and end your turn; the result (accept, requested changes, or escalation) arrives in your next prompt.",
+          "Report received and the mechanical floor is green. Daddy's final review runs now — end your turn; the result (accept, requested changes, or escalation) arrives in your next prompt.",
       }),
     );
   }
@@ -626,7 +637,7 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
     blockedQuestion: report.blockedQuestion,
     summary: report.summary,
   });
-  ctx.endTurn?.();
+  ctx.turnComplete = true;
   return text(
     JSON.stringify({
       ok: true,
@@ -641,6 +652,7 @@ export const handleGetDecisions = async (ref: RunRef, input: GetDecisionsInput) 
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
+  if (ctx.turnComplete) return turnCompleteError();
 
   const decisions = ctx.store.readDecisions(ctx.packet.runId);
   const gateState = ctx.store.readGateState(ctx.packet.runId);

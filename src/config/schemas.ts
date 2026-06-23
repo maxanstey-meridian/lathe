@@ -23,7 +23,6 @@ export const Config = z.object({
       modelId: z.string().default("glm-5.1"),
       agent: z.string().default("daddy"),
       timeoutMs: z.number().int().default(300_000),
-      turnSteps: z.number().int().default(8),
     })
     .default({}),
   baby: z

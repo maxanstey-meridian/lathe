@@ -120,8 +120,6 @@ export const writeOpencodeConfig = (
       daddy: {
         description: "Meridian planner — decides, never implements",
         mode: "primary",
-        // Forces a text answer after N recon iterations — bounds verdict spirals.
-        steps: config.daddy.turnSteps,
         tools: {
           write: false,
           edit: false,

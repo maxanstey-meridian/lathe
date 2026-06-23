@@ -87,11 +87,13 @@ const Pane = ({
   title,
   pane,
   height,
+  width,
   accent,
 }: {
   title: string;
   pane: PaneState;
   height: number;
+  width: number;
   accent: string;
 }) => {
   // 10s window: tool gaps (installs, typechecks) shouldn't flip "active" to "waiting".
@@ -108,6 +110,7 @@ const Pane = ({
       borderStyle="round"
       borderColor={active ? accent : "gray"}
       height={height}
+      width={width}
       overflow="hidden"
       paddingX={1}
     >
@@ -307,6 +310,10 @@ const TailApp = ({ store, budget, subscribe, runId, daddyDirectory }: TailUiDeps
   }, []);
 
   const rows = process.stdout.rows ?? 35;
+  const columns = process.stdout.columns ?? 80;
+  const frameWidth = Math.max(20, columns - 1);
+  const leftPaneWidth = Math.floor(frameWidth / 2);
+  const rightPaneWidth = frameWidth - leftPaneWidth;
   const paneHeight = Math.max(8, rows - 9);
   const ctxEstimate = stats.ctx + Math.round(charsThisTurn.current / 4);
   const fraction = Math.min(1, budget > 0 ? ctxEstimate / budget : 0);
@@ -315,16 +322,17 @@ const TailApp = ({ store, budget, subscribe, runId, daddyDirectory }: TailUiDeps
   const terminal = ["ready_for_review", "blocked", "failed", "accepted"].includes(stats.status);
 
   return (
-    <Box flexDirection="column">
-      <Box>
-        <Pane title="baby" pane={baby} height={paneHeight} accent="green" />
-        <Pane title="daddy" pane={daddy} height={paneHeight} accent="magenta" />
+    <Box flexDirection="column" width={frameWidth} overflow="hidden">
+      <Box width={frameWidth} overflow="hidden">
+        <Pane title="baby" pane={baby} height={paneHeight} width={leftPaneWidth} accent="green" />
+        <Pane title="daddy" pane={daddy} height={paneHeight} width={rightPaneWidth} accent="magenta" />
       </Box>
       <Box
         flexDirection="column"
         borderStyle="round"
         borderColor="gray"
         height={5}
+        width={frameWidth}
         overflow="hidden"
         paddingX={1}
       >

@@ -9,7 +9,7 @@ import { writeOpencodeConfig, pluginPath } from "../src/infrastructure/opencode/
 import { createOpencodeClient } from "../src/infrastructure/opencode/executor.js";
 
 const makeTestConfig = (overrides: Partial<Config> = {}): Config => ({
-  stateRoot: "~/.meridian/v2",
+  stateRoot: "/tmp/lathe-test-state",
   opencode: {
     binary: "opencode",
     port: 4196,

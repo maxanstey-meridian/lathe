@@ -187,6 +187,7 @@ export const runDriver = async (config: Config, paths: Paths): Promise<void> => 
         pendingFinalReview: null,
         reportRejectionCount: 0,
         checkpointBounceCount: 0,
+        turnComplete: false,
         config,
         paths,
         worktree,

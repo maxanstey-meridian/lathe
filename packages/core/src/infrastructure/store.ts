@@ -543,6 +543,44 @@ export class StoreAdapter implements Store {
     return readJsonl(this.paths.journalFile(runId), JournalEventSchema);
   }
 
+  // Global resumable journal — O(n) merge of per-run journals for the file adapter.
+  // The daemon uses the SQLite adapter; this exists for port parity.
+
+  readJournalSince(seq: number): { seq: number; runId: string; event: JournalEvent }[] {
+    const allRuns = this.listRunIds();
+    const events: { seq: number; runId: string; event: JournalEvent; at: string }[] = [];
+    for (const runId of allRuns) {
+      const journalPath = this.paths.journalFile(runId);
+      if (!existsSync(journalPath)) {
+        continue;
+      }
+      const lines = readFileSync(journalPath, "utf-8")
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+      for (const line of lines) {
+        let parsed: { success: boolean; data?: JournalEvent };
+        try {
+          parsed = JournalEventSchema.safeParse(JSON.parse(line));
+        } catch {
+          continue;
+        }
+        if (parsed.success) {
+          events.push({
+            seq: events.length,
+            runId,
+            event: parsed.data!,
+            at: parsed.data!.at,
+          });
+        }
+      }
+    }
+    // Sort by timestamp, assign seq
+    events.sort((a, b) => a.at.localeCompare(b.at));
+    events.forEach((e, i) => { e.seq = i; });
+    return events.filter((e) => e.seq > seq).map((e) => ({ seq: e.seq, runId: e.runId, event: e.event }));
+  }
+
   // ---------------------------------------------------------------------------
   // Queue packet read — fresh-run source
 

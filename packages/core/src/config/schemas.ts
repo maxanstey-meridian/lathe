@@ -34,7 +34,7 @@ export const Config = z.object({
       agent: z.string().default("baby"),
       contextWindow: z.number().int().default(114_688),
       timeoutMs: z.number().int().default(1_800_000),
-      turnSteps: z.number().int().default(12),
+      turnSteps: z.number().int().default(30),
       // Caps Baby's per-turn reasoning (oMLX `thinking_budget`, integer tokens):
       // on hitting it the server forces `</think>` and Baby answers from the
       // reasoning so far — bounds rumination spirals AND the reasoning tokens'

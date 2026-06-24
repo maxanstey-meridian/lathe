@@ -186,7 +186,7 @@ export const handleVerifyHandoff = async (
     for (const file of fileSet) {
       try {
         const content = readFileSync(join(ctx.worktree, file), "utf-8");
-        fileSamples[file] = content.slice(0, 4000); // cap per-file sample
+        fileSamples[file] = content;
       } catch {
         fileSamples[file] = "(file not found — read failed)";
       }

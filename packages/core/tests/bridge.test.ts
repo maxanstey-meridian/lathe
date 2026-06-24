@@ -105,7 +105,7 @@ const cleanTemp = async (dir: string) => {
   }
 };
 
-const makeRef = (overrides?: { packet?: Packet }) => {
+const makeRef = (overrides?: { packet?: Packet; awaitingVerification?: boolean }) => {
   const tmp = join(tmpdir(), `bridge-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const clock = fixedClock();
   const packet = overrides?.packet ?? makeTestPacket();
@@ -118,7 +118,7 @@ const makeRef = (overrides?: { packet?: Packet }) => {
     reportRejectionCount: 0,
     checkpointBounceCount: 0,
     turnComplete: false,
-    awaitingVerification: false,
+    awaitingVerification: overrides?.awaitingVerification ?? false,
     config: {
       thresholds: {
         checkpointToolCalls: 50,
@@ -1100,4 +1100,70 @@ test("listenBridge: second bind on same port fails with one-driver error", async
     server1.close();
     server2.close();
   }
+});
+
+// ===========================================================================
+// Verification gate: blocks all non-verify_handoff bridge handlers
+// when awaitingVerification is true.
+// ===========================================================================
+
+test("verification gate: ask_planner blocked when awaitingVerification is true", async () => {
+  const { ref, tmp } = makeRef({ awaitingVerification: true });
+  const result = await handleAskPlanner(ref, {
+    questionType: "other",
+    currentSlice: "src/foo.ts",
+    question: "what is x?",
+    approach: "doing stuff",
+    evidence: ["src/foo.ts"],
+  });
+  equal(result.isError, true);
+  const body = JSON.parse(result.content[0].text);
+  match(body.error, /Handoff verification required/);
+  strictEqual(ref.current.intents.length, 0);
+  await cleanTemp(tmp);
+});
+
+test("verification gate: update_outcomes blocked when awaitingVerification is true", async () => {
+  const { ref, tmp } = makeRef({ awaitingVerification: true });
+  const result = await handleUpdateOutcomes(ref, {
+    outcomes: [{ id: "test-outcome", status: "in_progress" }],
+  });
+  equal(result.isError, true);
+  const body = JSON.parse(result.content[0].text);
+  match(body.error, /Handoff verification required/);
+  strictEqual(ref.current.intents.length, 0);
+  await cleanTemp(tmp);
+});
+
+test("verification gate: write_checkpoint blocked when awaitingVerification is true", async () => {
+  const { ref, tmp } = makeRef({ awaitingVerification: true });
+  const result = await handleWriteCheckpoint(ref, { summary: "halfway" });
+  equal(result.isError, true);
+  const body = JSON.parse(result.content[0].text);
+  match(body.error, /Handoff verification required/);
+  strictEqual(ref.current.intents.length, 0);
+  await cleanTemp(tmp);
+});
+
+test("verification gate: submit_report blocked when awaitingVerification is true", async () => {
+  const { ref, tmp } = makeRef({ awaitingVerification: true });
+  const result = await handleSubmitReport(ref, {
+    status: "ready_for_review",
+    summary: "All done.",
+  });
+  equal(result.isError, true);
+  const body = JSON.parse(result.content[0].text);
+  match(body.error, /Handoff verification required/);
+  strictEqual(ref.current.intents.length, 0);
+  await cleanTemp(tmp);
+});
+
+test("verification gate: get_decisions blocked when awaitingVerification is true", async () => {
+  const { ref, tmp } = makeRef({ awaitingVerification: true });
+  const result = await handleGetDecisions(ref, {});
+  equal(result.isError, true);
+  const body = JSON.parse(result.content[0].text);
+  match(body.error, /Handoff verification required/);
+  strictEqual(ref.current.intents.length, 0);
+  await cleanTemp(tmp);
 });

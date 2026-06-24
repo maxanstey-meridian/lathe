@@ -27,6 +27,7 @@ import { renderReportMarkdown } from "../../domain/report.js";
 import type { ExecuteRunCallback } from "./run-loop.js";
 import {
   journal,
+  buildHandoffInject,
   type RunPorts,
   type RunChannel,
   type Seed,
@@ -193,8 +194,7 @@ export const makeExecuteRun =
     let injectText = "";
     try {
       const raw = readFileSync(handoffPath, "utf-8");
-      const injected = `Predecessor handoff available: ${raw.slice(0, 2000)}. Call verify_handoff once you have read the packet and the handoff, before starting new work.`;
-      injectText = injected;
+      injectText = buildHandoffInject(raw);
     } catch {
       /* no handoff — graceful degradation, baby re-derives trust the old way */
     }

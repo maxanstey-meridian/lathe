@@ -102,3 +102,15 @@ export const journal = (
     turn,
   } as JournalEvent);
 };
+
+// ---------------------------------------------------------------------------
+// Handoff inject — builds the system message prepended to baby's seed when a
+// predecessor handoff exists. Pure function, no I/O. The 2000-char cap on the
+// handoff JSON matches the run-loop-handoff-inject constraint ("capped at 2000
+// chars"). Returns "" when handoffJson is undefined (no handoff to inject).
+// ---------------------------------------------------------------------------
+
+export const buildHandoffInject = (handoffJson: string | undefined): string => {
+  if (!handoffJson) return "";
+  return `Predecessor handoff available: ${handoffJson.slice(0, 2000)}. Call verify_handoff once you have read the packet and the handoff, before starting new work.`;
+};

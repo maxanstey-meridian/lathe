@@ -17,6 +17,7 @@ import type { Packet } from "../src/domain/packet.js";
 import { handleWriteHandoff, handleVerifyHandoff } from "../src/infrastructure/opencode/baby-tools.js";
 import { runVerify, buildVerifyPrompt } from "../src/infrastructure/opencode/daddy-verify.js";
 import { HandoffArtifact as HandoffArtifactSchema, VerifyVerdict as VerifyVerdictSchema, parseVerifyVerdict } from "../src/domain/handoff.js";
+import { buildHandoffInject } from "../src/application/use-cases/run-runtime.js";
 import { StoreAdapter } from "../src/infrastructure/store.js";
 
 // ===========================================================================
@@ -233,9 +234,9 @@ test("handoff inject: prepends system message when handoff.json exists", async (
   });
   await writeFile(handoffPath, JSON.stringify(artifact, null, 2));
 
-  // Read it back the same way execute-run.ts / turn-loop.ts do.
+  // Read it back the way execute-run.ts / turn-loop.ts do, then pass through the production formatter.
   const raw = readFileSync(handoffPath, "utf-8");
-  const injectText = `Predecessor handoff available: ${raw.slice(0, 2000)}. Call verify_handoff once you have read the packet and the handoff, before starting new work.`;
+  const injectText = buildHandoffInject(raw);
 
   ok(injectText.startsWith("Predecessor handoff available:"));
   ok(injectText.includes("Call verify_handoff"));
@@ -245,24 +246,8 @@ test("handoff inject: prepends system message when handoff.json exists", async (
 });
 
 test("handoff inject: skips inject when handoff.json absent", async () => {
-  const { ref, tmp } = makeRef();
-  const runId = ref.current.packet.runId;
-  const paths = makePaths(tmp);
-  const runDir = paths.runDir(runId);
-  const handoffPath = join(runDir, "handoff.json");
-
-  // Simulate the synchronous try/catch pattern from execute-run.ts / turn-loop.ts.
-  let injectText = "";
-  try {
-    readFileSync(handoffPath, "utf-8");
-    // should not reach here
-    throw new Error("should have thrown");
-  } catch {
-    injectText = ""; // graceful degradation
-  }
-  strictEqual(injectText, "");
-
-  await cleanTemp(tmp);
+  // Pass undefined to buildHandoffInject — the production formatter returns "".
+  strictEqual(buildHandoffInject(undefined), "");
 });
 
 // ===========================================================================
@@ -419,6 +404,51 @@ test("verify_handoff: prompt includes all claimed steps, diff, file samples, and
   ok(capturedPrompt.includes("## Baby's questions"), "prompt should include questions section");
   ok(capturedPrompt.includes("is the Zod schema correct?"), "prompt should include baby's question");
   ok(capturedPrompt.includes("src/domain/handoff.ts"), "prompt should include file sample");
+});
+
+// Regression: verify_handoff file samples are NOT truncated at 4000 chars.
+// Before the fix, content.slice(0, 4000) hid the tail of large files from
+// daddy-verify. After the fix, the full file content is included.
+test("verify_handoff: file samples include full content (no 4000-char cap)", async () => {
+  const { ref, tmp } = makeRef();
+  const runId = ref.current.packet.runId;
+  const paths = makePaths(tmp);
+  const runDir = paths.runDir(runId);
+  const handoffPath = join(runDir, "handoff.json");
+
+  // Create a file > 4000 chars.
+  const testFile = join(tmp, "src", "large.ts");
+  await (async () => {
+    const { mkdir, writeFile: wf } = await import("node:fs/promises");
+    await mkdir(join(tmp, "src"), { recursive: true });
+    // 5000 'A' chars + newline = 5001 chars, well above the old 4000 cap.
+    await wf(testFile, "A".repeat(5000) + "\n", "utf-8");
+  })();
+
+  const handoff = makeHandoffArtifact({
+    completedSteps: [{ description: "added large.ts", files: ["src/large.ts"] }],
+    remainingWork: [],
+  });
+  await writeFile(handoffPath, JSON.stringify(handoff, null, 2));
+
+  const verdictJson = JSON.stringify({ ok: true, trusted: [], issues: [], resumeHint: "done" });
+  let capturedPrompt = "";
+  ref.current.executor = {
+    createSession: async () => "s",
+    sendMessage: async (_s: string, text: string) => { capturedPrompt = text; return { info: { tokens: {} }, parts: [{ type: "text", text: verdictJson }] }; },
+    listMessages: async () => [],
+    deleteSession: async () => {},
+  } as any;
+
+  await handleVerifyHandoff(ref, {
+    claimedCompletions: ["added large.ts"],
+    questionsForDaddy: [],
+  });
+
+  // Before the fix, the prompt would contain only 4000 'A's (truncated).
+  // After the fix, it contains all 5000.
+  ok(capturedPrompt.includes("A".repeat(4000)), "prompt should contain content at position 4000 (old cap boundary)");
+  ok(capturedPrompt.includes("A".repeat(4999)), "prompt should contain content at position 4999 (beyond old 4000 cap)");
 });
 
 // ===========================================================================

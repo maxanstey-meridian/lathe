@@ -9,6 +9,9 @@
 // effects. Reads top-to-bottom as the per-turn lifecycle it owns.
 // ---------------------------------------------------------------------------
 
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+
 import { babyContextBudget } from "../../config/config.js";
 import type { Config } from "../../config/schemas.js";
 import { extractText, extractReasoning, gateDeniedPart } from "../../domain/agent-response.js";
@@ -43,12 +46,14 @@ import { evaluateTurn } from "../../domain/turn.js";
 import { rotateSession } from "./rotation.js";
 import {
   journal,
+  buildHandoffInject,
   type RunPorts,
   type RunChannel,
   type RunOutcome,
   type TurnLoopResult,
   type Seed,
 } from "./run-runtime.js";
+import type { ModelConfig } from "../ports/executor.js";
 
 // ---------------------------------------------------------------------------
 // Turn facts assembly: message text, reasoning, tool calls, context tokens.
@@ -169,8 +174,6 @@ const looksLikeProseFinish = (text: string): boolean =>
 // reconciliation (the gate stacks reconciliation). If a handoff artifact
 // exists on disk, prepend an inject message to the seed and set awaitingVerification.
 // Returns whether a checkpoint was found so the caller re-latches the matching gate (O5/O6).
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 
 const reseedFromCheckpoint = (
   ports: RunPorts,
@@ -201,7 +204,7 @@ const reseedFromCheckpoint = (
     const runDir = dirname(worktree);
     const handoffPath = join(runDir, "handoff.json");
     const raw = readFileSync(handoffPath, "utf-8");
-    injectText = `Predecessor handoff available: ${raw.slice(0, 2000)}. Call verify_handoff once you have read the packet and the handoff, before starting new work.`;
+    injectText = buildHandoffInject(raw);
   } catch {
     /* no handoff — graceful degradation */
   }
@@ -219,8 +222,6 @@ const reseedFromCheckpoint = (
 
 // ---------------------------------------------------------------------------
 // resolveBabyModel — pure helper for the promoted round model swap
-
-import type { ModelConfig } from "../ports/executor.js";
 
 export const resolveBabyModel = (config: Config, promoted: boolean): ModelConfig =>
   promoted

@@ -56,6 +56,9 @@ export type RunChannel = {
   // "End your turn" error so Baby winds down cooperatively rather than the driver
   // destroying the in-flight HTTP connection.
   turnComplete: boolean;
+  // While true, only verify_handoff is accepted — blocks all other tool calls
+  // until the predecessor's handoff has been verified. Cleared by verify_handoff.
+  awaitingVerification: boolean;
 };
 
 // What a finished attempt resolves to — the terminal lifecycle status the

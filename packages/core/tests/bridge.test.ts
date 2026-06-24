@@ -117,6 +117,8 @@ const makeRef = (overrides?: { packet?: Packet }) => {
     pendingFinalReview: null,
     reportRejectionCount: 0,
     checkpointBounceCount: 0,
+    turnComplete: false,
+    awaitingVerification: false,
     config: {
       thresholds: {
         checkpointToolCalls: 50,
@@ -136,12 +138,26 @@ const makeRef = (overrides?: { packet?: Packet }) => {
         "task contracts",
         "dotnet-rivet",
       ],
+      daddy: {
+        providerId: "test",
+        modelId: "test",
+        agent: "test",
+        timeoutMs: 300000,
+        transportRetries: 3,
+      },
     },
     paths,
     worktree: tmp,
     packet,
     store,
     turn: 1,
+    executor: {
+      createSession: async () => "session",
+      sendMessage: async () => ({ info: { tokens: {} }, parts: [{ type: "text", text: "ok" }] }),
+      listMessages: async () => [],
+      deleteSession: async () => {},
+    },
+    verifyModel: { providerId: "test", modelId: "test", agent: "test" },
   };
   const ref = { current: ctx };
   // Initialize ledger and gate state

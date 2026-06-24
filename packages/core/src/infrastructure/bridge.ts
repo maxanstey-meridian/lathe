@@ -1,4 +1,4 @@
-// The bridge: the driver's MCP face (CONTRACT §9). One HTTP endpoint, five
+// The bridge: the driver's MCP face (CONTRACT §9). One HTTP endpoint, seven
 // tools, run identity ambient (M2). Every verdict is persisted before the tool
 // result returns (S2 carried); accepted decisions clear the gate synchronously
 // because the bridge IS the driver (v1 X2 made impossible).
@@ -14,6 +14,7 @@ import { execSync } from "child_process";
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "http";
 import { resolve } from "path";
 import { z } from "zod";
+import type { Executor, ModelConfig } from "../application/ports/executor.js";
 import type { Store } from "../application/ports/store.js";
 import type { Paths } from "../config/paths.js";
 import type { Config } from "../config/schemas.js";
@@ -34,6 +35,7 @@ import { isTestPath } from "../domain/report.js";
 import type { QuestionType } from "../domain/review.js";
 import { nowIso } from "./fsio.js";
 import { readDiffStats } from "./git.js";
+import { handleWriteHandoff, handleVerifyHandoff } from "./opencode/baby-tools.js";
 
 // ---------------------------------------------------------------------------
 // ActiveRunRef — the per-run context for this bridge session.
@@ -62,6 +64,12 @@ export type ActiveRunRef = {
   // Set to true the instant a stop-and-wait intent is recorded. All subsequent
   // tool calls return an "End your turn" error so Baby winds down cooperatively.
   turnComplete: boolean;
+  // While true, only verify_handoff is accepted — blocks all other tool calls
+  // until the predecessor's handoff has been verified. Cleared by verify_handoff.
+  awaitingVerification: boolean;
+  // Executor and verify model for verify_handoff's daddy invocation.
+  executor: Executor;
+  verifyModel: ModelConfig;
 };
 
 // RunRef holder — the reference the bridge receives. Matches the reference
@@ -297,6 +305,7 @@ export const handleAskPlanner = async (ref: RunRef, input: AskPlannerInput) => {
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
+  if (ctx.awaitingVerification) return errorText(JSON.stringify({ error: "Handoff verification required. Call verify_handoff before any other tool." }));
   if (ctx.turnComplete) return turnCompleteError();
 
   // M2: argument failures must be visible. The SDK validates shapes before
@@ -368,6 +377,7 @@ export const handleUpdateOutcomes = async (ref: RunRef, input: UpdateOutcomesInp
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
+  if (ctx.awaitingVerification) return errorText(JSON.stringify({ error: "Handoff verification required. Call verify_handoff before any other tool." }));
   if (ctx.turnComplete) return turnCompleteError();
 
   const ledger = ctx.store.readLedger(ctx.packet.runId);
@@ -421,6 +431,7 @@ export const handleWriteCheckpoint = async (ref: RunRef, input: WriteCheckpointI
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
+  if (ctx.awaitingVerification) return errorText(JSON.stringify({ error: "Handoff verification required. Call verify_handoff before any other tool." }));
   if (ctx.turnComplete) return turnCompleteError();
 
   const ledger = ctx.store.readLedger(ctx.packet.runId);
@@ -482,6 +493,7 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
+  if (ctx.awaitingVerification) return errorText(JSON.stringify({ error: "Handoff verification required. Call verify_handoff before any other tool." }));
   if (ctx.turnComplete) return turnCompleteError();
 
   // A re-submit while a final review is still pending. `pendingFinalReview` is
@@ -652,6 +664,7 @@ export const handleGetDecisions = async (ref: RunRef, input: GetDecisionsInput) 
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
+  if (ctx.awaitingVerification) return errorText(JSON.stringify({ error: "Handoff verification required. Call verify_handoff before any other tool." }));
   if (ctx.turnComplete) return turnCompleteError();
 
   const decisions = ctx.store.readDecisions(ctx.packet.runId);
@@ -811,6 +824,50 @@ export const buildMcpServer = (ref: RunRef): McpServer => {
     "Read prior planner and Max decisions for this run.",
     { limit: z.number().int().min(1).max(100).optional() },
     async (input) => handleGetDecisions(ref, input),
+  );
+
+  // --- write_handoff (verify-handoff protocol) ---
+
+  server.tool(
+    "write_handoff",
+    "Write the current handoff artifact to disk. Called after each verified chunk of work so a recycled baby can resume from the latest state.",
+    {
+      completedSteps: z
+        .array(
+          z.object({
+            description: z.string().min(1),
+            files: z.array(z.string()).optional(),
+          }),
+        )
+        .describe("Steps completed since the last handoff."),
+      remainingWork: z
+        .array(z.string())
+        .describe("Remaining work items from the packet, updated to reflect progress."),
+      decisionsMade: z
+        .array(z.string())
+        .describe("Key design/business decisions made during this chunk."),
+      resumeFrom: z
+        .string()
+        .describe("Where the next baby should pick up — a specific file, line, or outcome id."),
+    },
+    async (input) => handleWriteHandoff(ref, input),
+  );
+
+  // --- verify_handoff (verify-handoff protocol) ---
+
+  server.tool(
+    "verify_handoff",
+    "Verify the predecessor's handoff artifact. Reads handoff.json, checks the declared file surface, and asks daddy for a spot-check verdict. Call this immediately after reading a handoff-injected system message.",
+    {
+      claimedCompletions: z
+        .array(z.string())
+        .describe("Descriptions of the steps baby believes were completed."),
+      questionsForDaddy: z
+        .array(z.string())
+        .optional()
+        .describe("Specific questions about the handoff that baby wants daddy to check."),
+    },
+    async (input) => handleVerifyHandoff(ref, input),
   );
 
   return server;

@@ -94,6 +94,7 @@ const emptyChannel = (): RunChannel => ({
   reportRejectionCount: 0,
   checkpointBounceCount: 0,
   turn: 0,
+  awaitingVerification: false,
 });
 
 const scriptedExecutor = (

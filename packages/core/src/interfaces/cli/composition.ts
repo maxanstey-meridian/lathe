@@ -188,12 +188,15 @@ export const runDriver = async (config: Config, paths: Paths): Promise<void> => 
         reportRejectionCount: 0,
         checkpointBounceCount: 0,
         turnComplete: false,
+        awaitingVerification: false,
         config,
         paths,
         worktree,
         packet,
         store,
         turn: 0,
+        executor,
+        verifyModel: modelOf(config.daddy),
       };
       r.current = channel;
       return channel;

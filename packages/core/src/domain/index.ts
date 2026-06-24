@@ -43,3 +43,6 @@ export * from "./agent-response.js";
 // Liveness + Turn evaluation (CONTRACT §5/§6)
 export * from "./liveness.js";
 export * from "./turn.js";
+
+// Handoff artifact + Verify verdict (verify-handoff protocol)
+export * from "./handoff.js";

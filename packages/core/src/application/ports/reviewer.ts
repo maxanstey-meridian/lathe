@@ -2,7 +2,7 @@
 // Use cases depend on this; the adapter implements it. Interfaces only — zero runtime.
 
 import type { SuperReview } from "../../domain/convergence.js";
-import type { SuperReviewInput } from "../../domain/prompts.js";
+import type { AuthorFollowupInput, SuperReviewInput } from "../../domain/prompts.js";
 
 // SuperReviewResult — a real review the model produced (verdict + raw text).
 export type SuperReviewResult = { review: SuperReview; raw: string };
@@ -16,6 +16,15 @@ export type SuperReviewOutcome =
   | ({ kind: "reviewed" } & SuperReviewResult)
   | { kind: "unreachable"; detail: string; raw: string };
 
+// authorFollowup has the SAME two-axis split as superReview: a real authored
+// packet (markdown the engine then stamps + admits), or an UNREACHABLE transport
+// failure (no packet — retryable, never a forged result). The use case validates
+// the authored content on admission and re-asks/escalates if it does not parse.
+export type AuthorFollowupOutcome =
+  | { kind: "authored"; content: string; raw: string }
+  | { kind: "unreachable"; detail: string; raw: string };
+
 export type Reviewer = {
   superReview(input: SuperReviewInput): Promise<SuperReviewOutcome>;
+  authorFollowup(input: AuthorFollowupInput): Promise<AuthorFollowupOutcome>;
 };

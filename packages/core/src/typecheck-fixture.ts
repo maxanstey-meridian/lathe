@@ -169,6 +169,7 @@ const fakeReviewer: Reviewer = {
     },
     raw: "",
   }),
+  authorFollowup: async () => ({ kind: "authored", content: "", raw: "" }),
 };
 
 // ---------------------------------------------------------------------------

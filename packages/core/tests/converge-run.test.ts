@@ -49,6 +49,28 @@ regression_outcomes:
 body
 `;
 
+// What the fake super-daddy "authors" on request_changes: intent fields only,
+// no lineage — the engine stamps repo/base/campaign_id/parent_run_id/pass/
+// promoted/regression_outcomes. Mirrors a real authoring reply (with leading
+// narration the extractor must strip).
+const AUTHORED_FOLLOWUP = `Here is the follow-up packet:
+
+---
+summary: "fix the failing typecheck"
+outcomes:
+  - id: fix-a
+    description: "the a.ts typecheck passes"
+expected_surface:
+  - "src/a.ts"
+verification:
+  - command: "pnpm test"
+---
+
+# fix the typecheck
+
+Repair the blocker.
+`;
+
 const makeMeta = (overrides: Partial<RunMeta> = {}): RunMeta => ({
   runId: RUN_ID,
   status: "ready_for_review",
@@ -84,6 +106,7 @@ const defaultConfig = (skillPath: string): Config =>
     baby: {},
     superdaddy: {
       skillPath,
+      packetSkillPath: skillPath,
       diffCapBytes: 131_072,
     },
     thresholds: { maxPasses: 3, maxReviewerUnreachable: 3, verificationTimeoutMs: 600_000 },
@@ -174,6 +197,11 @@ const makeFakePorts = (
         };
         return { kind: "reviewed", ...reviewed };
       },
+      authorFollowup: async () => ({
+        kind: "authored",
+        content: AUTHORED_FOLLOWUP,
+        raw: AUTHORED_FOLLOWUP,
+      }),
     } as Reviewer,
     verify: {
       run: async () => verifyOverride ?? [{ command: "echo ok", exitCode: 0, outputTail: "" }],
@@ -383,13 +411,31 @@ test("convergeRun: author — admit follow-up, campaign open, priorOutcomes dedu
   equal(campaignWritten?.passes.length, 1);
   equal(campaignWritten?.passes[0].verdict, "request_changes");
 
-  // Should admit a follow-up packet
+  // Should admit ONE follow-up — super-daddy's AUTHORED intent + engine-stamped lineage.
   equal(admittedQueue.length, 1);
   const [followUpId, followUpContent] = admittedQueue[0];
   ok(followUpId.startsWith("20260101-"));
-  ok(followUpContent.includes("convergence pass 2"));
-  ok(followUpContent.includes("fix-a"));
-  ok(followUpContent.includes("fix-b"));
+  ok(followUpId.endsWith("-converge-fix2"));
+
+  const parsed = parsePacketShape(followUpContent, followUpId);
+  ok(parsed.ok, "admitted packet must parse: " + (parsed.ok ? "" : parsed.problems.join("; ")));
+  if (parsed.ok) {
+    const fm = parsed.packet.frontmatter;
+    // Authored intent survives verbatim — NOT copied from the parent packet.
+    equal(fm.summary, "fix the failing typecheck");
+    equal(fm.outcomes[0].id, "fix-a");
+    deepEqual(fm.expected_surface, ["src/a.ts"]);
+    // Lineage is stamped by the engine, not authored. With no parent/campaign_id
+    // in the packet, the campaign id derives from the run id itself.
+    equal(fm.campaign_id, RUN_ID);
+    equal(fm.parent_run_id, RUN_ID);
+    equal(fm.pass, 2);
+    equal(fm.base, "meridian/20260101-000000-converge");
+    equal(fm.promoted, false);
+    // Prior outcomes sealed as regressions (none collide with the authored fix).
+    const regIds = fm.regression_outcomes.map((o) => o.id).sort();
+    deepEqual(regIds, ["prior-outcome", "test-outcome"]);
+  }
 
   // Nits should NOT be written on author path
   // (the fake store doesn't track nits writes separately, so we verify
@@ -398,6 +444,79 @@ test("convergeRun: author — admit follow-up, campaign open, priorOutcomes dedu
 
   // No meta status change on author — stays ready_for_review
   equal(ports.getMeta().status, "ready_for_review");
+});
+
+// ---------------------------------------------------------------------------
+// Test: author, but super-daddy emits an unadmittable packet → retry once, then park
+
+test("convergeRun: author but the authored packet never admits → one retry, then parks for Max", async () => {
+  let admittedQueue: [string, string][] = [];
+  let campaignWritten: Campaign | undefined;
+
+  const skillPath = createSkillFile();
+  const ports = makeFakePorts(
+    skillPath,
+    undefined,
+    undefined,
+    {
+      review: {
+        verdict: "request_changes",
+        findings: [
+          {
+            id: "fix-a",
+            severity: "P0",
+            title: "fix a",
+            evidence: ["a.ts:1"],
+            grounding: { kind: "command_fail", ref: "pnpm test" },
+          },
+        ],
+        convergence: { recommend_stop: false, profile: { p0: 1, p1: 0, p2: 0, p3: 0 }, rationale: "" },
+        commit_message: null,
+        notes: "",
+        human_decision_needed: null,
+      },
+      raw: "request_changes",
+    },
+    undefined,
+    (runId, content) => {
+      admittedQueue.push([runId, content]);
+    },
+    (c) => {
+      campaignWritten = c;
+    },
+  );
+
+  // super-daddy returns prose with no packet — unadmittable on both tries.
+  let authorCalls = 0;
+  ports.reviewer = {
+    superReview: ports.reviewer.superReview,
+    authorFollowup: async () => {
+      authorCalls++;
+      return { kind: "authored", content: "I could not produce a packet, sorry.", raw: "x" };
+    },
+  } as Reviewer;
+
+  await convergeRun({
+    store: ports.store,
+    repo: ports.repo,
+    reviewer: ports.reviewer,
+    verify: ports.verify,
+    clock: ports.clock,
+    config: ports.config,
+    paths: ports.paths,
+  })(RUN_ID);
+
+  // One retry feeding back the admission problems, then give up.
+  equal(authorCalls, 2);
+  // Nothing admitted — the malformed packet never reaches the queue.
+  equal(admittedQueue.length, 0);
+  // Parked for Max with the cause, not silently stalled.
+  const meta = ports.getMeta();
+  equal(meta.status, "blocked");
+  equal(meta.blockedReason, "human_decision");
+  ok(meta.blockedQuestion?.includes("could not author an admittable"));
+  ok(campaignWritten, "campaign should be written");
+  equal(campaignWritten?.status, "needs_max");
 });
 
 test("convergeRun: emits a super_review journal event with verdict + rendered findings (tail visibility)", async () => {

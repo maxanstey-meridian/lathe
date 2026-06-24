@@ -1,6 +1,6 @@
-import { stringify as stringifyYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
-import { PacketFrontmatter, type OutcomeDef, type Packet } from "./packet.js";
+import { FRONTMATTER_RE, type OutcomeDef } from "./packet.js";
 import { FinalReviewVerdict } from "./review.js";
 
 // ---------------------------------------------------------------------------
@@ -201,165 +201,96 @@ export const parseSuperReview = (raw: string): SuperReview => {
 };
 
 // ---------------------------------------------------------------------------
-// Deterministic follow-up packet render
+// Follow-up packet: super-daddy authors the intent, the engine stamps the lineage
+//
+// On request_changes, super-daddy authors a FRESH packet (renderFollowupAuthoring)
+// the same way a planner authors any handoff — picking its own outcomes, surface,
+// and verification to fix the blockers it raised. The engine owns only the
+// lineage/infra it must not be trusted to invent (the same fields the packet skill
+// says never to author): repo, base, the campaign/parent/pass/promoted lineage,
+// and the regression seal. These two pure helpers do that engine half.
 
-export type FollowupPacketInput = {
-  original: Packet; // parent packet — source of repo, surface, verification, constraints
-  parentRunId: string; // the run super-daddy just reviewed
-  campaignId: string;
-  pass: number; // the NEW pass number (parent pass + 1)
-  blockers: Finding[]; // grounded blockers to fix (from decideConvergence; non-empty)
-  priorOutcomes: OutcomeDef[]; // delivered outcomes carried forward as regression
-  baseBranch: string; // base for the follow-up = parent run's branch tip
-  timestamp: string; // YYYYMMDD-HHMMSS — caller supplies so this stays pure
-  slug: string; // kebab slug for the run id / filename
-  promote: boolean; // secret n+1: Baby harness on Daddy's model
-};
-
-export type FollowupPacket = { runId: string; filename: string; content: string };
-
-const RUN_ID_RE = /^\d{8}-\d{6}-[a-z0-9-]+$/;
-
-const outcomeIdOf = (b: Finding): string => b.suggested_outcome_id ?? b.id;
-
-const dedupeVerification = <T extends { command: string }>(cmds: T[]): T[] => {
-  const seen = new Set<string>();
-  return cmds.filter((c) => (seen.has(c.command) ? false : (seen.add(c.command), true)));
-};
-
-const renderBlockerBody = (b: Finding): string => {
-  const lines = [`### ${b.severity} \`${outcomeIdOf(b)}\` — ${b.title}`];
-  if (b.grounding.kind !== "none") {
-    lines.push("", `Grounding (${b.grounding.kind}): ${b.grounding.ref}`);
+// Super-daddy replies with the packet markdown; it MAY precede it with tool
+// narration or wrap it in a code fence. Slice from the first frontmatter delimiter
+// and drop any trailing fence so parsePacketShape (anchored at ^---) can parse it.
+export const extractAuthoredPacket = (text: string): string => {
+  const lines = text.split("\n");
+  const start = lines.findIndex((l) => l.trim() === "---");
+  if (start === -1) {
+    return text.trim();
   }
-  if (b.evidence.length > 0) {
-    lines.push("", ...b.evidence.map((e) => `- ${e}`));
-  }
-  return lines.join("\n");
-};
-
-// Pure: (review findings + parent packet) → a valid packet markdown string. Throws
-// on a programming error (no blockers, or a frontmatter that fails its own schema)
-// — the caller only reaches here on action:"author", which guarantees blockers.
-export const renderFollowupPacket = (input: FollowupPacketInput): FollowupPacket => {
-  const {
-    original,
-    parentRunId,
-    campaignId,
-    pass,
-    blockers,
-    priorOutcomes,
-    baseBranch,
-    timestamp,
-    slug,
-    promote,
-  } = input;
-  if (blockers.length === 0) {
-    throw new Error("renderFollowupPacket: no blockers — nothing to author (converged)");
-  }
-
-  const runId = `${timestamp}-${slug}`;
-  if (!RUN_ID_RE.test(runId)) {
-    throw new Error(`renderFollowupPacket: runId must be YYYYMMDD-HHMMSS-<slug>, got: ${runId}`);
-  }
-
-  // Two blockers can map to the same outcome id (independent reviewers, or a
-  // reviewer reusing the original id); dedupe so the packet can't carry a
-  // duplicate outcome (which parsePacket rejects at admission). First wins.
-  const outcomes: OutcomeDef[] = [];
-  const seenOutcomeIds = new Set<string>();
-  for (const b of blockers) {
-    const id = outcomeIdOf(b);
-    if (seenOutcomeIds.has(id)) {
-      continue;
+  const slice = lines.slice(start);
+  while (slice.length > 0) {
+    const last = slice[slice.length - 1];
+    if (last !== undefined && last.trim().startsWith("```")) {
+      slice.pop();
+    } else {
+      break;
     }
-    seenOutcomeIds.add(id);
-    outcomes.push({
-      id,
-      description: b.evidence.length > 0 ? `${b.title} — ${b.evidence.join("; ")}` : b.title,
-    });
+  }
+  return `${slice.join("\n").trim()}\n`;
+};
+
+export type FollowupLineage = {
+  repo: string; // parent repo — infra, never authored
+  baseBranch: string; // base for the follow-up = parent run's branch tip
+  campaignId: string;
+  parentRunId: string; // the run super-daddy just reviewed
+  pass: number; // the NEW pass number (parent pass + 1)
+  promote: boolean; // secret n+1: Baby harness on Daddy's model
+  priorOutcomes: OutcomeDef[]; // delivered outcomes carried forward as regression
+};
+
+// Pure: (super-daddy's authored packet markdown) + lineage → an admittable packet.
+// The author owns the intent (summary/outcomes/surface/verification/constraints/
+// body); this stamps the lineage over the top (lineage WINS, stripping any infra
+// the model wrongly authored). Throws if the reply has no parseable frontmatter —
+// the caller treats that as an authoring failure (re-ask, then escalate), never a
+// silent stall.
+export const stampFollowupLineage = (authoredRaw: string, lineage: FollowupLineage): string => {
+  const packet = extractAuthoredPacket(authoredRaw);
+  const match = packet.match(FRONTMATTER_RE);
+  if (!match || match[1] === undefined) {
+    throw new Error("stampFollowupLineage: authored reply has no YAML frontmatter block");
   }
 
-  // Re-run the original suite (now must pass) plus the specific failing commands.
-  const failCommands = blockers
-    .filter((b) => b.grounding.kind === "command_fail" && b.grounding.ref.trim().length > 0)
-    .map((b) => ({ command: b.grounding.ref.trim() }));
-  const verification = dedupeVerification([...original.frontmatter.verification, ...failCommands]);
-
-  // An outcome being REPAIRED this pass cannot also be a regression guard ("must
-  // still pass unchanged") — that's self-contradictory. Exclude any prior outcome
-  // whose id is now a blocker outcome. (Triggered live when a reviewer reused the
-  // original outcome id as its suggested_outcome_id.)
-  const regression = priorOutcomes.filter((o) => !seenOutcomeIds.has(o.id));
-  const regressionIds = regression.map((o) => o.id);
-  const constraints = [
-    ...original.frontmatter.constraints,
-    ...(regressionIds.length > 0
-      ? [`Regression: these prior outcomes must STILL pass unchanged: ${regressionIds.join(", ")}.`]
-      : []),
-    "Scope is repair only: fix the blockers below against the original packet and Max's doctrine. Do not add net-new features.",
-  ];
-
-  // A plain "what is this run doing" line for `meridian tail`, composed from what
-  // the follow-up is fixing — no human and no model in this path, so the render
-  // derives it from its own blockers (capped to one readable line).
-  const summary = `convergence pass ${pass} — ${blockers.map((b) => b.title).join("; ")}`.slice(
-    0,
-    120,
-  );
-
-  // Field order here is the on-disk order — kept readable, lineage up top.
-  const frontmatterObj = {
-    repo: original.frontmatter.repo,
-    base: baseBranch,
-    summary,
-    campaign_id: campaignId,
-    parent_run_id: parentRunId,
-    pass,
-    promoted: promote,
-    outcomes,
-    regression_outcomes: regression,
-    expected_surface: original.frontmatter.expected_surface,
-    suspicious_surface: original.frontmatter.suspicious_surface,
-    verification,
-    constraints,
-  };
-
-  // Fail closed: never emit a packet that wouldn't survive its own admission check.
-  const validated = PacketFrontmatter.safeParse(frontmatterObj);
-  if (!validated.success) {
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(match[1]);
+  } catch (err) {
     throw new Error(
-      `renderFollowupPacket: produced invalid frontmatter — ${validated.error.issues
-        .map((i) => `${i.path.join(".")}: ${i.message}`)
-        .join("; ")}`,
+      `stampFollowupLineage: authored frontmatter is not valid YAML: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+  const authored: Record<string, unknown> =
+    parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
 
-  const body = [
-    `# ${slug} — convergence pass ${pass}`,
-    "",
-    `Campaign \`${campaignId}\`, follow-up to run \`${parentRunId}\`. Super-daddy reviewed the`,
-    `delivered work against the original packet and Max's doctrine and found grounded blockers.`,
-    `Fix exactly these; do not expand scope.`,
-    "",
-    "## Blockers to fix",
-    "",
-    blockers.map(renderBlockerBody).join("\n\n"),
-    "",
-    ...(regression.length > 0
-      ? [
-          "## Must not regress",
-          "",
-          "Delivered by earlier passes — must still pass:",
-          "",
-          ...regression.map((o) => `- \`${o.id}\`: ${o.description}`),
-          "",
-        ]
-      : []),
-  ].join("\n");
+  // An outcome being REPAIRED this pass cannot also be a regression guard ("must
+  // still pass unchanged") — exclude any prior outcome whose id the author reused
+  // as one of its new outcome ids.
+  const authoredOutcomes = Array.isArray(authored.outcomes) ? authored.outcomes : [];
+  const authoredIds = new Set(
+    authoredOutcomes
+      .map((o) => (o !== null && typeof o === "object" ? (o as { id?: unknown }).id : undefined))
+      .filter((id): id is string => typeof id === "string"),
+  );
+  const regression = lineage.priorOutcomes.filter((o) => !authoredIds.has(o.id));
 
-  const content = `---\n${stringifyYaml(frontmatterObj).trimEnd()}\n---\n\n${body}\n`;
-  return { runId, filename: `${runId}.md`, content };
+  // Lineage WINS: spread the authored intent, then stamp every infra field over it
+  // so a model that wrongly authored `base`/`repo`/etc. cannot poison the lineage.
+  const frontmatter = {
+    ...authored,
+    repo: lineage.repo,
+    base: lineage.baseBranch,
+    campaign_id: lineage.campaignId,
+    parent_run_id: lineage.parentRunId,
+    pass: lineage.pass,
+    promoted: lineage.promote,
+    regression_outcomes: regression,
+  };
+
+  const body = (match[2] ?? "").trim();
+  return `---\n${stringifyYaml(frontmatter).trimEnd()}\n---\n\n${body}\n`;
 };
 
 // ---------------------------------------------------------------------------

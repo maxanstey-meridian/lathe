@@ -78,6 +78,11 @@ export const Config = z.object({
       // The judgement rubric (§4): the FULL skill, not the ambient SKILL_SMALL
       // the executors inherit. Live path (§14.4) — read fresh each pass.
       skillPath: z.string().default("~/.config/opencode/skills/meridian/SKILL.md"),
+      // The packet-authoring spec super-daddy follows when it authors a follow-up
+      // packet (request_changes → repair pass). The SAME skill the planner uses to
+      // author any handoff packet — super-daddy is just the bigger, final-authority
+      // author. Read fresh each authoring turn, like skillPath.
+      packetSkillPath: z.string().default("~/.config/opencode/skills/packet/SKILL.md"),
       // Opus has a large window; give it more of the diff inline than daddy's
       // 64KB.
       diffCapBytes: z.number().int().default(131_072),

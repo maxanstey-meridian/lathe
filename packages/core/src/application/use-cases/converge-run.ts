@@ -18,7 +18,7 @@ import {
 } from "../../domain/campaign.js";
 import {
   decideConvergence,
-  renderFollowupPacket,
+  stampFollowupLineage,
   assembleCommitMessage,
   renderNits,
   type ConvergeDecision,
@@ -205,12 +205,9 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
       );
       const verificationGreen = allGreen(verificationResults);
 
-      // 3. Super-daddy review — ONE reviewer, trusted (S2/S4).
-      const diff = repo.reviewableDiffAgainst(
-        meta.worktree,
-        meta.base,
-        config.superdaddy.diffCapBytes,
-      );
+      // 3. Super-daddy review — ONE reviewer, trusted (S2/S4). The reviewer's
+      // cwd IS the worktree; it inspects the tree directly (git diff HEAD, rg,
+      // read) rather than being handed a diff slice.
       const reportText = existsSync(paths.reportFile(runId))
         ? readFileSync(paths.reportFile(runId), "utf-8")
         : "";
@@ -220,7 +217,6 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
       const outcome = await reviewer.superReview({
         packet,
         worktree: meta.worktree,
-        diff,
         reportText,
         skillText,
         pass,
@@ -297,6 +293,9 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
 
       // 4. Act on the decision.
       let amendedSha: string | null = null;
+      // Set when super-daddy cannot author an admittable follow-up packet — turns
+      // the author path into an escalate (park for Max) instead of a silent stall.
+      let authoringFailure: string | null = null;
 
       switch (decision.action) {
         case "stop": {
@@ -327,7 +326,8 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
         }
 
         case "author": {
-          // Fetch parent tip into source repo FIRST (S8/§19), then render + admit.
+          // Fetch parent tip into source repo FIRST (S8/§19) so the follow-up's
+          // base (= parent run's branch tip) resolves at admission.
           try {
             repo.fetchBranchFromClone(packet.frontmatter.repo, meta.worktree, meta.branch);
           } catch {
@@ -343,20 +343,76 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
             ).values(),
           ];
 
-          const followup = renderFollowupPacket({
-            original: packet,
-            parentRunId: runId,
-            campaignId,
-            pass: pass + 1,
-            blockers: decision.blockers,
-            priorOutcomes,
+          const followupRunId = `${isoToTimestamp(atIso)}-${slugFromRunId(runId, pass + 1)}`;
+          const lineage = {
+            repo: packet.frontmatter.repo,
             baseBranch: meta.branch,
-            timestamp: isoToTimestamp(atIso),
-            slug: slugFromRunId(runId, pass + 1),
+            campaignId,
+            parentRunId: runId,
+            pass: pass + 1,
             promote: decision.promote ?? false,
-          });
+            priorOutcomes,
+          };
 
-          store.admitQueue(followup.runId, followup.content);
+          // Super-daddy AUTHORS the follow-up packet — the same session that just
+          // reviewed, a bigger author with final authority, picking its own
+          // outcomes/surface/verification to fix the blockers it raised. The engine
+          // stamps the lineage and validates on admission. ONE retry feeding back
+          // the admission problems (the packet skill's "fix and re-run until it
+          // admits"); then escalate rather than loop or stall.
+          const packetSkillText = readFileSync(
+            expandHome(config.superdaddy.packetSkillPath),
+            "utf-8",
+          );
+          let problems: string[] | null = null;
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const authored = await reviewer.authorFollowup({
+              worktree: meta.worktree,
+              packetSkillText,
+              blockers: decision.blockers,
+              priorOutcomes,
+              pass: pass + 1,
+              campaignId,
+              priorProblems: problems ?? undefined,
+            });
+
+            // The review just succeeded over this socket, so an authoring drop is
+            // transient — throw to the fail-safe: the run stays ready_for_review
+            // and the next sweep re-reviews + re-authors. No forged pass, no park.
+            if (authored.kind === "unreachable") {
+              throw new Error(`authorFollowup unreachable: ${authored.detail}`);
+            }
+
+            let stamped: string;
+            try {
+              stamped = stampFollowupLineage(authored.content, lineage);
+            } catch (err) {
+              problems = [err instanceof Error ? err.message : String(err)];
+              continue;
+            }
+
+            const shape = parsePacketShape(stamped, followupRunId);
+            if (shape.ok) {
+              store.admitQueue(followupRunId, stamped);
+              problems = null;
+              break;
+            }
+            problems = shape.problems;
+          }
+
+          if (problems) {
+            // Two tries, still unadmittable — park for Max with the exact problems
+            // rather than dropping the pass. Handled as an escalate below.
+            authoringFailure = `Super-daddy could not author an admittable follow-up packet (2 attempts): ${problems.join("; ")}. Review the run manually, then re-run \`lathe converge ${runId}\`.`;
+            store.writeMeta({
+              ...meta,
+              status: "blocked" as const,
+              blockedReason: "human_decision" as const,
+              blockedQuestion: authoringFailure,
+              reviewerUnreachable: 0,
+              updatedAt: atIso,
+            });
+          }
           break;
         }
 
@@ -383,7 +439,8 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
           case "stop":
             return "converged";
           case "author":
-            return "open";
+            // A follow-up was admitted → open; authoring failed → parked for Max.
+            return authoringFailure ? "needs_max" : "open";
           case "escalate":
             return "needs_max";
         }

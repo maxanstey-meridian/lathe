@@ -36,7 +36,12 @@ export type TailUiDeps = {
   subscribe: Subscribe;
   runId: string;
   daddyDirectory: string;
+  // No runId was named on the CLI → follow the chain: when the tailed run finishes,
+  // hop to the next run the daemon makes active. False when the user named a runId.
+  autoAdvance?: boolean;
 };
+
+const TERMINAL_STATUSES = ["ready_for_review", "blocked", "failed", "accepted"];
 
 type LineStyle = "think" | "text" | "tool";
 type PaneLine = { text: string; style: LineStyle };
@@ -319,7 +324,7 @@ const TailApp = ({ store, budget, subscribe, runId, daddyDirectory }: TailUiDeps
   const fraction = Math.min(1, budget > 0 ? ctxEstimate / budget : 0);
   const barWidth = 24;
   const filled = Math.round(fraction * barWidth);
-  const terminal = ["ready_for_review", "blocked", "failed", "accepted"].includes(stats.status);
+  const terminal = TERMINAL_STATUSES.includes(stats.status);
 
   return (
     <Box flexDirection="column" width={frameWidth} overflow="hidden">
@@ -364,9 +369,33 @@ const TailApp = ({ store, budget, subscribe, runId, daddyDirectory }: TailUiDeps
   );
 };
 
+// Follow the chain, not one run. Holds the tailed runId as state; when autoAdvance
+// is set and the current run goes terminal, it switches to the next active run. The
+// `key={runId}` forces TailApp to remount so its run-scoped effects (journal poll,
+// SSE subscriptions) tear down and rebind to the new run cleanly.
+const TailRoot = (deps: TailUiDeps) => {
+  const [runId, setRunId] = useState(deps.runId);
+  useEffect(() => {
+    if (!deps.autoAdvance) {
+      return;
+    }
+    const poll = setInterval(() => {
+      const status = safe(() => deps.store.readMetaIfExists(runId)?.status);
+      if (status && TERMINAL_STATUSES.includes(status)) {
+        const next = safe(() => deps.store.readActiveRun()?.runId);
+        if (next && next !== runId) {
+          setRunId(next);
+        }
+      }
+    }, 1000);
+    return () => clearInterval(poll);
+  }, [runId, deps.autoAdvance, deps.store]);
+  return <TailApp key={runId} {...deps} runId={runId} />;
+};
+
 export const runTailUi = (deps: TailUiDeps): void => {
   if (!process.stdout.isTTY) {
-    render(<TailApp {...deps} />);
+    render(<TailRoot {...deps} />);
     return;
   }
 
@@ -381,6 +410,6 @@ export const runTailUi = (deps: TailUiDeps): void => {
 
   process.stdout.write("\x1b[?1049h\x1b[2J\x1b[H");
   process.once("exit", restore);
-  const instance = render(<TailApp {...deps} />);
+  const instance = render(<TailRoot {...deps} />);
   void instance.waitUntilExit().then(restore);
 };

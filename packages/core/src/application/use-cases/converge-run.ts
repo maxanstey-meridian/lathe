@@ -271,6 +271,21 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
       // 3b. A real verdict arrived — the unreachable streak (if any) is broken.
       const result: SuperReviewResult = outcome;
 
+      // Make the verdict VISIBLE in the tail/journal. The convergence log
+      // (convergence.jsonl) is the system of record but is never streamed, so
+      // without this the reviewer's verdict never reaches `lathe tail`. Mirrors
+      // the daddy `final_review` event, for super-daddy's convergence pass.
+      store.appendJournal(runId, {
+        at: atIso,
+        event: "super_review",
+        pass,
+        verdict: result.review.verdict,
+        findings: result.review.findings.map(
+          (f) =>
+            `[${f.severity}] ${f.title}${f.grounding.kind !== "none" ? ` ⟨${f.grounding.kind}⟩` : ""}`,
+        ),
+      });
+
       // 3. Pure decision.
       const decision = decideConvergence(
         result.review,

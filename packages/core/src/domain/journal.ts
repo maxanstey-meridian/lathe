@@ -104,6 +104,15 @@ export const JournalEvent = z.discriminatedUnion("event", [
     verdict: FinalReviewVerdict,
     findings: z.array(z.string()),
   }),
+  // Super-daddy's convergence verdict for a pass. The convergence log (convergence.jsonl)
+  // is not streamed, so without this the reviewer's verdict never reaches the tail. §SUPER-DADDY.
+  z.object({
+    ...base,
+    event: z.literal("super_review"),
+    pass: z.number().int(),
+    verdict: FinalReviewVerdict,
+    findings: z.array(z.string()),
+  }),
   z.object({ ...base, event: z.literal("ladder_step"), count: z.number().int() }),
   z.object({
     ...base,
@@ -161,6 +170,8 @@ export const renderJournalEvent = (e: JournalEvent): string => {
       return `${t} 📋 report accepted: ${e.status}`;
     case "final_review":
       return `${t} 🔍 final review [${e.verdict}]${e.findings.length ? `\n   ${e.findings.join("\n   ")}` : ""}`;
+    case "super_review":
+      return `${t} 🛡 super-daddy review pass ${e.pass} [${e.verdict}]${e.findings.length ? `\n   ${e.findings.join("\n   ")}` : ""}`;
     case "ladder_step":
       return `${t} ⚠ no-progress ladder: ${e.count}`;
     case "parked":

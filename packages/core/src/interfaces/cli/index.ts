@@ -36,7 +36,7 @@ const deps: CliDeps = {
   runDriver: () => runDriver(config, paths),
   convergeOnce: (runId) => convergeOnce(config, paths, runId),
   superReviewOnce: (runId) => superReviewOnce(config, paths, runId),
-  openTail: (runId) => openTail(config, paths, runId),
+  openTail: (runId, autoAdvance) => openTail(config, paths, runId, autoAdvance),
 };
 
 dispatch(process.argv.slice(2), deps)

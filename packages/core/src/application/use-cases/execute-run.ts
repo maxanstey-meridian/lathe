@@ -111,7 +111,7 @@ export const makeExecuteRun =
     const daddySessionId =
       isResume && priorMeta?.daddySessionId
         ? await planner.resumeSession(priorMeta.daddySessionId)
-        : await planner.handshake(renderDaddySeed(packet.raw));
+        : await planner.handshake(renderDaddySeed(packet.raw), worktree);
     const babySessionId = await executor.createSession(`baby:${runId}`, worktree);
 
     store.writeMeta({

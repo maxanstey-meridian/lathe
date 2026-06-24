@@ -67,8 +67,8 @@ describe("createPlanner.finalReview", () => {
       deleteSession: async () => {},
     } as unknown as Executor;
 
-    const planner = createPlanner(mockExecutor, modelConfig, 30000, "test-dir");
-    await planner.handshake("seed");
+    const planner = createPlanner(mockExecutor, modelConfig, 30000);
+    await planner.handshake("seed", "test-dir");
     const result = await planner.finalReview(minPacket(), "(diff)", minLedger(), minReport());
 
     assert.equal(sendCount, 2);
@@ -98,8 +98,8 @@ describe("createPlanner.finalReview", () => {
       deleteSession: async () => {},
     } as unknown as Executor;
 
-    const planner = createPlanner(mockExecutor, modelConfig, 30000, "test-dir");
-    await planner.handshake("seed");
+    const planner = createPlanner(mockExecutor, modelConfig, 30000);
+    await planner.handshake("seed", "test-dir");
     const result = await planner.finalReview(minPacket(), "(diff)", minLedger(), minReport());
 
     assert.equal(
@@ -135,8 +135,8 @@ describe("createPlanner.finalReview", () => {
       deleteSession: async () => {},
     } as unknown as Executor;
 
-    const planner = createPlanner(mockExecutor, modelConfig, 30000, "test-dir");
-    await planner.handshake("seed");
+    const planner = createPlanner(mockExecutor, modelConfig, 30000);
+    await planner.handshake("seed", "test-dir");
     const result = await planner.finalReview(minPacket(), "(diff)", minLedger(), minReport());
 
     assert.equal(sendCount, 3);
@@ -159,8 +159,8 @@ describe("createPlanner.finalReview", () => {
       deleteSession: async () => {},
     } as unknown as Executor;
 
-    const planner = createPlanner(mockExecutor, modelConfig, 30000, "test-dir");
-    await planner.handshake("seed");
+    const planner = createPlanner(mockExecutor, modelConfig, 30000);
+    await planner.handshake("seed", "test-dir");
     const result = await planner.finalReview(minPacket(), "(diff)", minLedger(), minReport());
 
     assert.equal(

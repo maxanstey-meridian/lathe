@@ -105,6 +105,7 @@ const makeFakePorts = (
   onWriteCampaign?: (c: Campaign) => void,
   onAppendConvergence?: (runId: string, entry: unknown) => void,
   onWriteNits?: (runId: string, md: string) => void,
+  onAppendJournal?: (runId: string, event: unknown) => void,
 ) => {
   let metaStore: RunMeta = makeMeta(metaOverrides);
   const nitsStore = new Map<string, string>();
@@ -140,6 +141,9 @@ const makeFakePorts = (
       appendConvergence: (runId: string, entry: unknown) => {
         convergenceStore.push(entry);
         onAppendConvergence?.(runId, entry);
+      },
+      appendJournal: (runId: string, event: unknown) => {
+        onAppendJournal?.(runId, event);
       },
       writeNits: (runId: string, md: string) => {
         nitsStore.set(runId, md);
@@ -394,6 +398,71 @@ test("convergeRun: author — admit follow-up, campaign open, priorOutcomes dedu
 
   // No meta status change on author — stays ready_for_review
   equal(ports.getMeta().status, "ready_for_review");
+});
+
+test("convergeRun: emits a super_review journal event with verdict + rendered findings (tail visibility)", async () => {
+  const journalEvents: unknown[] = [];
+  const skillPath = createSkillFile();
+  const ports = makeFakePorts(
+    skillPath,
+    undefined,
+    undefined,
+    {
+      review: {
+        verdict: "request_changes",
+        findings: [
+          {
+            id: "fix-a",
+            severity: "P0",
+            title: "fix a",
+            evidence: ["a.ts:1"],
+            grounding: { kind: "command_fail", ref: "pnpm test" },
+            suggested_outcome_id: "fix-a",
+          },
+          {
+            id: "fix-b",
+            severity: "P1",
+            title: "fix b",
+            evidence: [],
+            grounding: { kind: "none", ref: "" },
+          },
+        ],
+        convergence: { recommend_stop: false, profile: { p0: 1, p1: 1, p2: 0, p3: 0 }, rationale: "" },
+        commit_message: null,
+        notes: "",
+        human_decision_needed: null,
+      },
+      raw: "request_changes",
+    },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    (_runId, event) => {
+      journalEvents.push(event);
+    },
+  );
+
+  await convergeRun({
+    store: ports.store,
+    repo: ports.repo,
+    reviewer: ports.reviewer,
+    verify: ports.verify,
+    clock: ports.clock,
+    config: ports.config,
+    paths: ports.paths,
+  })(RUN_ID);
+
+  const superReview = journalEvents.find(
+    (e): e is { event: string; verdict: string; pass: number; findings: string[] } =>
+      typeof e === "object" && e !== null && (e as { event?: string }).event === "super_review",
+  );
+  ok(superReview, "a super_review journal event should be emitted");
+  equal(superReview.verdict, "request_changes");
+  equal(superReview.pass, 1);
+  // ungrounded findings carry no marker; grounded ones append ⟨kind⟩
+  deepEqual(superReview.findings, ["[P0] fix a ⟨command_fail⟩", "[P1] fix b"]);
 });
 
 // ---------------------------------------------------------------------------
@@ -820,6 +889,7 @@ test("convergeRun: stop with meta already ready_for_review — no unnecessary wr
       writeCampaign: () => {},
       admitQueue: () => {},
       appendConvergence: () => {},
+      appendJournal: () => {},
       writeNits: () => {},
     } as unknown as Store,
     repo: {

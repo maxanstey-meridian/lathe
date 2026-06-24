@@ -38,7 +38,7 @@ export type CliDeps = {
   superReviewOnce: (runId: string) => Promise<number>;
   // Launches the Ink split-pane TTY tail (CONTRACT X3) and returns -1 (Ink owns
   // the terminal until 'q'); injected so dispatch stays free of the renderer + ink.
-  openTail: (runId: string) => number;
+  openTail: (runId: string, autoAdvance: boolean) => number;
 };
 
 const usage = `meridian — sequential overnight executor of human-written specs
@@ -179,9 +179,15 @@ const cmdAnswer = (args: string[], deps: CliDeps): number => {
 // the context gauge, the status strip), else the plain journal stream for pipes,
 // --plain, and --no-follow replay (CONTRACT X3, D4). Returns -1 to stay alive
 // while live-following, a terminal code otherwise.
-const tailRunId = (runId: string, deps: CliDeps, follow: boolean, plain: boolean): number => {
+const tailRunId = (
+  runId: string,
+  deps: CliDeps,
+  follow: boolean,
+  plain: boolean,
+  autoAdvance: boolean,
+): number => {
   if (follow && !plain && process.stdout.isTTY) {
-    return deps.openTail(runId);
+    return deps.openTail(runId, autoAdvance);
   }
   const file = deps.paths.journalFile(runId);
   if (!existsSync(file)) {
@@ -222,9 +228,12 @@ const cmdTail = (args: string[], deps: CliDeps): number => {
   const follow = !args.includes("--no-follow");
   const plain = args.includes("--plain");
   const explicit = args.find((a) => !a.startsWith("--"));
+  // No runId named → follow the chain across packets (auto-advance). A named runId
+  // pins to exactly that run.
+  const autoAdvance = explicit === undefined;
   const runId = explicit ?? deps.store.readActiveRun()?.runId;
   if (runId !== undefined) {
-    return tailRunId(runId, deps, follow, plain);
+    return tailRunId(runId, deps, follow, plain, autoAdvance);
   }
 
   // Nothing named and nothing active yet. Without --follow this is a one-shot
@@ -240,7 +249,7 @@ const cmdTail = (args: string[], deps: CliDeps): number => {
     if (next !== undefined) {
       clearInterval(poll);
       console.log(`run ${next} started — tailing…`);
-      tailRunId(next, deps, follow, plain);
+      tailRunId(next, deps, follow, plain, autoAdvance);
     }
   }, 1000);
   process.on("SIGINT", () => {

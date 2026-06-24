@@ -24,11 +24,13 @@ export const createPlanner = (
   executor: Executor,
   daddyModel: ModelConfig,
   daddyTimeoutMs: number,
-  directory: string,
 ): Planner => {
   let daddySessionId: string | undefined;
 
-  const handshake = async (seedPrompt: string): Promise<string> => {
+  // directory is the run's worktree: Daddy's session roots there (read-only — it
+  // has no write/edit/patch/bash) so it can inspect the actual code when a
+  // reconciliation/handoff question can't be answered from inline evidence alone.
+  const handshake = async (seedPrompt: string, directory: string): Promise<string> => {
     daddySessionId = await executor.createSession("meridian-planner", directory);
     const response = await executor.sendMessage(daddySessionId, seedPrompt, daddyModel, 30000);
     const text = extractText(response);

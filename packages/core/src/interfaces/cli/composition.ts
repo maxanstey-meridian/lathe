@@ -134,17 +134,12 @@ export const runDriver = async (config: Config, paths: Paths): Promise<void> => 
   const repo = buildRepo();
   const store = StoreAdapter.create(paths, repo, clock);
   const executor = createOpencodeClient(config);
-  // Daddy roots in a fixed directory (paths.root): he consults on intent — approach
-  // and evidence arrive inline, no worktree access needed. Super-daddy is different:
-  // it MUST execute verification and inspect the tree (renderSuperReview promises
-  // "your cwd is the run's worktree"), so its session is scoped per-call to the run's
-  // worktree — passed via SuperReviewInput, NOT fixed here.
-  const planner = createPlanner(
-    executor,
-    modelOf(config.daddy),
-    config.daddy.timeoutMs,
-    paths.root,
-  );
+  // Daddy's session roots in the run's worktree (passed to handshake per-run, not
+  // fixed here) so the planner can read the actual code when a question can't be
+  // answered from inline evidence. It's read-only by agent config (no
+  // write/edit/patch/bash). Super-daddy is likewise scoped to the worktree per-call
+  // via SuperReviewInput.
+  const planner = createPlanner(executor, modelOf(config.daddy), config.daddy.timeoutMs);
   const reviewer = createReviewer(
     executor,
     modelOf(config.superdaddy),
@@ -381,7 +376,12 @@ export const superReviewOnce = async (
 // serve instance's SSE is best-effort: if no driver is up, the connection errors
 // silently and the UI degrades to journal-only polling. Returns -1 (Ink owns the
 // terminal until 'q').
-export const openTail = (config: Config, paths: Paths, runId: string): number => {
+export const openTail = (
+  config: Config,
+  paths: Paths,
+  runId: string,
+  autoAdvance: boolean,
+): number => {
   const clock = systemClock;
   const repo = buildRepo();
   const store = StoreAdapter.create(paths, repo, clock);
@@ -392,6 +392,7 @@ export const openTail = (config: Config, paths: Paths, runId: string): number =>
     subscribe: events.subscribe,
     runId,
     daddyDirectory: paths.root,
+    autoAdvance,
   });
   return -1;
 };

@@ -11,7 +11,7 @@ import type {
 } from "../../domain/index.js";
 
 export type Planner = {
-  handshake(seedPrompt: string): Promise<string>;
+  handshake(seedPrompt: string, directory: string): Promise<string>;
   resumeSession(sessionId: string): Promise<string>;
   consult(input: AskPlannerInput): Promise<PlannerResponse>;
   finalReview(

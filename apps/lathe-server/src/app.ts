@@ -1,26 +1,27 @@
 /**
- * STAGING REFERENCE — drop into apps/lathe-server/src/app.ts in P00.
- *
  * The daemon's HTTP surface. Two transports on one Hono app:
  *   1. The rivet-ts contract → registerRivetHonoRoutes (request/response).
  *   2. A sidecar GET /events → streamSSE (the live push spine).
  *
- * Wiring mirrors the current rivet-ts scaffolder (createApp factory + `with`
- * JSON import + rivetHttpError + app.onError envelope + hono/logger). P00 lands
- * this with EVERY contract handler stubbed (rivetHttpError 501) so the baseline
- * is green; bodies land in P03, the supervisor that fills `bus` in P02.
+ * Handlers delegate to the injected Supervisor — no business logic in handlers.
+ * Error→status mapping uses rivetHttpError (404/409/400); unhandled errors fall
+ * through to app.onError 500 envelope.
  */
 import { Hono } from "hono";
 import { logger } from "hono/logger";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { registerRivetHonoRoutes, rivetHttpError } from "rivet-ts/hono";
-import type { LatheContract, LatheEvent, Reviewer } from "@lathe/contract";
-export type { LatheEvent, Reviewer };
+import type { LatheContract, LatheEvent, RejectRunRequest } from "@lathe/contract";
+export type { LatheEvent };
 import contract from "@lathe/contract/generated/api.contract.json" with { type: "json" };
 
+import type { Supervisor } from "./supervisor.js";
+import { configToDto } from "./config-to-dto.js";
+import { runToSummary, runToDetail } from "./run-to-dto.js";
+
 /**
- * In-process fan-out for live events. P02's supervisor calls publish() with the
+ * In-process fan-out for live events. The supervisor calls publish() with the
  * projected wire event; every open /events stream gets it. Trivial pub/sub —
  * the durability/replay story is SQLite (readJournalSince), not this buffer.
  */
@@ -41,40 +42,138 @@ export interface AppDeps {
   bus: EventBus;
   /** Resumable replay on reconnect — SQLite events table (P01's readJournalSince). */
   readEventsSince: (seq: number) => { seq: number; event: LatheEvent }[];
-  // supervisor: Supervisor — injected in P02; handlers call it in P03.
 }
 
 export interface CreateAppOptions {
-  // Server-entry concerns (the scaffolder's CreateAppOptions shape).
   readonly logger?: boolean;
   readonly cors?: boolean;
 }
 
-export const createApp = (deps: AppDeps, options: CreateAppOptions = {}): Hono => {
+export const createApp = (
+  deps: AppDeps,
+  supervisor: Supervisor,
+  options: CreateAppOptions = {},
+): Hono => {
   const app = new Hono();
 
   if (options.logger) app.use(logger());
   if (options.cors) app.use(cors());
 
-  // --- contract routes (stubbed in P00, bodies in P03) ---------------------
+  // --- contract routes (real handlers — supervisor delegation) --------------
   registerRivetHonoRoutes<LatheContract>(app, contract, {
     group: "lathe",
     handlers: {
-      EnqueueRun: () => { throw rivetHttpError(501, { code: "not_implemented", message: "EnqueueRun" }); },
-      EnqueueChain: () => { throw rivetHttpError(501, { code: "not_implemented", message: "EnqueueChain" }); },
-      ListRuns: () => { throw rivetHttpError(501, { code: "not_implemented", message: "ListRuns" }); },
-      GetRun: () => { throw rivetHttpError(501, { code: "not_implemented", message: "GetRun" }); },
-      AbortRun: () => { throw rivetHttpError(501, { code: "not_implemented", message: "AbortRun" }); },
-      AcceptRun: () => { throw rivetHttpError(501, { code: "not_implemented", message: "AcceptRun" }); },
-      RejectRun: () => { throw rivetHttpError(501, { code: "not_implemented", message: "RejectRun" }); },
-      GetConfig: () => { throw rivetHttpError(501, { code: "not_implemented", message: "GetConfig" }); },
+      EnqueueRun: async ({ body }) => {
+        let runId: string;
+        try {
+          runId = supervisor.enqueueRun(body.packetPath);
+        } catch (err) {
+          throw rivetHttpError(400, { code: "invalid_packet", message: err instanceof Error ? err.message : String(err) });
+        }
+        const meta = supervisor.getRun(runId);
+        if (!meta) {
+          throw rivetHttpError(500, { code: "internal_error", message: "enqueue succeeded but run not found" });
+        }
+        const ctx = buildDtoCtx(supervisor, meta);
+        return runToSummary(meta, ctx);
+      },
+
+      EnqueueChain: async ({ body }) => {
+        const before = new Set(supervisor.listRuns().map(r => r.runId));
+        supervisor.enqueueChain(body.chainDir);
+        const runs = supervisor.listRuns();
+        const chainIds = runs.filter(r => !before.has(r.runId)).map(r => r.runId);
+        const summaries = runs
+          .filter(r => chainIds.includes(r.runId))
+          .map((meta) => {
+            const ctx = buildDtoCtx(supervisor, meta);
+            return runToSummary(meta, ctx);
+          });
+        return summaries;
+      },
+
+      ListRuns: async () => {
+        const runs = supervisor.listRuns();
+        const summaries = runs.map((meta) => {
+          const ctx = buildDtoCtx(supervisor, meta);
+          return runToSummary(meta, ctx);
+        });
+        return summaries;
+      },
+
+      GetRun: async ({ params }) => {
+        const meta = supervisor.getRun(params.runId);
+        if (!meta) {
+          throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+        }
+        const ctx = buildDtoCtx(supervisor, meta);
+        return runToDetail(meta, ctx);
+      },
+
+      AbortRun: async ({ params }) => {
+        try {
+          supervisor.abortRun(params.runId);
+        } catch (err) {
+          if (err instanceof Error && err.name === "RunNotFoundError") {
+            throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+          }
+          throw err;
+        }
+        const meta = supervisor.getRun(params.runId);
+        if (!meta) {
+          throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+        }
+        const ctx = buildDtoCtx(supervisor, meta);
+        return runToSummary(meta, ctx);
+      },
+
+      AcceptRun: async ({ params }) => {
+        try {
+          supervisor.acceptRun(params.runId);
+        } catch (err) {
+          if (err instanceof Error && err.name === "NonChainTipError") {
+            const tip = findChainTip(supervisor);
+            throw rivetHttpError(409, {
+              code: "chain_tip_required",
+              message: `${params.runId} is not a chain tip — accept ${tip} first`,
+            });
+          }
+          throw err;
+        }
+        const meta = supervisor.getRun(params.runId);
+        if (!meta) {
+          throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+        }
+        const ctx = buildDtoCtx(supervisor, meta);
+        return runToSummary(meta, ctx);
+      },
+
+      RejectRun: async ({ params, body }) => {
+        const reason = (body as RejectRunRequest).reason ?? "rejected";
+        supervisor.rejectRun(params.runId, reason);
+        const meta = supervisor.getRun(params.runId);
+        if (!meta) {
+          throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+        }
+        const ctx = buildDtoCtx(supervisor, meta);
+        return runToSummary(meta, ctx);
+      },
+
+      GetConfig: async () => {
+        return configToDto(supervisor.config);
+      },
     },
   });
 
-  // --- SSE sidecar (skeleton in P00, full feed in P04) ---------------------
+  // --- SSE sidecar -----------------------------------------------------------
   // Resumable: client sends Last-Event-ID; we replay the SQLite events table
-  // from there, THEN attach to the live bus. seq is the SSE event id, so a
-  // dropped connection resumes gap-free.
+  // from there (exclusive), THEN attach to the live bus. seq is the SSE event
+  // id so a dropped connection resumes gap-free.
+  //
+  // NOTE: there is a bounded race window (≤ pollIntervalMs) between the
+  // readJournalSince snapshot and the bus.subscribe() call — events written
+  // to the journal in that window are not dropped (they arrive via the bus on
+  // the next tail poll). A reconnect-mid-stream test verifies the handoff.
   app.get("/events", (c) =>
     streamSSE(c, async (stream) => {
       const lastId = Number.parseInt(c.req.header("Last-Event-ID") ?? "0", 10);
@@ -92,7 +191,6 @@ export const createApp = (deps: AppDeps, options: CreateAppOptions = {}): Hono =
       });
 
       try {
-        // heartbeat-able loop; replace with abort-aware wait in P04
         while (!stream.aborted) {
           if (queue.length === 0) {
             await new Promise<void>((r) => { notify = r; setTimeout(r, 15_000); });
@@ -116,4 +214,26 @@ export const createApp = (deps: AppDeps, options: CreateAppOptions = {}): Hono =
   });
 
   return app;
+};
+
+// ---------------------------------------------------------------------------
+// Handler helpers
+// ---------------------------------------------------------------------------
+
+import type { RunDtoCtx } from "./run-to-dto.js";
+import type { RunMeta } from "@lathe/core";
+
+const buildDtoCtx = (sup: Supervisor, meta: RunMeta): RunDtoCtx => ({
+  isChainTip: sup.isChainTip(meta.runId),
+  contextWindow: sup.config.baby.contextWindow,
+  lastVerdict: sup.lastVerdict(meta.runId),
+});
+
+/** Find the first chain-tip run for use in error messages (accepting the tip unblocks the chain). */
+const findChainTip = (sup: Supervisor): string => {
+  const runs = sup.listRuns();
+  for (const run of runs) {
+    if (sup.isChainTip(run.runId)) return run.runId;
+  }
+  return runs.at(-1)?.runId ?? "unknown";
 };

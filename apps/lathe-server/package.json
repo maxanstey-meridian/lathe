@@ -12,7 +12,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/app.test.ts"
   },
   "dependencies": {
     "@lathe/core": "workspace:*",

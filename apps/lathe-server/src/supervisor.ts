@@ -33,7 +33,8 @@ import {
   parseStaged,
 } from "@lathe/core";
 
-import type { EventBus, AppDeps, LatheEvent, Reviewer } from "./app.js";
+import type { EventBus, AppDeps, LatheEvent } from "./app.js";
+import type { Reviewer } from "@lathe/contract";
 import { createEventBus } from "./app.js";
 import { projectJournalEvent } from "./event-projection.js";
 import type { ProjectionContext } from "./event-projection.js";
@@ -81,9 +82,11 @@ export type Supervisor = {
   stop(): Promise<void>;
   /** Dependencies for createApp (bus + readEventsSince). */
   appDeps: AppDeps;
+  /** Read-only config — used by GetConfig handler and run-to-dto contextWindow. */
+  config: Config;
   // -- Lifecycle methods (P03 handlers call these) --
-  /** Admit a packet file into the queue. */
-  enqueueRun(packetPath: string): void;
+  /** Admit a packet file into the queue; returns the derived runId. */
+   enqueueRun(packetPath: string): string;
   /** Stage a chain directory (promotes heads straight away). */
   enqueueChain(chainDir: string): void;
   /** List all known runs (domain RunMeta). */
@@ -96,6 +99,10 @@ export type Supervisor = {
   acceptRun(runId: string): number;
   /** Reject a run — archive if queued, mark blocked if running. */
   rejectRun(runId: string, reason: string): void;
+  /** Whether runId is the chain tip (no staged child references it as parent). */
+  isChainTip(runId: string): boolean;
+  /** Latest reviewer verdict summary for a run (from store.readDecisions). */
+  lastVerdict(runId: string): string | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -233,6 +240,29 @@ export const createSupervisor = (
   };
 
   return {
+    get config(): Config {
+      return config;
+    },
+
+    isChainTip(runId: string): boolean {
+      return isChainTip(runId);
+    },
+
+    lastVerdict(runId: string): string | null {
+      const decisions = store.readDecisions(runId);
+      const verdict = decisions
+        .slice()
+        .reverse()
+        .find(
+          (d) =>
+            d.status === "accepted" ||
+            d.status === "blocked" ||
+            d.status === "stop",
+        );
+      if (!verdict) return null;
+      return verdict.answer ?? null;
+    },
+
     async stop(): Promise<void> {
       // Signal graceful shutdown.
       stopController.abort();
@@ -276,7 +306,7 @@ export const createSupervisor = (
       };
     },
 
-    enqueueRun(packetPath: string): void {
+    enqueueRun(packetPath: string): string {
       const resolved = resolve(packetPath);
       if (!existsSync(resolved)) {
         throw new Error(`no such file: ${resolved}`);
@@ -289,6 +319,7 @@ export const createSupervisor = (
       if (!existsSync(join(paths.queueDir, `${runId}.md`))) {
         throw new Error(`packet rejected — see ${paths.rejectedDir}`);
       }
+      return runId;
     },
 
     enqueueChain(chainDir: string): void {

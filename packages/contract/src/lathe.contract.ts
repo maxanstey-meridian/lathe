@@ -120,12 +120,14 @@ export interface LatheContract extends Contract<"LatheContract"> {
   GetRun: Endpoint<{
     method: "GET";
     route: "/runs/{runId}";
+    params: { runId: string };
     response: RunDetailDto;
   }>;
 
   AbortRun: Endpoint<{
     method: "POST";
     route: "/runs/{runId}/abort";
+    params: { runId: string };
     response: RunSummaryDto;
   }>;
 
@@ -135,6 +137,7 @@ export interface LatheContract extends Contract<"LatheContract"> {
   AcceptRun: Endpoint<{
     method: "POST";
     route: "/runs/{runId}/accept";
+    params: { runId: string };
     response: RunSummaryDto;
   }>;
 
@@ -142,6 +145,7 @@ export interface LatheContract extends Contract<"LatheContract"> {
     method: "POST";
     route: "/runs/{runId}/reject";
     input: RejectRunRequest;
+    params: { runId: string };
     response: RunSummaryDto;
   }>;
 

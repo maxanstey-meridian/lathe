@@ -9,6 +9,9 @@
 // effects. Reads top-to-bottom as the per-turn lifecycle it owns.
 // ---------------------------------------------------------------------------
 
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+
 import { babyContextBudget } from "../../config/config.js";
 import type { Config } from "../../config/schemas.js";
 import { extractText, extractReasoning, gateDeniedPart } from "../../domain/agent-response.js";
@@ -43,12 +46,14 @@ import { evaluateTurn } from "../../domain/turn.js";
 import { rotateSession } from "./rotation.js";
 import {
   journal,
+  buildHandoffInject,
   type RunPorts,
   type RunChannel,
   type RunOutcome,
   type TurnLoopResult,
   type Seed,
 } from "./run-runtime.js";
+import type { ModelConfig } from "../ports/executor.js";
 
 // ---------------------------------------------------------------------------
 // Turn facts assembly: message text, reasoning, tool calls, context tokens.
@@ -166,38 +171,57 @@ const looksLikeProseFinish = (text: string): boolean =>
 
 // Pick the rotation/resume seed from durable state: latest checkpoint → Q2
 // (gate clears on the new session's first accepted decision), none → Q8
-// reconciliation (the gate stacks reconciliation). Returns whether a checkpoint
-// was found so the caller re-latches the matching gate (O5/O6).
+// reconciliation (the gate stacks reconciliation). If a handoff artifact
+// exists on disk, prepend an inject message to the seed and set awaitingVerification.
+// Returns whether a checkpoint was found so the caller re-latches the matching gate (O5/O6).
+
 const reseedFromCheckpoint = (
   ports: RunPorts,
   packet: Packet,
   worktree: string,
-): { seed: Seed; hasCheckpoint: boolean } => {
+): { seed: Seed; hasCheckpoint: boolean; handoffInjected: boolean } => {
   const runId = packet.runId;
   const ledger = ports.store.readLedger(runId);
   const review = ports.store.readReviewState(runId);
   const decisions = ports.store.readDecisions(runId);
   const diff = ports.repo.diffStat(worktree, packet.frontmatter.base);
   const checkpoint = ports.store.latestCheckpoint(runId);
+
+  let seedText: string;
+  let seedName: string;
   if (checkpoint) {
-    return {
-      seed: {
-        name: "Q2",
-        text: q2RotationSeed(packet, ledger, checkpoint, review, decisions, diff),
-      },
-      hasCheckpoint: true,
-    };
+    seedName = "Q2";
+    seedText = q2RotationSeed(packet, ledger, checkpoint, review, decisions, diff);
+  } else {
+    seedName = "Q8";
+    seedText = q8ReconciliationSeed(packet, ledger, review, decisions, diff);
   }
+
+  // Handoff inject: if the predecessor wrote handoff.json, prepend a system
+  // message so the recycled baby calls verify_handoff first.
+  let injectText = "";
+  try {
+    const runDir = dirname(worktree);
+    const handoffPath = join(runDir, "handoff.json");
+    const raw = readFileSync(handoffPath, "utf-8");
+    injectText = buildHandoffInject(raw);
+  } catch {
+    /* no handoff — graceful degradation */
+  }
+  if (injectText) {
+    seedName = `${seedName}+handoff`;
+    seedText = `${injectText}\n\n${seedText}`;
+  }
+
   return {
-    seed: { name: "Q8", text: q8ReconciliationSeed(packet, ledger, review, decisions, diff) },
-    hasCheckpoint: false,
+    seed: { name: seedName, text: seedText },
+    hasCheckpoint: checkpoint !== undefined,
+    handoffInjected: injectText.length > 0,
   };
 };
 
 // ---------------------------------------------------------------------------
 // resolveBabyModel — pure helper for the promoted round model swap
-
-import type { ModelConfig } from "../ports/executor.js";
 
 export const resolveBabyModel = (config: Config, promoted: boolean): ModelConfig =>
   promoted
@@ -303,20 +327,12 @@ export const turnLoop = async (
         });
       }
       sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, false);
-      const ledger = store.readLedger(runId);
-      const review = store.readReviewState(runId);
-      const decisions = store.readDecisions(runId);
-      next = {
-        name: "Q8",
-        text: q8ReconciliationSeed(
-          packet,
-          ledger,
-          review,
-          decisions,
-          repo.diffStat(worktree, packet.frontmatter.base),
-        ),
-      };
-      continue;
+       const { seed: reseed, hasCheckpoint, handoffInjected } = reseedFromCheckpoint(ports, packet, worktree);
+       next = reseed;
+       if (handoffInjected) {
+         channel.awaitingVerification = true;
+       }
+       continue;
     }
 
     // --- gather --------------------------------------------------------------
@@ -598,9 +614,12 @@ export const turnLoop = async (
             contextTokens: obs.contextTokens,
           });
         }
-        const { seed: reseed, hasCheckpoint } = reseedFromCheckpoint(ports, packet, worktree);
+        const { seed: reseed, hasCheckpoint, handoffInjected } = reseedFromCheckpoint(ports, packet, worktree);
         sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, hasCheckpoint);
         next = reseed;
+        if (handoffInjected) {
+          channel.awaitingVerification = true;
+        }
         continue;
       }
 
@@ -618,9 +637,12 @@ export const turnLoop = async (
           phase: "context_overflow",
           contextTokens: priorContextTokens,
         });
-        const { seed: reseed, hasCheckpoint } = reseedFromCheckpoint(ports, packet, worktree);
+        const { seed: reseed, hasCheckpoint, handoffInjected } = reseedFromCheckpoint(ports, packet, worktree);
         sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, hasCheckpoint);
         next = reseed;
+        if (handoffInjected) {
+          channel.awaitingVerification = true;
+        }
         continue;
       }
 

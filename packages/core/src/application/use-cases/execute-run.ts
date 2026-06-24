@@ -12,7 +12,8 @@
 // loop and the bridge's concrete Ref (the application cannot import the bridge).
 // ---------------------------------------------------------------------------
 
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { initialGateState } from "../../domain/gate.js";
 import { parsePacketShape } from "../../domain/packet.js";
 import type { Packet } from "../../domain/packet.js";
@@ -26,6 +27,7 @@ import { renderReportMarkdown } from "../../domain/report.js";
 import type { ExecuteRunCallback } from "./run-loop.js";
 import {
   journal,
+  buildHandoffInject,
   type RunPorts,
   type RunChannel,
   type Seed,
@@ -185,7 +187,25 @@ export const makeExecuteRun =
     // that does nothing). On expiry the attempt parks wedged.
     const deadlineMs = clock.now() + config.thresholds.maxRunMs;
 
+    // Handoff inject: if the predecessor wrote handoff.json, prepend a system
+    // message so new baby reads it and calls verify_handoff first.
+    const runDir = dirname(worktree);
+    const handoffPath = join(runDir, "handoff.json");
+    let injectText = "";
+    try {
+      const raw = readFileSync(handoffPath, "utf-8");
+      injectText = buildHandoffInject(raw);
+    } catch {
+      /* no handoff — graceful degradation, baby re-derives trust the old way */
+    }
+    if (injectText) {
+      seed = { name: `${seed.name}+handoff`, text: `${injectText}\n\n${seed.text}` };
+    }
+
     const channel = bridge.beginRun(ref, packet, worktree);
+    if (injectText) {
+      channel.awaitingVerification = true;
+    }
     let result: TurnLoopResult;
     try {
       result = await turnLoop(ports, packet, worktree, babySessionId, channel, seed, deadlineMs);

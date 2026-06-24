@@ -11,6 +11,7 @@ export const RunStatus = z.enum([
   "blocked",
   "failed",
   "accepted",
+  "aborted",
 ]);
 export type RunStatus = z.infer<typeof RunStatus>;
 

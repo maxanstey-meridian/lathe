@@ -33,6 +33,7 @@ export type ExecuteRunCallback<Ref = unknown> = (
   meta: { repo: string; worktree: string; base: string; branch: string },
   ref: Ref,
   clock: Clock,
+  signal?: AbortSignal,
 ) => Promise<void>;
 
 export type ConvergeCallback = (runId: string) => Promise<void>;
@@ -42,6 +43,13 @@ export type WaitForWorkCallback = (signal: AbortSignal) => Promise<void>;
 // ---------------------------------------------------------------------------
 // Entry point — the always-on driver loop
 // ---------------------------------------------------------------------------
+
+export type RunLoopSeams = {
+  /** If present, wired to waitForWork and used as loop-exit condition. runLoop does NOT register a SIGINT handler. */
+  readonly stopSignal?: AbortSignal;
+  /** Per-run AbortController map keyed by runId. runLoop creates controllers and populates it; supervisor reads and fires them. */
+  readonly abortMap?: Map<string, AbortController>;
+};
 
 export const runLoop = async <Ref>(
   config: Config,
@@ -53,10 +61,11 @@ export const runLoop = async <Ref>(
   executeRun: ExecuteRunCallback<Ref>,
   convergeStep: ConvergeCallback,
   waitForWork: WaitForWorkCallback,
+  seams?: RunLoopSeams,
 ): Promise<void> => {
   // R1: bind the bridge port FIRST — the single-driver lock.
   // Must resolve before any call to store.readMetaIfExists, store.listRunIds,
-  // store.listQueue, or any other state read/write.
+  // or any other state read/write.
   const ref = await bridge.bind();
 
   // T3: hold the power assertion for the lifetime of the loop.
@@ -70,17 +79,29 @@ export const runLoop = async <Ref>(
   promoteStaged(store, repo);
 
   // --- Main loop ---
+  const abortMap = seams?.abortMap ?? new Map<string, AbortController>();
+
   let stopRequested = false;
   let currentAbort: AbortController | undefined;
+  let onSigint: (() => void) | undefined;
 
-  const onSigint = () => {
-    if (stopRequested) {
-      process.exit(130);
-    }
-    stopRequested = true;
-    currentAbort?.abort();
-  };
-  process.on("SIGINT" as NodeJS.Signals, onSigint);
+  // When an external stopSignal is provided (supervisor-owned), do NOT register
+  // our own SIGINT handler — the supervisor owns process-signal handling.
+  // Normalise both paths to stopRequested as the single loop-exit flag.
+  if (seams?.stopSignal) {
+    seams.stopSignal.addEventListener("abort", () => {
+      stopRequested = true;
+    }, { once: true });
+  } else {
+    onSigint = () => {
+      if (stopRequested) {
+        process.exit(130);
+      }
+      stopRequested = true;
+      currentAbort?.abort();
+    };
+    process.on("SIGINT" as NodeJS.Signals, onSigint);
+  }
 
   try {
     while (!stopRequested) {
@@ -100,6 +121,8 @@ export const runLoop = async <Ref>(
           store.writeMeta({ ...meta, status: "running" as const, updatedAt: clock.nowIso() });
 
           try {
+            const runAbort = new AbortController();
+            abortMap.set(runId, runAbort);
             await executeRun(
               runId,
               {
@@ -110,7 +133,9 @@ export const runLoop = async <Ref>(
               },
               ref,
               clock,
+              runAbort.signal,
             );
+            abortMap.delete(runId);
           } catch (err: unknown) {
             // ^C-during-run is NOT a crash. A SIGINT tears down the opencode server,
             // which fails the in-flight turn send with a connection error that lands
@@ -172,6 +197,13 @@ export const runLoop = async <Ref>(
             continue;
           }
 
+          if (status === "aborted") {
+            if (terminalMeta.worktree) {
+              repo.wipCommit(terminalMeta.worktree, `meridian: WIP ${runId} [${status}]`);
+            }
+            continue;
+          }
+
           if (status === "ready_for_review" || status === "accepted") {
             // Run completed — continue to convergence.
           } else {
@@ -194,11 +226,18 @@ export const runLoop = async <Ref>(
       }
 
       // Queue empty — wait for new work (fs.watch + poll fallback).
-      // SIGINT aborts the in-flight wait via the mutable currentAbort.
-      currentAbort = new AbortController();
+      // When stopSignal is provided (supervisor-owned), use it; otherwise
+      // SIGINT aborts via the mutable currentAbort.
+      let waitSignal: AbortSignal;
+      if (seams?.stopSignal) {
+        waitSignal = seams.stopSignal;
+      } else {
+        currentAbort = new AbortController();
+        waitSignal = currentAbort.signal;
+      }
 
       try {
-        await waitForWork(currentAbort.signal);
+        await waitForWork(waitSignal);
       } catch (err: unknown) {
         // AbortError from signal.abort() is expected; swallow it.
         if ((err as Error)?.name !== "AbortError") {
@@ -212,7 +251,16 @@ export const runLoop = async <Ref>(
     }
   } finally {
     // Cleanup: release the power assertion, close the bridge server.
-    process.off("SIGINT" as NodeJS.Signals, onSigint);
+    if (!seams?.stopSignal) {
+      process.off("SIGINT" as NodeJS.Signals, onSigint!);
+    }
+    // Abort any in-flight per-run controller (e.g. a run still executing
+    // when stopSignal fires). The supervisor itself fires per-run controllers
+    // via abortMap for the explicit abortRun path.
+    for (const [, ac] of abortMap) {
+      ac.abort();
+    }
+    abortMap.clear();
     bridge.close();
   }
 };

@@ -15,7 +15,8 @@ import { logger } from "hono/logger";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { registerRivetHonoRoutes, rivetHttpError } from "rivet-ts/hono";
-import type { LatheContract, LatheEvent } from "@lathe/contract";
+import type { LatheContract, LatheEvent, Reviewer } from "@lathe/contract";
+export type { LatheEvent, Reviewer };
 import contract from "@lathe/contract/generated/api.contract.json" with { type: "json" };
 
 /**

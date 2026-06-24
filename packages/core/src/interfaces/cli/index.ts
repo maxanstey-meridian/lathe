@@ -17,8 +17,8 @@ import {
   convergeOnce,
   superReviewOnce,
   openPlanner,
-  openTail,
 } from "./composition.js";
+import { openTail } from "./tail.js";
 import { dispatch, type CliDeps } from "./dispatch.js";
 
 const { config, paths } = loadConfig();

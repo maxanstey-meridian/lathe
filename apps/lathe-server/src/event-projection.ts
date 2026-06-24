@@ -89,6 +89,7 @@ export const projectJournalEvent = (
     case "report_rejected":
     case "report_accepted":
     case "ladder_step":
+    case "super_review":
       return null;
 
     default: {

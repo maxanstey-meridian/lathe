@@ -251,6 +251,7 @@ export const turnLoop = async (
   channel: RunChannel,
   seed: Seed,
   deadlineMs: number,
+  signal?: AbortSignal,
 ): Promise<TurnLoopResult> => {
   const { config, store, repo, executor, planner, clock } = ports;
   const runId = packet.runId;
@@ -307,9 +308,16 @@ export const turnLoop = async (
         next.text,
         babyModel,
         config.baby.timeoutMs,
+        signal,
       );
       sendFailures = 0;
     } catch (err) {
+      // Signal-aborted by caller (supervisor.abortRun) — terminate the run
+      // immediately, NOT as a dead-session failure (the opencode adapter fires
+      // req.destroy with a plain Error, not AbortError).
+      if (signal?.aborted) {
+        return finish({ status: "aborted" });
+      }
       // A dead/timed-out turn is the crash path (R10): rotate to a fresh session
       // via reconciliation (O6) once; a second consecutive failure parks wedged.
       sendFailures += 1;

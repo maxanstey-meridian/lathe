@@ -16,7 +16,7 @@ import type { ModelConfig } from "../../application/ports/executor.js";
 import type { Repo } from "../../application/ports/repo.js";
 import { convergeRun } from "../../application/use-cases/converge-run.js";
 import { makeExecuteRun, type BridgeBinding } from "../../application/use-cases/execute-run.js";
-import { runLoop, type WaitForWorkCallback } from "../../application/use-cases/run-loop.js";
+import { runLoop, type WaitForWorkCallback, type RunLoopSeams } from "../../application/use-cases/run-loop.js";
 import type { RunPorts } from "../../application/use-cases/run-runtime.js";
 import { babyContextBudget } from "../../config/config.js";
 import { expandHome, type Paths } from "../../config/paths.js";
@@ -61,7 +61,7 @@ import { createPlanner } from "../../infrastructure/opencode/planner.js";
 import { createReviewer } from "../../infrastructure/opencode/reviewer.js";
 import { StoreAdapter } from "../../infrastructure/store.js";
 import { createVerify } from "../../infrastructure/verify.js";
-import { runTailUi } from "../tui/tail-ui.js";
+
 
 // ---------------------------------------------------------------------------
 // Adapter assembly
@@ -126,7 +126,7 @@ const stopServe = (serve: Serve): void => {
 // loop, and hands it the bridge lock (which doubles as the serve-substrate
 // lifecycle) plus the executeRun / convergeStep / waitForWork callbacks.
 
-export const runDriver = async (config: Config, paths: Paths): Promise<void> => {
+export const runDriver = async (config: Config, paths: Paths, seams?: RunLoopSeams): Promise<void> => {
   mkdirSync(paths.queueDir, { recursive: true });
   mkdirSync(paths.runsDir, { recursive: true });
 
@@ -214,6 +214,7 @@ export const runDriver = async (config: Config, paths: Paths): Promise<void> => 
     executeRun,
     convergeStep,
     waitForWork(paths),
+    seams,
   );
 };
 
@@ -372,33 +373,6 @@ export const superReviewOnce = async (
     }
     return 0;
   });
-
-// `meridian tail` on a TTY: the Ink split-pane UI (CONTRACT X3). Read-only —
-// constructs a Store + the SSE Events subscription and hands them to the
-// renderer, which polls the run's files and the live feed. Subscribing to the
-// serve instance's SSE is best-effort: if no driver is up, the connection errors
-// silently and the UI degrades to journal-only polling. Returns -1 (Ink owns the
-// terminal until 'q').
-export const openTail = (
-  config: Config,
-  paths: Paths,
-  runId: string,
-  autoAdvance: boolean,
-): number => {
-  const clock = systemClock;
-  const repo = buildRepo();
-  const store = StoreAdapter.create(paths, repo, clock);
-  const events = createEvents(config);
-  runTailUi({
-    store,
-    budget: babyContextBudget(config),
-    subscribe: events.subscribe,
-    runId,
-    daddyDirectory: paths.root,
-    autoAdvance,
-  });
-  return -1;
-};
 
 // `meridian plan`: open an interactive opencode session; the global /packet skill
 // authors the handoff into the queue dir (K4 — no hand-rolled chat).

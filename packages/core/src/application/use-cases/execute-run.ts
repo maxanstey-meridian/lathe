@@ -48,7 +48,7 @@ type RunMetaPaths = { repo: string; worktree: string; base: string; branch: stri
 
 export const makeExecuteRun =
   <Ref>(ports: RunPorts, bridge: BridgeBinding<Ref>): ExecuteRunCallback<Ref> =>
-  async (runId, runMeta, ref): Promise<void> => {
+  async (runId, runMeta, ref, _clock, signal): Promise<void> => {
     const { store, repo, executor, planner, config, clock } = ports;
     const { repo: repoPath, worktree, base, branch } = runMeta as RunMetaPaths;
 
@@ -208,7 +208,7 @@ export const makeExecuteRun =
     }
     let result: TurnLoopResult;
     try {
-      result = await turnLoop(ports, packet, worktree, babySessionId, channel, seed, deadlineMs);
+      result = await turnLoop(ports, packet, worktree, babySessionId, channel, seed, deadlineMs, signal);
     } finally {
       bridge.endRun(ref);
     }

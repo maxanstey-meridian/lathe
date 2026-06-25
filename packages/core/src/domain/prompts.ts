@@ -512,6 +512,17 @@ is a possibly-stale convenience. A command that exits non-zero is non-negotiable
 evidence of a blocker. A fully green suite is REQUIRED before you may recommend
 stopping — you may never declare convergence while anything is red.`;
 
+// Comment-quality clause — shared verbatim by BOTH review gates (daddy's
+// finalReview and super-daddy's superReview) so the bar is identical. Neither
+// gate checked comment noise before; both do now.
+const COMMENT_QUALITY_CLAUSE = `## Comment quality — flag unuseful comments
+Inspect the comments this run ADDED. Flag stream-of-consciousness or narrating
+comments ("now loop over the items", "set count to 0"), restatements of what the
+code plainly says, and notes-to-self left in the diff. A comment earns its place
+only by explaining WHY, a non-obvious constraint, or a real gotcha — the rest is
+noise and should go. Judge only what THIS run added; leave pre-existing comments
+alone.`;
+
 const reviewBody = (input: SuperReviewInput): string => {
   const fm = input.packet.frontmatter;
   const outcomeLines = fm.outcomes.map((o) => `- ${o.id}: ${o.description}`).join("\n");
@@ -573,6 +584,8 @@ untested symbol or the mock-asserting test in evidence. Stay in scope: judge onl
 what THIS run added or touched; pre-existing untested code is not your remit
 (repairs-only). If the tests are honest and the new surface is directly covered,
 say so explicitly in notes — do not invent a gap to look thorough.
+
+${COMMENT_QUALITY_CLAUSE}
 
 ## Scope — repairs only
 You judge against the ORIGINAL intent. A gap against the packet or doctrine is a
@@ -695,6 +708,20 @@ citations is itself a \`request_changes\`.
 Then judge sanity — anything a green test would not catch: stubbed/mocked
 behaviour passing as real, swallowed error paths, an outcome met in letter but
 not intent, scope creep beyond the packet, a security or data footgun.
+
+Then judge test quality — a green suite is necessary, not sufficient. Inspect the
+tests this run added or changed and request_changes when you find:
+  - MOCK-SOUP — a test asserting against fakes/mocks/stubs instead of real
+    behaviour (asserting a mock was called, or a hand-rolled fake standing in for
+    a real adapter where a real-DB integration test belongs). Verifying the mock
+    is not coverage.
+  - INCOMPLETE COVERAGE — a NEW use case, handler, or decision branch this run
+    introduced with NO direct test exercising it. The assembler being covered
+    does not cover the use case that calls it.
+Name the exact untested symbol or mock-asserting test in your finding. Judge only
+what THIS run added or touched; pre-existing untested code is not your remit.
+
+${COMMENT_QUALITY_CLAUSE}
 
 ## Packet outcomes
 ${outcomeLines}

@@ -7,7 +7,15 @@
 // ---------------------------------------------------------------------------
 
 export { JournalEvent, renderJournalEvent } from "./domain/journal.js";
+export {
+  renderStatus,
+  renderReview,
+  renderQueue,
+  renderJournalReplay,
+  fmtOutcomes,
+} from "./interfaces/tui/render.js";
 export { Config } from "./config/schemas.js";
+export { loadConfig } from "./config/config.js";
 export { makePaths, expandHome } from "./config/paths.js";
 export type { Paths } from "./config/paths.js";
 

@@ -1,18 +1,62 @@
 // ---------------------------------------------------------------------------
 // `lathe serve` — boot the daemon.
 //
-// P00 skeleton: real wiring (single-instance lock, the SQLite-backed
-// readEventsSince from P01, the supervisor from P02) lands incrementally. For
-// now it stands up the Hono app with stubbed handlers so the surface is live.
+// Lifecycle:
+//   1. loadConfig() → config + paths (state root, db file, etc.)
+//   2. acquireSingleInstanceLock(paths.stateRoot/lock) → release fn
+//   3. createSupervisor(config, paths) → Supervisor (owns runDriver, journal tail)
+//   4. createApp(AppDeps from supervisor, supervisor, { logger }) → Hono app
+//   5. @hono/node-server serve on configured port (default 4198)
+//
+// Shutdown (SIGINT/SIGTERM):
+//   stop supervisor (→ abort runDriver, await exit) → release lock → exit(0)
 // ---------------------------------------------------------------------------
 
 import { serve } from "@hono/node-server";
-import { createApp, createEventBus } from "@lathe/server";
+import { loadConfig } from "@lathe/core";
+import {
+  createApp,
+  createEventBus,
+  createSupervisor,
+  acquireSingleInstanceLock,
+} from "@lathe/server";
+import { join } from "node:path";
 
-export const startDaemon = (port = 4198): void => {
+const DEFAULT_DAEMON_PORT = 4198;
+const LOCK_FILE = "lathe.lock";
+
+export const startDaemon = (port = DEFAULT_DAEMON_PORT): void => {
+  const { config, paths } = loadConfig();
+
+  // 1. Acquire single-instance lock. Throws DaemonAlreadyRunningError if live.
+  const lockPath = join(paths.root, LOCK_FILE);
+  const releaseLock = acquireSingleInstanceLock(lockPath);
+
+  // 2. Create supervisor (owns runDriver, journal tail, lifecycle methods).
+  const supervisor = createSupervisor(config, paths);
+
+  // 3. Build the Hono app: bus + readEventsSince from supervisor, supervisor as handler target.
   const bus = createEventBus();
-  // readEventsSince is the SQLite events replay (P01); empty until then.
-  const app = createApp({ bus, readEventsSince: () => [] }, { logger: true });
-  serve({ fetch: app.fetch, port });
+  const app = createApp(
+    { bus, readEventsSince: supervisor.appDeps.readEventsSince },
+    supervisor,
+    { logger: true },
+  );
+
+  // 4. Start HTTP server.
+  const server = serve({ fetch: app.fetch, port });
+
   console.log(`lathe daemon listening on http://127.0.0.1:${port}`);
+
+  // 5. Graceful shutdown.
+  const shutdown = (): void => {
+    console.log("shutting down…");
+    server.close();
+    supervisor.stop().catch(() => {});
+    releaseLock();
+    process.exit(0);
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 };

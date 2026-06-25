@@ -135,10 +135,9 @@ export const createApp = (
           supervisor.acceptRun(params.runId);
         } catch (err) {
           if (err instanceof NonChainTipError) {
-            const tip = findChainTip(supervisor, params.runId);
             throw rivetHttpError(409, {
               code: "chain_tip_required",
-              message: `${params.runId} is not a chain tip — accept ${tip} first`,
+              message: `${params.runId} is not a chain tip — accept ${err.chainTip} first`,
             });
           }
           throw err;
@@ -228,22 +227,3 @@ const buildDtoCtx = (sup: Supervisor, meta: RunMeta): RunDtoCtx => ({
   contextWindow: sup.config.baby.contextWindow,
   lastVerdict: sup.lastVerdict(meta.runId),
 });
-
-/** Find the tip of the chain containing failingRunId by walking up from each tip. */
-const findChainTip = (sup: Supervisor, failingRunId: string): string => {
-  const staged = sup.listStaged();
-  const runs = sup.listRuns();
-
-  const tips = runs.filter(r => sup.isChainTip(r.runId));
-
-  for (const tip of tips) {
-    let current: string | undefined = tip.runId;
-    while (current) {
-      if (current === failingRunId) return tip.runId;
-      const entry = staged.find(s => s.runId === current);
-      current = entry?.parentRunId;
-    }
-  }
-
-  return tips.at(0)?.runId ?? runs.at(-1)?.runId ?? "unknown";
-};

@@ -185,7 +185,7 @@ export interface components {
             updatedAt: string;
         };
         /** @enum {string} */
-        RunStatus: "queued" | "running" | "paused" | "converged" | "accepted" | "rejected" | "aborted" | "failed";
+        RunStatus: "queued" | "running" | "paused" | "converged" | "accepted" | "aborted" | "failed";
     };
     responses: never;
     parameters: never;

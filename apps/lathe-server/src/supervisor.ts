@@ -44,9 +44,11 @@ import type { ProjectionContext } from "./event-projection.js";
 // ---------------------------------------------------------------------------
 
 export class NonChainTipError extends Error {
-  constructor(runId: string) {
+  readonly chainTip: string;
+  constructor(runId: string, chainTip: string) {
     super(`run ${runId} is not a chain tip — it has staged children`);
     this.name = "NonChainTipError";
+    this.chainTip = chainTip;
   }
 }
 
@@ -241,6 +243,25 @@ export const createSupervisor = (
     return !staged.some((s) => s.parentRunId === runId);
   };
 
+  // Private helper: find the tip of the chain containing runId.
+  // Walks every chain tip and traces its ancestry to see if it contains runId.
+  const findChainTip = (runId: string): string => {
+    const staged = store.listStaged();
+    const runs = store.listRunIds().map((id) => store.readMeta(id));
+    const tips = runs.filter(r => isChainTip(r.runId));
+
+    for (const tip of tips) {
+      let current: string | undefined = tip.runId;
+      while (current) {
+        if (current === runId) return tip.runId;
+        const entry = staged.find(s => s.runId === current);
+        current = entry?.parentRunId;
+      }
+    }
+
+    return tips.at(0)?.runId ?? runs.at(-1)?.runId ?? "unknown";
+  };
+
   return {
     get config(): Config {
       return config;
@@ -395,7 +416,7 @@ export const createSupervisor = (
       // Chain-tip guard: refuse a non-chain-tip run (mid-chain accept deletes
       // the branch the next link forks off).
       if (!isChainTip(runId)) {
-        throw new NonChainTipError(runId);
+        throw new NonChainTipError(runId, findChainTip(runId));
       }
       return acceptRunUc(runId, undefined, {
         store,

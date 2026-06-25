@@ -426,7 +426,6 @@
         "paused",
         "converged",
         "accepted",
-        "rejected",
         "aborted",
         "failed"
       ]

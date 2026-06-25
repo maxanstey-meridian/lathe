@@ -68,11 +68,24 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
     },
 
     acceptRun: (runId: string): number => {
-      if (stagedEntries.some(s => s.parentRunId === runId)) throw new NonChainTipError(runId);
-      const meta = metaStore.get(runId);
-      if (!meta) throw new RunNotFoundError(runId);
-      metaStore.set(runId, { ...meta, status: "accepted" as const, updatedAt: new Date().toISOString() });
-      return meta.attempt + 1;
+      if (isChainTip(runId)) {
+        const meta = metaStore.get(runId);
+        if (!meta) throw new RunNotFoundError(runId);
+        metaStore.set(runId, { ...meta, status: "accepted" as const, updatedAt: new Date().toISOString() });
+        return meta.attempt + 1;
+      }
+      // Not chain tip — compute the chain tip via chain walking
+      const tips = Array.from(metaStore.values()).filter(m => isChainTip(m.runId));
+      const tip = tips.find(t => {
+        let current: string | undefined = t.runId;
+        while (current) {
+          if (current === runId) return true;
+          const entry = stagedEntries.find(s => s.runId === current);
+          current = entry?.parentRunId;
+        }
+        return false;
+      });
+      throw new NonChainTipError(runId, tip?.runId ?? "unknown");
     },
 
     rejectRun: (runId: string, _reason: string): void => {
@@ -111,9 +124,20 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
       if (overrides?.acceptRun) return overrides.acceptRun!(runId);
       return metaObj.attempt + 1;
     }
-    // Not chain tip — if overrides.acceptRun exists use it, otherwise throw NonChainTipError
+    // Not chain tip — compute the chain tip via chain walking, using the merged listRuns and isChainTip
+    const runs = merged.listRuns();
+    const tips = runs.filter(r => merged.isChainTip!(r.runId));
+    const tip = tips.find(t => {
+      let current: string | undefined = t.runId;
+      while (current) {
+        if (current === runId) return true;
+        const entry = stagedEntries.find(s => s.runId === current);
+        current = entry?.parentRunId;
+      }
+      return false;
+    });
     if (overrides?.acceptRun) return overrides.acceptRun!(runId);
-    throw new NonChainTipError(runId);
+    throw new NonChainTipError(runId, tip?.runId ?? "unknown");
   };
 
   merged.rejectRun = (runId: string, reason: string) => {
@@ -500,7 +524,7 @@ test("AcceptRun on chain tip returns 200", async () => {
     getRun: (id: string) => (id === runId ? meta : undefined),
     isChainTip: (id: string) => id === runId,
     acceptRun: (id: string): number => {
-      if (id !== runId) throw new NonChainTipError(id);
+      if (id !== runId) throw new NonChainTipError(id, runId);
       meta.status = "accepted" as const;
       return 2;
     },

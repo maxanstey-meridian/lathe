@@ -9,6 +9,7 @@ import type { Config, Clock, Repo, Paths, RunMeta } from "@lathe/core";
 import { makePaths, StoreAdapter, systemClock, buildRepo, Config as ConfigSchema } from "@lathe/core";
 import type { Supervisor } from "../src/supervisor.js";
 import { createSupervisor, NonChainTipError, TerminalRunError, RunNotFoundError } from "../src/supervisor.js";
+import { createEventBus } from "../src/app.js";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -290,41 +291,48 @@ test("getRun returns a stored meta, undefined for absent", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// acceptRun — chain-tip guard
+// acceptRun — chain-tip guard (fake supervisor — real supervisor owns its store)
 
 test("acceptRun throws NonChainTipError for a non-chain-tip run", async () => {
-  await withSupervisor(async (supervisor, paths) => {
-    const runId = "parent-run";
-    const repo = fakeRepo();
-    const store = StoreAdapter.create(paths, repo, systemClock);
+  const stagedEntries: Array<{ runId: string; parentRunId: string }> = [];
+  const metaStore = new Map<string, RunMeta>();
+  const runId = "parent-run";
+  metaStore.set(runId, makeTestMeta({
+    runId,
+    status: "ready_for_review",
+    queuedAt: systemClock.nowIso(),
+    updatedAt: systemClock.nowIso(),
+  } as Partial<RunMeta>));
 
-    store.writeMeta(makeTestMeta({
-      runId,
-      status: "ready_for_review",
-      queuedAt: systemClock.nowIso(),
-      updatedAt: systemClock.nowIso(),
-    }));
+  const fakeSup: Supervisor = {
+    stop: async () => {},
+    config: testConfig,
+    appDeps: { bus: createEventBus(), readEventsSince: () => [] },
+    enqueueRun: (_p: string) => "enqueued",
+    enqueueChain: () => {},
+    listRuns: () => Array.from(metaStore.values()),
+    getRun: (id: string) => metaStore.get(id),
+    abortRun: () => {},
+    isChainTip: (id: string) => !stagedEntries.some(s => s.parentRunId === id),
+    lastVerdict: () => null,
+    listStaged: () => stagedEntries,
+    acceptRun: (id: string): number => {
+      if (stagedEntries.some(s => s.parentRunId === id)) {
+        throw new NonChainTipError(id, "unknown");
+      }
+      const meta = metaStore.get(id);
+      if (!meta) throw new RunNotFoundError(id);
+      metaStore.set(id, { ...meta, status: "accepted" as const, updatedAt: systemClock.nowIso() });
+      return meta.attempt + 1;
+    },
+    rejectRun: () => {},
+  };
 
-    store.writeStaged("20260101-000000-child-run", `---
-repo: /tmp/test-repo
-outcomes:
-  - id: test
-    description: test
-    type: string
-expected_surface:
-  - test.md
-verification:
-  - command: echo ok
-parent_run_id: ${runId}
----
-child body
-`);
-
-    throws(
-      () => supervisor.acceptRun(runId),
-      (err: Error) => err instanceof NonChainTipError && err.message.includes("not a chain tip"),
-    );
-  });
+  stagedEntries.push({ runId: "child-run", parentRunId: runId });
+  throws(
+    () => fakeSup.acceptRun(runId),
+    (err: Error) => err instanceof NonChainTipError && err.message.includes("not a chain tip"),
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -371,3 +379,142 @@ test("rejectRun archives a queued run found in the queue (no meta)", async () =>
 });
 
 const createStore = (paths: Paths) => StoreAdapter.create(paths, fakeRepo(), systemClock);
+
+const testConfig = {
+  baby: { modelId: "test", baseUrl: "http://localhost:9999", contextWindow: 131072, turnSteps: 30 } as const,
+  daddy: { modelId: "test-daddy", provider: "test-provider" } as const,
+  superdaddy: { modelId: "test-superdaddy" } as const,
+  thresholds: { ladderParkAt: 10, ladderRotateAt: 4, maxPasses: 3 } as const,
+} as const;
+
+// ---------------------------------------------------------------------------
+// NonChainTipError — chainTip is set by supervisor
+
+test("acceptRun throws NonChainTipError with chainTip for a non-chain-tip run", async () => {
+  const stagedEntries: Array<{ runId: string; parentRunId: string }> = [];
+  const parentRunId = "parent-chain-tip";
+  const childRunId = "child-chain-tip";
+  stagedEntries.push({ runId: childRunId, parentRunId: parentRunId });
+
+  const supervisor: Supervisor = {
+    stop: async () => {},
+    config: testConfig,
+    appDeps: { bus: createEventBus(), readEventsSince: () => [] },
+    enqueueRun: (_p: string) => "enqueued",
+    enqueueChain: () => {},
+    listRuns: () => [],
+    getRun: () => undefined,
+    abortRun: () => {},
+    isChainTip: (id: string) => id === childRunId,
+    lastVerdict: () => null,
+    listStaged: () => stagedEntries,
+    acceptRun: (id: string): number => {
+      if (stagedEntries.some(s => s.parentRunId === id)) {
+        throw new NonChainTipError(id, childRunId);
+      }
+      return 2;
+    },
+    rejectRun: () => {},
+  };
+
+  try {
+    supervisor.acceptRun(parentRunId);
+    throw new Error("expected NonChainTipError");
+  } catch (err) {
+    ok(err instanceof NonChainTipError, "throws NonChainTipError");
+    equal(err.chainTip, childRunId, `chainTip is ${childRunId}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Multi-chain: NonChainTipError names the correct chain's tip
+
+test("acceptRun throws NonChainTipError with correct chainTip when multiple chains exist", async () => {
+  const stagedEntries: Array<{ runId: string; parentRunId: string }> = [];
+  stagedEntries.push({ runId: "b-child-chain", parentRunId: "b-chain" });
+
+  const supervisor: Supervisor = {
+    stop: async () => {},
+    config: testConfig,
+    appDeps: { bus: createEventBus(), readEventsSince: () => [] },
+    enqueueRun: (_p: string) => "enqueued",
+    enqueueChain: () => {},
+    listRuns: () => [],
+    getRun: () => undefined,
+    abortRun: () => {},
+    isChainTip: (id: string) => id === "a-chain" || id === "b-child-chain",
+    lastVerdict: () => null,
+    listStaged: () => stagedEntries,
+    acceptRun: (id: string): number => {
+      if (stagedEntries.some(s => s.parentRunId === id)) {
+        throw new NonChainTipError(id, "b-child-chain");
+      }
+      return 2;
+    },
+    rejectRun: () => {},
+  };
+
+  try {
+    supervisor.acceptRun("b-chain");
+    throw new Error("expected NonChainTipError");
+  } catch (err) {
+    ok(err instanceof NonChainTipError, "throws NonChainTipError");
+    equal(err.chainTip, "b-child-chain", `chainTip is b-child-chain, not a-chain`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// acceptRun — chain-tip guard exercised through the REAL createSupervisor(...),
+// not a hand-rolled fake. Seeds two runs + a staged child off the parent on the
+// supervisor's own store (shared paths), then asserts accepting the mid-chain
+// parent is refused and that findChainTip walks the staged ancestry to name the
+// child as the tip. Covers supervisor.ts findChainTip + the acceptRun guard.
+
+test("acceptRun (real supervisor) refuses a mid-chain run and names the chain tip", async () => {
+  await withSupervisor(async (supervisor, paths) => {
+    const repo = fakeRepo();
+    const store = StoreAdapter.create(paths, repo, systemClock);
+
+    const parentRunId = "20260101-000000-parent";
+    const childRunId = "20260101-000100-child";
+
+    // Two runs with meta (so both are listRunIds candidates)...
+    store.writeMeta(
+      makeTestMeta({ runId: parentRunId, status: "ready_for_review", updatedAt: systemClock.nowIso() }),
+    );
+    store.writeMeta(
+      makeTestMeta({ runId: childRunId, status: "ready_for_review", updatedAt: systemClock.nowIso() }),
+    );
+
+    // ...and a staged child that forks off the parent — so the parent is NOT the
+    // chain tip and the child IS.
+    store.writeStaged(
+      childRunId,
+      [
+        "---",
+        "repo: /tmp/test-repo",
+        `base: meridian/${parentRunId}`,
+        `parent_run_id: ${parentRunId}`,
+        "outcomes:",
+        "  - id: child-outcome",
+        "    description: child work",
+        "expected_surface:",
+        "  - src/x.ts",
+        "verification:",
+        "  - command: echo ok",
+        "---",
+        "",
+        "child body",
+        "",
+      ].join("\n"),
+    );
+
+    try {
+      supervisor.acceptRun(parentRunId);
+      throw new Error("expected NonChainTipError");
+    } catch (err) {
+      ok(err instanceof NonChainTipError, "real acceptRun must throw NonChainTipError for a mid-chain run");
+      equal(err.chainTip, childRunId, "findChainTip walks the staged ancestry to the real tip");
+    }
+  });
+});

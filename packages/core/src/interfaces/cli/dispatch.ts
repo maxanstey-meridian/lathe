@@ -224,6 +224,9 @@ const tailRunId = (
   return -1;
 };
 
+const activeTailRunId = (deps: CliDeps): string | undefined =>
+  deps.store.readActiveRun()?.runId ?? deps.store.readActiveConvergence()?.runId;
+
 const cmdTail = (args: string[], deps: CliDeps): number => {
   const follow = !args.includes("--no-follow");
   const plain = args.includes("--plain");
@@ -231,7 +234,7 @@ const cmdTail = (args: string[], deps: CliDeps): number => {
   // No runId named → follow the chain across packets (auto-advance). A named runId
   // pins to exactly that run.
   const autoAdvance = explicit === undefined;
-  const runId = explicit ?? deps.store.readActiveRun()?.runId;
+  const runId = explicit ?? activeTailRunId(deps);
   if (runId !== undefined) {
     return tailRunId(runId, deps, follow, plain, autoAdvance);
   }
@@ -243,12 +246,12 @@ const cmdTail = (args: string[], deps: CliDeps): number => {
     console.log("no active run");
     return 1;
   }
-  console.log("no active run — waiting for one to start…");
+  console.log("no active run or convergence — waiting for one to start…");
   const poll = setInterval(() => {
-    const next = deps.store.readActiveRun()?.runId;
+    const next = activeTailRunId(deps);
     if (next !== undefined) {
       clearInterval(poll);
-      console.log(`run ${next} started — tailing…`);
+      console.log(`run ${next} became active — tailing…`);
       tailRunId(next, deps, follow, plain, autoAdvance);
     }
   }, 1000);

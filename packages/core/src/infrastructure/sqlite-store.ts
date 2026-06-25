@@ -44,6 +44,7 @@ import type {
   Checkpoint,
   GateState,
   ActiveRun,
+  ActiveConvergence,
   Packet,
   Campaign,
   SubmitReport,
@@ -62,6 +63,7 @@ import { RunMeta as RunMetaSchema } from "../domain/run.js";
 import { ReviewState as ReviewStateSchema } from "../domain/run.js";
 import { Decision as DecisionSchema } from "../domain/run.js";
 import { ActiveRun as ActiveRunSchema } from "../domain/run.js";
+import { ActiveConvergence as ActiveConvergenceSchema } from "../domain/run.js";
 import { writeAtomic, writeValidated } from "../infrastructure/fsio.js";
 
 // ---------------------------------------------------------------------------
@@ -80,7 +82,7 @@ const VerificationResultSchema = z.object({
 });
 
 const ConvergeDecisionSchema = z.union([
-  z.object({ action: z.literal("author"), blockers: z.array(Finding) }),
+  z.object({ action: z.literal("author"), blockers: z.array(Finding), promote: z.boolean() }),
   z.object({ action: z.literal("stop") }),
   z.object({ action: z.literal("escalate"), reason: z.string() }),
 ]);
@@ -396,6 +398,29 @@ export class SqliteStoreAdapter implements Store {
   }
 
   // ---------------------------------------------------------------------------
+  // Active convergence pointer
+
+  readActiveConvergence(): ActiveConvergence | undefined {
+    const row = this.db
+      .prepare("SELECT convergence FROM active_convergence WHERE key = '1'")
+      .get() as { convergence: string } | undefined;
+    if (!row) {
+      return undefined;
+    }
+    return ActiveConvergenceSchema.parse(jsonParse(row.convergence));
+  }
+
+  writeActiveConvergence(convergence: ActiveConvergence): void {
+    this.db
+      .prepare("INSERT OR REPLACE INTO active_convergence (key, convergence) VALUES ('1', ?)")
+      .run(jsonStringify(convergence));
+  }
+
+  clearActiveConvergence(): void {
+    this.db.prepare("DELETE FROM active_convergence WHERE key = '1'").run();
+  }
+
+  // ---------------------------------------------------------------------------
   // Campaign
 
   readCampaign(campaignId: string): Campaign | undefined {
@@ -569,6 +594,7 @@ export class SqliteStoreAdapter implements Store {
       stallRetries: 0,
       reorientRetries: 0,
       reviewerUnreachable: 0,
+      promoted: false,
       updatedAt: this.clock.nowIso(),
     };
   }
@@ -775,6 +801,11 @@ function createSchema(db: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS active_run(
       key TEXT PRIMARY KEY DEFAULT '1',
       run TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS active_convergence(
+      key TEXT PRIMARY KEY DEFAULT '1',
+      convergence TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS campaigns(

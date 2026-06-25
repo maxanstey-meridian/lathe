@@ -20,7 +20,7 @@ import type { Config } from "../src/config/schemas.js";
 import type { TurnResponse } from "../src/domain/agent-response.js";
 import type { Campaign } from "../src/domain/campaign.js";
 import { parsePacketShape } from "../src/domain/packet.js";
-import type { RunMeta } from "../src/domain/run.js";
+import type { ActiveConvergence, RunMeta } from "../src/domain/run.js";
 import { createReviewer } from "../src/infrastructure/opencode/reviewer.js";
 
 // ---------------------------------------------------------------------------
@@ -135,6 +135,7 @@ const makeFakePorts = (
   let metaStore: RunMeta = makeMeta(metaOverrides);
   const nitsStore = new Map<string, string>();
   const convergenceStore = new Array<unknown>();
+  let activeConvergence: ActiveConvergence | undefined;
   let campaign: Campaign | undefined = campaignOverride;
 
   const clock = fixedClock();
@@ -174,6 +175,13 @@ const makeFakePorts = (
         nitsStore.set(runId, md);
         onWriteNits?.(runId, md);
       },
+      readActiveConvergence: () => activeConvergence,
+      writeActiveConvergence: (convergence: ActiveConvergence) => {
+        activeConvergence = convergence;
+      },
+      clearActiveConvergence: () => {
+        activeConvergence = undefined;
+      },
     } as unknown as Store,
     repo: {
       reviewableDiffAgainst: () => "diff",
@@ -211,6 +219,7 @@ const makeFakePorts = (
     } as unknown as Verify,
     nitsStore,
     convergenceStore,
+    getActiveConvergence: () => activeConvergence,
     getMeta: () => metaStore,
     getCampaign: () => campaign,
   };
@@ -303,6 +312,7 @@ test("convergeRun: stop — amend commit, campaign converged, meta un-parked", a
 
   // Convergence log should have one entry
   equal(ports.convergenceStore.length, 1);
+  equal(ports.getActiveConvergence(), undefined);
 });
 
 // ---------------------------------------------------------------------------
@@ -950,6 +960,148 @@ test("convergeRun: pass cap reached → escalate", async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Test: the reported bug — ESCALATE at the pass cap promotes instead of parking.
+// Run 20260625-142532-lathe-http-surface-fix3 parked here; it must now author a
+// PROMOTED follow-up (Baby's harness on Daddy's model) for one last attempt.
+
+test("convergeRun: escalate at the cap + promote enabled → authored follow-up is PROMOTED", async () => {
+  let admittedRunId: string | undefined;
+  let admittedContent: string | undefined;
+  const journalEvents: { event: string; note?: string }[] = [];
+
+  const skillPath = createSkillFile();
+  const ports = makeFakePorts(
+    skillPath,
+    {}, // fresh meta: not previously promoted
+    undefined,
+    {
+      review: {
+        verdict: "escalate",
+        findings: [
+          {
+            id: "still-broken",
+            severity: "P0",
+            title: "still broken",
+            evidence: [],
+            grounding: { kind: "command_fail", ref: "t" },
+          },
+        ],
+        convergence: {
+          recommend_stop: false,
+          profile: { p0: 1, p1: 0, p2: 0, p3: 0 },
+          rationale: "",
+        },
+        commit_message: null,
+        notes: "",
+        human_decision_needed: "restore the checker or waive it",
+      },
+      raw: "esc",
+    },
+    undefined,
+    (runId, content) => {
+      admittedRunId = runId;
+      admittedContent = content;
+    },
+    undefined,
+    undefined,
+    undefined,
+    (_runId, event) => {
+      journalEvents.push(event as { event: string; note?: string });
+    },
+  );
+
+  // pass(1) >= maxPasses(1) → at the cap, with the promotion escape hatch enabled.
+  const thresholds = ports.config.thresholds as { maxPasses: number; promoteAtCap: boolean };
+  thresholds.maxPasses = 1;
+  thresholds.promoteAtCap = true;
+
+  const runner = convergeRun({
+    store: ports.store,
+    repo: ports.repo,
+    reviewer: ports.reviewer,
+    verify: ports.verify,
+    clock: ports.clock,
+    config: ports.config,
+    paths: ports.paths,
+  });
+
+  await runner(RUN_ID);
+
+  ok(admittedContent, "a promoted follow-up must be admitted, not parked");
+  const parsed = parsePacketShape(admittedContent ?? "", admittedRunId);
+  ok(parsed.ok, "admitted packet must parse: " + (parsed.ok ? "" : parsed.problems.join("; ")));
+  if (!parsed.ok) {
+    return;
+  }
+  equal(parsed.packet.frontmatter.promoted, true);
+  ok(
+    journalEvents.some((e) => e.event === "driver_note" && (e.note ?? "").includes("PROMOTED")),
+    "the promoted pass must be surfaced in the journal for the tail",
+  );
+});
+
+test("convergeRun: escalate at the cap when ALREADY promoted → parks (no second promotion)", async () => {
+  let admitted = false;
+  let blockedMeta: RunMeta | undefined;
+
+  const skillPath = createSkillFile();
+  const ports = makeFakePorts(
+    skillPath,
+    {}, // meta; the ALREADY-promoted signal comes from the packet, not meta
+    undefined,
+    {
+      review: {
+        verdict: "escalate",
+        findings: [
+          {
+            id: "still-broken",
+            severity: "P0",
+            title: "still broken",
+            evidence: [],
+            grounding: { kind: "command_fail", ref: "t" },
+          },
+        ],
+        convergence: {
+          recommend_stop: false,
+          profile: { p0: 1, p1: 0, p2: 0, p3: 0 },
+          rationale: "",
+        },
+        commit_message: null,
+        notes: "",
+        human_decision_needed: "restore the checker or waive it",
+      },
+      raw: "esc",
+    },
+    undefined,
+    () => {
+      admitted = true;
+    },
+  );
+
+  const thresholds = ports.config.thresholds as { maxPasses: number; promoteAtCap: boolean };
+  thresholds.maxPasses = 1;
+  thresholds.promoteAtCap = true;
+  // This run IS the promoted pass — its frozen packet carries promoted: true.
+  ports.store.readFrozenPacket = () => PACKET_RAW.replace("pass: 1", "pass: 1\npromoted: true");
+
+  const runner = convergeRun({
+    store: ports.store,
+    repo: ports.repo,
+    reviewer: ports.reviewer,
+    verify: ports.verify,
+    clock: ports.clock,
+    config: ports.config,
+    paths: ports.paths,
+  });
+
+  await runner(RUN_ID);
+
+  blockedMeta = ports.getMeta();
+  equal(admitted, false, "a promoted pass that fails again must NOT promote a second time");
+  equal(blockedMeta?.status, "blocked");
+});
+
+// ---------------------------------------------------------------------------
 // Test: request_changes with no findings → escalate
 
 test("convergeRun: request_changes but zero findings → escalate", async () => {
@@ -1015,6 +1167,9 @@ test("convergeRun: stop with meta already ready_for_review — no unnecessary wr
       appendConvergence: () => {},
       appendJournal: () => {},
       writeNits: () => {},
+      readActiveConvergence: () => undefined,
+      writeActiveConvergence: () => {},
+      clearActiveConvergence: () => {},
     } as unknown as Store,
     repo: {
       reviewableDiffAgainst: () => "diff",
@@ -1384,6 +1539,9 @@ test("convergeRun: records reviewerSessionId from the real adapter and preserves
       appendConvergence: () => {},
       appendJournal: () => {},
       writeNits: () => {},
+      readActiveConvergence: () => undefined,
+      writeActiveConvergence: () => {},
+      clearActiveConvergence: () => {},
     } as unknown as Store,
     repo: {
       amendCommit: () => "sha",

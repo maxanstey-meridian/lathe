@@ -29,26 +29,40 @@ export const stallAction = (ladder: number, rotateAt: number, parkAt: number): S
 //
 // Only a wedged park is recoverable: crashed and judgement parks (human_decision,
 // scope_expansion, stop_condition) are never auto-retried. Bounded exactly like
-// the convergence circuit breaker: auto-requeue up to maxStallRetries, then
-// escalate so a deterministic stall can't requeue forever.
+// the convergence circuit breaker: auto-requeue up to maxStallRetries. At the
+// cap, before escalating to Max, PROMOTE baby to the strong (daddy-class) model
+// for one more set of retries — same task, bigger inference (promote-at-cap). A
+// deterministic stall still can't requeue forever: the promoted run gets one
+// fresh budget, then escalates.
 // ---------------------------------------------------------------------------
 
 export type StallRecoveryDecision =
   | { action: "requeue"; stallRetries: number }
+  // Cap hit on baby's normal model: requeue with the strong model and a fresh
+  // retry budget (stallRetries reset to 0). Fires at most once per run.
+  | { action: "promote"; stallRetries: number }
   | { action: "escalate"; stallRetries: number }
   | { action: "none" };
 
 export const decideStallRecovery = (
-  meta: { status: string; blockedReason?: string; stallRetries: number },
+  meta: { status: string; blockedReason?: string; stallRetries: number; promoted?: boolean },
   maxStallRetries: number,
+  promoteAtCap = true,
 ): StallRecoveryDecision => {
   if (meta.status !== "blocked" || meta.blockedReason !== "wedged") {
     return { action: "none" };
   }
   const used = meta.stallRetries ?? 0;
-  return used < maxStallRetries
-    ? { action: "requeue", stallRetries: used + 1 }
-    : { action: "escalate", stallRetries: used };
+  if (used < maxStallRetries) {
+    return { action: "requeue", stallRetries: used + 1 };
+  }
+  // Cap reached. One more set of retries on the strong model before parking for
+  // Max — unless that's disabled, or the strong model ALSO stalled to the cap
+  // (already promoted), in which case the stall is deterministic → escalate.
+  if (promoteAtCap && !(meta.promoted ?? false)) {
+    return { action: "promote", stallRetries: 0 };
+  }
+  return { action: "escalate", stallRetries: used };
 };
 
 // ---------------------------------------------------------------------------

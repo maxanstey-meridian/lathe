@@ -130,6 +130,9 @@ export const makeExecuteRun =
       stallRetries: priorMeta?.stallRetries ?? 0,
       reorientRetries: priorMeta?.reorientRetries ?? 0,
       reviewerUnreachable: priorMeta?.reviewerUnreachable ?? 0,
+      // Carry the strong-model promotion across the requeue/resume — turn-loop
+      // reads this to start on the promoted model.
+      promoted: priorMeta?.promoted ?? false,
       startedAt: priorMeta?.startedAt ?? clock.nowIso(),
       updatedAt: clock.nowIso(),
     });

@@ -227,11 +227,19 @@ export const babyModelConfig = (config: Config): ModelConfig => ({
   agent: config.baby.agent,
 });
 
+// The promoted (strong) model: baby's promoteTo override if set, else daddy's
+// configured model — so promotion can't drift onto a stale/unavailable model
+// when daddy is reconfigured. The agent stays "baby"; only inference changes.
 export const promotedModelConfig = (config: Config): ModelConfig => ({
-  providerId: config.baby.promoteTo.providerId,
-  modelId: config.baby.promoteTo.modelId,
+  providerId: config.baby.promoteTo?.providerId ?? config.daddy.providerId,
+  modelId: config.baby.promoteTo?.modelId ?? config.daddy.modelId,
   agent: config.baby.agent,
 });
+
+export const promotedModelLabel = (config: Config): string => {
+  const m = promotedModelConfig(config);
+  return `${m.providerId}/${m.modelId}`;
+};
 
 // ---------------------------------------------------------------------------
 // turnLoop — run one attempt to a terminal outcome.
@@ -252,8 +260,13 @@ export const turnLoop = async (
 ): Promise<TurnLoopResult> => {
   const { config, store, repo, executor, planner, clock } = ports;
   const runId = packet.runId;
-  let babyModel = babyModelConfig(config);
-  let promoted = false;
+  // Run Baby's harness on Daddy's model from turn 1 — same task, stronger engine —
+  // when this run is already promoted. Two persisted sources: a promoted follow-up
+  // packet (the convergence cap escape hatch, in frontmatter) OR a stall-cap/
+  // review-reject promotion latched in meta and carried across the requeue.
+  // Otherwise we start on Baby's normal model and may still promote mid-loop below.
+  let promoted = packet.frontmatter.promoted || (store.readMetaIfExists(runId)?.promoted ?? false);
+  let babyModel = promoted ? promotedModelConfig(config) : babyModelConfig(config);
   const contextBudget = babyContextBudget(config);
 
   let next = seed;
@@ -280,6 +293,16 @@ export const turnLoop = async (
     ladder += 1;
     journal(ports, runId, turn, { event: "ladder_step", count: ladder });
   };
+
+  // Surface a packet-level promotion the same way the mid-loop promotion is logged,
+  // so the tail shows this whole pass running on Daddy's model from the first turn.
+  if (promoted) {
+    journal(ports, runId, turn, {
+      event: "model_promoted",
+      from: `${config.baby.providerId}/${config.baby.modelId}`,
+      to: promotedModelLabel(config),
+    });
+  }
 
   for (;;) {
     turn += 1;
@@ -590,10 +613,16 @@ export const turnLoop = async (
               promoted = true;
               babyModel = promotedModelConfig(config);
               channel.reportRejectionCount = 0;
+              // Latch the promotion in meta so it survives any later requeue and a
+              // subsequent stall escalates instead of re-promoting (one per run).
+              const pm = store.readMetaIfExists(runId);
+              if (pm) {
+                store.writeMeta({ ...pm, promoted: true, updatedAt: clock.nowIso() });
+              }
               journal(ports, runId, turn, {
                 event: "model_promoted",
                 from: `${config.baby.providerId}/${config.baby.modelId}`,
-                to: `${config.baby.promoteTo.providerId}/${config.baby.promoteTo.modelId}`,
+                to: promotedModelLabel(config),
               });
               const {
                 seed: reseed,

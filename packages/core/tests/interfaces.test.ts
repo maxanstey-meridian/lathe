@@ -54,7 +54,13 @@ const fakeRepo = (): Repo => ({
 
 type Harness = {
   deps: CliDeps;
-  calls: { ran: boolean; converged: string[]; superReviewed: string[]; planned: boolean };
+  calls: {
+    ran: boolean;
+    converged: string[];
+    superReviewed: string[];
+    planned: boolean;
+    tailed: string[];
+  };
   cleanup: () => Promise<void>;
 };
 
@@ -266,6 +272,20 @@ test("dispatch: tail on a TTY routes to the Ink UI", async () => {
   try {
     // follow (default), not --plain, TTY → the Ink split-pane UI (returns -1).
     equal(await dispatch(["tail", RUN_ID], h.deps), -1);
+    equal(h.calls.tailed[0], RUN_ID);
+  } finally {
+    Object.defineProperty(process.stdout, "isTTY", { value: original, configurable: true });
+  }
+  await h.cleanup();
+});
+
+test("dispatch: tail without a run id follows active convergence when no run is active", async () => {
+  const h = await makeHarness();
+  h.deps.store.writeActiveConvergence({ runId: RUN_ID, startedAt: h.deps.clock.nowIso() });
+  const original = process.stdout.isTTY;
+  Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+  try {
+    equal(await dispatch(["tail"], h.deps), -1);
     equal(h.calls.tailed[0], RUN_ID);
   } finally {
     Object.defineProperty(process.stdout, "isTTY", { value: original, configurable: true });

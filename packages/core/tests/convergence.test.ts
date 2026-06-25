@@ -88,6 +88,60 @@ test("decideConvergence: pass > maxPasses → escalate", () => {
   assert.ok(d.reason.includes("cap"));
 });
 
+// --- promote-at-cap: the n+1 escape hatch (Baby's harness on Daddy's model) ---
+
+const promote = (alreadyPromoted = false) => ({ promoteAtCap: true, alreadyPromoted });
+
+test("decideConvergence: request_changes AT the cap + promote enabled → author PROMOTED, not escalate", () => {
+  const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
+  const d = decideConvergence(blocked, true, 3, 3, promote());
+  assert.equal(d.action, "author");
+  assert.equal(d.promote, true);
+  assert.equal(d.blockers.length, 1);
+});
+
+test("decideConvergence: ESCALATE verdict AT the cap + findings → author PROMOTED (the reported bug)", () => {
+  // The exact shape that parked run 20260625-142532-lathe-http-surface-fix3: super-
+  // daddy returns `escalate` with a human ask at pass 3/3. Before this fix it parked;
+  // now the cap gives Baby one promoted pass at the same task on Daddy's model.
+  const escalated = review("escalate", [finding("x", "P0", "command_fail")], "restore the checker");
+  const d = decideConvergence(escalated, true, 3, 3, promote());
+  assert.equal(d.action, "author");
+  assert.equal(d.promote, true);
+  assert.equal(d.blockers.length, 1);
+});
+
+test("decideConvergence: AT the cap but ALREADY promoted → escalate (no double promotion)", () => {
+  const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
+  const d = decideConvergence(blocked, true, 3, 3, promote(true));
+  assert.equal(d.action, "escalate");
+  assert.ok(d.reason.includes("promoted pass"));
+});
+
+test("decideConvergence: AT the cap, promote enabled but NO findings → escalate (nothing to author)", () => {
+  const d = decideConvergence(review("escalate", []), true, 3, 3, promote());
+  assert.equal(d.action, "escalate");
+});
+
+test("decideConvergence: promotion is cap-ONLY — escalate below the cap still parks", () => {
+  const escalated = review("escalate", [finding("x", "P0", "command_fail")]);
+  const d = decideConvergence(escalated, true, 1, 3, promote());
+  assert.equal(d.action, "escalate");
+});
+
+test("decideConvergence: a normal author below the cap carries promote:false", () => {
+  const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
+  const d = decideConvergence(blocked, true, 1, 3, promote());
+  assert.equal(d.action, "author");
+  assert.equal(d.promote, false);
+});
+
+test("decideConvergence: promoteAtCap disabled → cap escalates even with findings", () => {
+  const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
+  const d = decideConvergence(blocked, true, 3, 3, { promoteAtCap: false, alreadyPromoted: false });
+  assert.equal(d.action, "escalate");
+});
+
 // --- parseSuperReview: valid, fenced, garbage, scar ---
 
 test("parseSuperReview: valid, fenced, and garbage → escalate", () => {

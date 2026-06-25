@@ -73,6 +73,9 @@ export const answerRun = (
     ...rest,
     status: "queued",
     stallRetries: 0,
+    // A human looked — drop back to baby's normal model so the next automatic
+    // stall cycle can promote again as a fresh last-ditch (mirrors stallRetries).
+    promoted: false,
     updatedAt: clock.nowIso(),
   });
 

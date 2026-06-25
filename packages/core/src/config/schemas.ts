@@ -41,18 +41,20 @@ export const Config = z.object({
       // generous and ratchet down in config.json; too low forces premature
       // answers on genuinely hard turns. null = uncapped (legacy behaviour).
       thinkingBudget: z.number().int().nullable().default(6_000),
-      // The model the executor is promoted to when daddy's final review rejects its
-      // report reportRejectionParkAt times — "one more try on a bigger model".
-      // Defaults to daddy's provider/model (GLM). The agent stays "baby"; only
-      // inference changes. Ephemeral: the promotion
-      // lasts only for the rest of THIS run's turn loop; the next run resets to
-      // baby's normal model.
+      // The model baby's inference is promoted to at a cap (stall recovery OR
+      // daddy's final-review rejection) — "one more set of retries on a bigger
+      // model". The agent stays "baby"; only the inference changes; the promotion
+      // is ephemeral (the run carries it, the next run resets).
+      //
+      // OPTIONAL — when unset, promotion tracks DADDY's configured model, so the
+      // two never drift (change daddy's model and promotion follows). Set this
+      // only to promote to something OTHER than daddy.
       promoteTo: z
         .object({
-          providerId: z.string().default("zai-coding-plan"),
-          modelId: z.string().default("glm-5.1"),
+          providerId: z.string(),
+          modelId: z.string(),
         })
-        .default({}),
+        .optional(),
     })
     .default({}),
   // Super-daddy: the convergence reviewer. It must execute (bash enabled). Default is

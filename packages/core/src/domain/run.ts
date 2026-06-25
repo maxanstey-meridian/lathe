@@ -63,6 +63,14 @@ export const RunMeta = z.object({
   // Reset to 0 on any reviewed outcome. At thresholds.maxReviewerUnreachable the
   // driver stops self-retrying and parks for Max (Codex durably down/misconfig).
   reviewerUnreachable: z.number().int().min(0).default(0),
+  // Whether baby's inference has been promoted to the strong (daddy-class) model
+  // for this run — the last-ditch "one more set of retries on a bigger model"
+  // before a retry cap escalates to Max (§5 R10 + promote-at-cap). Persisted so
+  // it survives the requeue/resume that carries the promotion into the next
+  // attempt; reset to false when Max answers a park (a human looked) so a later
+  // stall cycle can promote again. Only the inference changes — the agent stays
+  // "baby".
+  promoted: z.boolean().default(false),
   startedAt: z.string().optional(),
   endedAt: z.string().optional(),
   updatedAt: z.string(),
@@ -91,6 +99,12 @@ export const ActiveRun = z.object({
   startedAt: z.string(),
 });
 export type ActiveRun = z.infer<typeof ActiveRun>;
+
+export const ActiveConvergence = z.object({
+  runId: z.string(),
+  startedAt: z.string(),
+});
+export type ActiveConvergence = z.infer<typeof ActiveConvergence>;
 
 // ---------------------------------------------------------------------------
 // Decision (CONTRACT §9)

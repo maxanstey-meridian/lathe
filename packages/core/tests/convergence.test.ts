@@ -36,79 +36,56 @@ const review = (verdict, findings, human = null) => ({
   human_decision_needed: human,
 });
 
-// --- decideConvergence: all 6 branches ---
+// --- decideConvergence: all branches ---
 
 test("decideConvergence: request_changes hands EVERY finding to the pass, regardless of severity/grounding", () => {
   const nitsOnly = review("request_changes", [
     finding("a", "P2", "none"),
     finding("b", "P3", "none"),
   ]);
-  const d = decideConvergence(nitsOnly, true, 1, 3, false);
+  const d = decideConvergence(nitsOnly, true, 1, 3);
   assert.equal(d.action, "author");
   assert.equal(d.blockers.length, 2);
 });
 
 test("decideConvergence: request_changes with NO findings → escalate (wants changes, named none)", () => {
-  const empty = decideConvergence(review("request_changes", []), true, 1, 3, false);
+  const empty = decideConvergence(review("request_changes", []), true, 1, 3);
   assert.equal(empty.action, "escalate");
 });
 
 test("decideConvergence: stop only on accept + green (the ONLY stop path)", () => {
-  assert.equal(decideConvergence(review("accept", []), true, 1, 3, false).action, "stop");
+  assert.equal(decideConvergence(review("accept", []), true, 1, 3).action, "stop");
 });
 
 test("decideConvergence: accept + verification RED → escalate (under-reported)", () => {
-  const red = decideConvergence(review("accept", []), false, 1, 3, false);
+  const red = decideConvergence(review("accept", []), false, 1, 3);
   assert.equal(red.action, "escalate");
   assert.ok(red.reason.includes("under-reported"));
 });
 
 test("decideConvergence: blockers author until the cap, then escalate", () => {
   const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
-  const d1 = decideConvergence(blocked, true, 1, 3, false);
+  const d1 = decideConvergence(blocked, true, 1, 3);
   assert.equal(d1.action, "author");
   assert.equal(d1.blockers.length, 1);
-  const capped = decideConvergence(blocked, true, 3, 3, false);
+  const capped = decideConvergence(blocked, true, 3, 3);
   assert.equal(capped.action, "escalate");
   assert.ok(capped.reason.includes("cap"));
 });
 
 test("decideConvergence: explicit escalate / human_decision_needed always wins", () => {
-  assert.equal(decideConvergence(review("escalate", []), true, 1, 3, false).action, "escalate");
+  assert.equal(decideConvergence(review("escalate", []), true, 1, 3).action, "escalate");
   assert.equal(
-    decideConvergence(review("accept", [], "needs a call"), true, 1, 3, false).action,
+    decideConvergence(review("accept", [], "needs a call"), true, 1, 3).action,
     "escalate",
   );
 });
 
-// --- decideConvergence: promotion ---
-
-test("decideConvergence: cap reached with promotionEnabled=true → author with promote=true", () => {
+test("decideConvergence: pass > maxPasses → escalate", () => {
   const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
-  const d = decideConvergence(blocked, true, 3, 3, true);
-  assert.equal(d.action, "author");
-  assert.equal(d.promote, true);
-  assert.equal(d.blockers.length, 1);
-});
-
-test("decideConvergence: cap reached with promotionEnabled=false → escalate", () => {
-  const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
-  const d = decideConvergence(blocked, true, 3, 3, false);
-  assert.equal(d.action, "escalate");
-});
-
-test("decideConvergence: promoted round still fails (pass > maxPasses) → escalate", () => {
-  const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
-  const d = decideConvergence(blocked, true, 4, 3, true);
+  const d = decideConvergence(blocked, true, 4, 3);
   assert.equal(d.action, "escalate");
   assert.ok(d.reason.includes("cap"));
-});
-
-test("decideConvergence: passes left + promotionEnabled=true → author with promote falsy", () => {
-  const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
-  const d = decideConvergence(blocked, true, 1, 3, true);
-  assert.equal(d.action, "author");
-  assert.equal(d.promote, undefined);
 });
 
 // --- parseSuperReview: valid, fenced, garbage, scar ---
@@ -299,7 +276,6 @@ const LINEAGE = {
   campaignId: "feature",
   parentRunId: "20260614-100000-feature",
   pass: 2,
-  promote: false,
   priorOutcomes: [{ id: "feature", description: "the feature" }],
 };
 
@@ -326,7 +302,6 @@ test("stampFollowupLineage: stamps lineage over authored intent; the packet admi
   assert.equal(fm.campaign_id, "feature");
   assert.equal(fm.parent_run_id, "20260614-100000-feature");
   assert.equal(fm.pass, 2);
-  assert.equal(fm.promoted, false);
   assert.equal(fm.regression_outcomes[0].id, "feature");
 });
 

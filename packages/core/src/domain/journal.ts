@@ -129,6 +129,12 @@ export const JournalEvent = z.discriminatedUnion("event", [
     stallRetries: z.number().int(),
   }),
   z.object({ ...base, event: z.literal("reorient"), attempt: z.number().int(), fix: z.string() }),
+  z.object({
+    ...base,
+    event: z.literal("model_promoted"),
+    from: z.string(),
+    to: z.string(),
+  }),
 ]);
 export type JournalEvent = z.infer<typeof JournalEvent>;
 
@@ -184,6 +190,8 @@ export const renderJournalEvent = (e: JournalEvent): string => {
       return `${t} ${e.action === "requeue" ? "↻" : "🅿"} stall ${e.action} (auto-retry ${e.stallRetries})`;
     case "reorient":
       return `${t} 🧭 reorient #${e.attempt} (Baby derailed) → fix: ${e.fix.slice(0, 120)}`;
+    case "model_promoted":
+      return `${t} ⬆ model promoted: ${e.from} → ${e.to}`;
   }
 };
 

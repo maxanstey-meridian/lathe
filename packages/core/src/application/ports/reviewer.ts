@@ -25,6 +25,12 @@ export type AuthorFollowupOutcome =
   | { kind: "unreachable"; detail: string; raw: string };
 
 export type Reviewer = {
-  superReview(input: SuperReviewInput): Promise<SuperReviewOutcome>;
-  authorFollowup(input: AuthorFollowupInput): Promise<AuthorFollowupOutcome>;
+  superReview(
+    input: SuperReviewInput,
+    onSessionBound?: (sessionId: string) => void,
+  ): Promise<SuperReviewOutcome>;
+  authorFollowup(
+    input: AuthorFollowupInput,
+    onSessionBound?: (sessionId: string) => void,
+  ): Promise<AuthorFollowupOutcome>;
 };

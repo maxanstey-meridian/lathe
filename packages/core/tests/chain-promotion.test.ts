@@ -37,10 +37,12 @@ const fakeRepo = (opts?: {
   diffStat: () => "",
   readDiffStats: () => ({}),
   fetchBranchFromClone: () => {
-    opts && (opts.fetchBranchFromCloneCalled = true);
-    opts && (opts.fetchBranchFromCloneRepo = "repo");
-    opts && (opts.fetchBranchFromCloneFrom = "from");
-    opts && (opts.fetchBranchFromCloneBranch = "branch");
+    if (opts) {
+      opts.fetchBranchFromCloneCalled = true;
+      opts.fetchBranchFromCloneRepo = "repo";
+      opts.fetchBranchFromCloneFrom = "from";
+      opts.fetchBranchFromCloneBranch = "branch";
+    }
     return undefined;
   },
   removeSandbox: () => {
@@ -88,7 +90,6 @@ verification:
 body
 `;
 
-const parentRunMeta = makeMeta({ runId: "20260101-000000-parent", status: "accepted" as const });
 const tipRunMeta = makeMeta({
   runId: "20260101-000000-tip",
   status: "accepted" as const,

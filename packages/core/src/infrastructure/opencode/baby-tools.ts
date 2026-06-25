@@ -4,12 +4,11 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { HandoffArtifact } from "../../domain/handoff.js";
+import { HandoffArtifact as HandoffArtifactSchema } from "../../domain/handoff.js";
 import type { RunRef } from "../bridge.js";
 import { writeAtomic, nowIso, readValidatedIfExists } from "../fsio.js";
-import type { HandoffArtifact, VerifyVerdict } from "../../domain/handoff.js";
-import { HandoffArtifact as HandoffArtifactSchema } from "../../domain/handoff.js";
 import { runVerify } from "./daddy-verify.js";
-import { diffStat } from "../git.js";
 
 // ---------------------------------------------------------------------------
 // Tool input types
@@ -57,16 +56,21 @@ const turnCompleteError = () =>
 // to {runStateDir}/handoff.json. Each call overwrites the previous.
 // The file persists across baby recycling; the run loop reads it when
 // spawning a replacement baby.
-export const handleWriteHandoff = async (
-  ref: RunRef,
-  input: WriteHandoffInput,
-) => {
+export const handleWriteHandoff = async (ref: RunRef, input: WriteHandoffInput) => {
   const ctx = ref.current;
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
-  if (ctx.awaitingVerification) return errorText(JSON.stringify({ error: "Handoff verification required. Call verify_handoff before any other tool." }));
-  if (ctx.turnComplete) return turnCompleteError();
+  if (ctx.awaitingVerification) {
+    return errorText(
+      JSON.stringify({
+        error: "Handoff verification required. Call verify_handoff before any other tool.",
+      }),
+    );
+  }
+  if (ctx.turnComplete) {
+    return turnCompleteError();
+  }
 
   const runId = ctx.packet.runId;
   const runDir = ctx.paths.runDir(runId);
@@ -121,15 +125,14 @@ export const handleWriteHandoff = async (
 // If the surface is large or daddy is slow, the call may hit the ~5min MCP
 // client cancellation; in that case, switch to the deferred pattern
 // (record verify intent, turn loop runs it).
-export const handleVerifyHandoff = async (
-  ref: RunRef,
-  input: VerifyHandoffInput,
-) => {
+export const handleVerifyHandoff = async (ref: RunRef, input: VerifyHandoffInput) => {
   const ctx = ref.current;
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
-  if (ctx.turnComplete) return turnCompleteError();
+  if (ctx.turnComplete) {
+    return turnCompleteError();
+  }
 
   // Read the handoff artifact from disk.
   const runDir = ctx.paths.runDir(ctx.packet.runId);
@@ -152,32 +155,15 @@ export const handleVerifyHandoff = async (
     );
   }
 
-  // Gather the declared surface: git diff stat + file samples.
-  // Only read files listed in completedSteps[*].files — no full repo scan.
-  const fullDiff = diffStat(ctx.worktree, ctx.packet.frontmatter.base);
-
-  // Collect all unique files from the handoff.
+  // The declared surface = the files the handoff claims it touched. Daddy
+  // verifies against their actual contents in the worktree (read below), not a
+  // git diff slice. Only read files listed in completedSteps[*].files.
   const fileSet = new Set<string>();
   for (const step of handoff.completedSteps) {
     for (const f of step.files) {
       fileSet.add(f);
     }
   }
-
-  // Post-filter the diff stat to only include lines for declared file paths.
-  // A diff stat line like "src/foo.ts | 5 ++++" starts with the file path.
-  const declaredDiff =
-    fileSet.size > 0
-      ? fullDiff
-          .split("\n")
-          .filter((line) => line.trim().length > 0)
-          .filter((line) => {
-            // The path is the first whitespace-delimited token.
-            const path = line.split(/\s+/)[0] ?? "";
-            return fileSet.has(path);
-          })
-          .join("\n")
-      : "";
 
   const fileSamples: Record<string, string> = {};
 
@@ -202,7 +188,6 @@ export const handleVerifyHandoff = async (
     ctx.config.daddy.timeoutMs,
     ctx.worktree,
     handoff,
-    declaredDiff,
     fileSamples,
     input.questionsForDaddy ?? [],
   );

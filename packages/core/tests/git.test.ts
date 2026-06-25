@@ -3,15 +3,7 @@
 
 import assert from "node:assert";
 import { execSync } from "node:child_process";
-import {
-  mkdtempSync,
-  writeFileSync,
-  mkdirSync,
-  rmSync,
-  readFileSync,
-  existsSync,
-  statSync,
-} from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -265,7 +257,6 @@ test("amendCommit: rewords HEAD and returns new SHA", () => {
     writeFileSync(join(repo, "a.txt"), "a\n");
     execSync("git add -A && git commit -m 'first'", { cwd: repo, stdio: "ignore" });
 
-    const before = execSync("git rev-parse HEAD", { cwd: repo }).toString().trim();
     const beforeMsg = execSync("git log -1 --format=%s", { cwd: repo }).toString().trim();
     assert.equal(beforeMsg, "first");
 
@@ -547,7 +538,7 @@ test("diffNameOnly: lists changed file names", () => {
 test("fetchBranchFromClone: pulls a branch from a clone into source repo refs", () => {
   const tmp = mkdtempSync(join(tmpdir(), "meridian-fetch-"));
   try {
-    const { repo: source, baseSha } = initSourceRepo(tmp);
+    const { repo: source } = initSourceRepo(tmp);
 
     // Create a sandbox clone, make a commit on a feature branch.
     const clonePath = join(tmp, "clone");

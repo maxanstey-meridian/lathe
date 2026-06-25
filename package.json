@@ -5,11 +5,12 @@
   "description": "Meridian v3 — sequential overnight executor of human-written specs.",
   "type": "module",
   "scripts": {
-    "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test",
-    "lint": "pnpm -r lint",
-    "fmt": "pnpm -r fmt"
+    "build": "pnpm -r --reporter=append-only build",
+    "typecheck": "pnpm -r --reporter=append-only typecheck",
+    "check": "pnpm -r --reporter=append-only lint && pnpm -r --reporter=append-only typecheck",
+    "test": "pnpm -r --reporter=append-only test",
+    "lint": "pnpm -r --reporter=append-only lint",
+    "fmt": "pnpm -r --reporter=append-only fmt"
   },
   "engines": {
     "node": ">=22"

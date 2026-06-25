@@ -41,6 +41,11 @@ export const RunMeta = z.object({
   summary: z.string().optional(),
   babySessionId: z.string().optional(),
   daddySessionId: z.string().optional(),
+  // Super-daddy's convergence-reviewer session, rooted in the run's worktree
+  // (same feed as baby). Written by converge-run as soon as the reviewer binds
+  // its session so `lathe tail` can route super-daddy's live tool calls to its
+  // pane — mirrors daddySessionId. Optional: absent before/after convergence.
+  reviewerSessionId: z.string().optional(),
   blockedReason: BlockedReason.optional(),
   blockedQuestion: z.string().optional(),
   // P6: count of automatic post-stall requeues spent on this run (§5 R10).

@@ -3,14 +3,13 @@
 
 import { execSync } from "child_process";
 import { equal, strictEqual, ok, deepStrictEqual, match, rejects } from "node:assert";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import type { Clock } from "../src/application/ports/clock.js";
 import type { Repo } from "../src/application/ports/repo.js";
 import { makePaths } from "../src/config/paths.js";
-import { OutcomeStatus } from "../src/domain/outcomes.js";
 import type { Packet } from "../src/domain/packet.js";
 import {
   buildMcpServer,
@@ -21,13 +20,6 @@ import {
   handleGetDecisions,
   startBridgeServer,
   listenBridge,
-} from "../src/infrastructure/bridge.js";
-import type {
-  AskPlannerInput,
-  UpdateOutcomesInput,
-  WriteCheckpointInput,
-  SubmitReportInput,
-  GetDecisionsInput,
 } from "../src/infrastructure/bridge.js";
 import { StoreAdapter } from "../src/infrastructure/store.js";
 
@@ -725,7 +717,7 @@ const seedWorktreeGit = async (worktree: string, addedFile: string) => {
 };
 
 test("submit_report: pass-2 naming a real changed test file → floor clean", async () => {
-  const { ref, tmp, clock } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
+  const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
   await handleUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
@@ -1066,7 +1058,7 @@ test("get_decisions: gate unchanged for stale accepted decision", async () => {
 // ===========================================================================
 
 test("update_outcomes: ledger persists through store read", async () => {
-  const { ref, tmp, clock } = makeRef();
+  const { ref, tmp } = makeRef();
   await handleUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });

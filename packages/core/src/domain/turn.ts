@@ -184,7 +184,6 @@ export const evaluateTurn = (facts: z.infer<typeof TurnFacts>): Dec => {
     ladder,
     ladderRotateAt,
     ladderParkAt,
-    sendFailureCount,
     softNudgeDue,
   } = facts;
 

@@ -61,6 +61,9 @@ export const projectJournalEvent = (
     case "final_review":
       return { kind: "verdict", runId, reviewer: ctx.reviewer, verdict: e.verdict, at };
 
+    case "super_review":
+      return { kind: "verdict", runId, reviewer: "superdaddy", verdict: e.verdict, at };
+
     case "parked":
       return { kind: "run.state", runId, status: "paused", at };
 
@@ -78,6 +81,9 @@ export const projectJournalEvent = (
 
     case "reorient":
       return { kind: "log", runId, line: `reorient #${e.attempt}: ${e.fix}`, at };
+
+    case "model_promoted":
+      return { kind: "log", runId, line: `model promoted: ${e.from} -> ${e.to}`, at };
 
     // Internal-only: no dashboard projection.
     case "gate_cleared":

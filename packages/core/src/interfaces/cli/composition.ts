@@ -310,7 +310,7 @@ export const superReviewOnce = async (
   paths: Paths,
   runId: string,
 ): Promise<number> =>
-  withServe(config, paths, async ({ store, repo }) => {
+  withServe(config, paths, async ({ store }) => {
     const meta = store.readMetaIfExists(runId);
     if (!meta) {
       console.error(`run ${runId} not found`);
@@ -335,11 +335,6 @@ export const superReviewOnce = async (
       config.superdaddy.timeoutMs,
       config.superdaddy.transportRetries,
     );
-    const diff = repo.reviewableDiffAgainst(
-      meta.worktree,
-      meta.base,
-      config.superdaddy.diffCapBytes,
-    );
     const reportText = existsSync(paths.reportFile(runId))
       ? readFileSync(paths.reportFile(runId), "utf-8")
       : "";
@@ -349,7 +344,6 @@ export const superReviewOnce = async (
     const outcome = await reviewer.superReview({
       packet: shape.packet,
       worktree: meta.worktree,
-      diff,
       reportText,
       skillText,
       pass: shape.packet.frontmatter.pass,

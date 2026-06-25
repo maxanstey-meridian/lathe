@@ -131,8 +131,15 @@ export const createReviewer = (
     return { kind: "unreachable", detail: lastDetail };
   };
 
-  const superReview = async (input: SuperReviewInput): Promise<SuperReviewOutcome> => {
+  const superReview = async (
+    input: SuperReviewInput,
+    onSessionBound?: (sessionId: string) => void,
+  ): Promise<SuperReviewOutcome> => {
     const sessionId = await ensureSession(input.worktree);
+    // Surface the bound session BEFORE the turn so the caller (converge-run) can
+    // record it in run meta — `lathe tail` then routes super-daddy's live tool
+    // calls to its pane during the review, not after.
+    onSessionBound?.(sessionId);
     const turn = await runTurn(sessionId, renderSuperReview(input));
 
     // Retries exhausted (or a fatal error) — unreachable, NOT escalate. A parse
@@ -152,8 +159,12 @@ export const createReviewer = (
   // and the findings are in context. We do not parse here: the use case stamps the
   // lineage and validates on admission, re-asking (priorProblems) or escalating if
   // it does not parse. Returns the raw authored markdown, or unreachable.
-  const authorFollowup = async (input: AuthorFollowupInput): Promise<AuthorFollowupOutcome> => {
+  const authorFollowup = async (
+    input: AuthorFollowupInput,
+    onSessionBound?: (sessionId: string) => void,
+  ): Promise<AuthorFollowupOutcome> => {
     const sessionId = await ensureSession(input.worktree);
+    onSessionBound?.(sessionId);
     const turn = await runTurn(sessionId, renderFollowupAuthoring(input));
     if (turn.kind === "unreachable") {
       return {

@@ -135,7 +135,7 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
   const { store, repo, reviewer, verify, clock, config, paths } = deps;
 
   return async (runId: string): Promise<void> => {
-    const meta = store.readMeta(runId);
+    let meta = store.readMeta(runId);
 
     // --- Load packet --------------------------------------------------------
     let packet: Packet;
@@ -187,6 +187,17 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
     const pass = packet.frontmatter.pass;
     const atIso = clock.nowIso();
 
+    // Record super-daddy's session into meta the instant the reviewer binds it,
+    // so `lathe tail` can route the reviewer's live tool calls (pnpm test, git
+    // diff, reads) to its pane DURING the review. Re-reads meta on each bind to
+    // avoid clobbering concurrent fields (single-driver, but stay additive).
+    const recordReviewerSession = (sessionId: string): void => {
+      const current = store.readMeta(runId);
+      if (current.reviewerSessionId !== sessionId) {
+        store.writeMeta({ ...current, reviewerSessionId: sessionId, updatedAt: clock.nowIso() });
+      }
+    };
+
     // --- Convergence loop ---------------------------------------------------
     try {
       // 1. Autofix — best-effort mechanical fixes scoped to expected_surface.
@@ -214,15 +225,18 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
       const skillPath = expandHome(config.superdaddy.skillPath);
       const skillText = readFileSync(skillPath, "utf-8");
 
-      const outcome = await reviewer.superReview({
-        packet,
-        worktree: meta.worktree,
-        reportText,
-        skillText,
-        pass,
-        maxPasses,
-        campaignId,
-      });
+      const outcome = await reviewer.superReview(
+        {
+          packet,
+          worktree: meta.worktree,
+          reportText,
+          skillText,
+          pass,
+          maxPasses,
+          campaignId,
+        },
+        recordReviewerSession,
+      );
 
       // 3a. Transport failure — NOT a verdict. Never record a campaign pass (that
       // would make alreadyReviewed no-op the retry), never author/stop from a
@@ -267,6 +281,11 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
       // 3b. A real verdict arrived — the unreachable streak (if any) is broken.
       const result: SuperReviewResult = outcome;
 
+      // Refresh meta: recordReviewerSession wrote reviewerSessionId into the
+      // store during the review. Re-read so the decision/act spreads below
+      // carry it forward instead of clobbering it with the pre-review snapshot.
+      meta = store.readMeta(runId);
+
       // Make the verdict VISIBLE in the tail/journal. The convergence log
       // (convergence.jsonl) is the system of record but is never streamed, so
       // without this the reviewer's verdict never reaches `lathe tail`. Mirrors
@@ -283,13 +302,7 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
       });
 
       // 3. Pure decision.
-      const decision = decideConvergence(
-        result.review,
-        verificationGreen,
-        pass,
-        maxPasses,
-        config.thresholds.promoteAtCap,
-      );
+      const decision = decideConvergence(result.review, verificationGreen, pass, maxPasses);
 
       // 4. Act on the decision.
       let amendedSha: string | null = null;
@@ -350,7 +363,6 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
             campaignId,
             parentRunId: runId,
             pass: pass + 1,
-            promote: decision.promote ?? false,
             priorOutcomes,
           };
 
@@ -366,15 +378,18 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
           );
           let problems: string[] | null = null;
           for (let attempt = 0; attempt < 2; attempt++) {
-            const authored = await reviewer.authorFollowup({
-              worktree: meta.worktree,
-              packetSkillText,
-              blockers: decision.blockers,
-              priorOutcomes,
-              pass: pass + 1,
-              campaignId,
-              priorProblems: problems ?? undefined,
-            });
+            const authored = await reviewer.authorFollowup(
+              {
+                worktree: meta.worktree,
+                packetSkillText,
+                blockers: decision.blockers,
+                priorOutcomes,
+                pass: pass + 1,
+                campaignId,
+                priorProblems: problems ?? undefined,
+              },
+              recordReviewerSession,
+            );
 
             // The review just succeeded over this socket, so an authoring drop is
             // transient — throw to the fail-safe: the run stays ready_for_review

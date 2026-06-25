@@ -767,8 +767,8 @@ const renderBlockerLines = (blockers: Finding[]): string =>
 // bigger, final-authority author. Two adaptations for the convergence context:
 // it emits the packet markdown as its reply (the engine admits + validates it,
 // rather than it writing a file and running `lathe queue add`), and it omits all
-// lineage/infra (the engine stamps repo/base/campaign_id/parent_run_id/pass/
-// promoted and seals regression_outcomes — the same fields the skill says never
+// lineage/infra (the engine stamps repo/base/campaign_id/parent_run_id/pass
+// and seals regression_outcomes — the same fields the skill says never
 // to author).
 export const renderFollowupAuthoring = (input: AuthorFollowupInput): string => {
   const priorProblemsBlock =
@@ -808,7 +808,7 @@ discipline and body sections. TWO adaptations for this convergence context:
      packet markdown itself (a YAML frontmatter block, then the body). The engine
      admits and validates it; if it fails admission you get the problems back to fix.
   2. Do NOT author lineage/infra: omit \`repo\`, \`base\`, \`campaign_id\`,
-     \`parent_run_id\`, \`pass\`, \`promoted\`, and \`regression_outcomes\`. The engine
+      \`parent_run_id\`, \`pass\`, and \`regression_outcomes\`. The engine
      stamps every one of them. Author ONLY: \`summary\`, \`outcomes\`,
      \`expected_surface\`, \`suspicious_surface\` (if any), \`verification\`,
      \`constraints\` (if any), and the prose body.

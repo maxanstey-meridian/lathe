@@ -1,7 +1,6 @@
 // Repo port: git operations the driver performs (ARCHITECTURE §3.2).
 // Use cases depend on this; the adapter implements it. Interfaces only — zero runtime.
 
-import type { StagedInfo } from "../../domain/chain.js";
 import type { DiffStats } from "../../domain/gate-classification.js";
 
 export type Repo = {

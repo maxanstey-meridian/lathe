@@ -88,14 +88,13 @@ export const createPlanner = (
   // Reference: reference/src/bridge.ts:55-87
   const finalReview = async (
     packet: Packet,
-    reviewableDiff: string,
     ledger: OutcomeLedger,
     report: SubmitReport,
   ): Promise<FinalReview> => {
     if (!daddySessionId) {
       throw new Error("handshake must be called before finalReview");
     }
-    const prompt = renderFinalReview(packet, reviewableDiff, ledger, report);
+    const prompt = renderFinalReview(packet, ledger, report);
 
     try {
       const response = await executor.sendMessage(

@@ -75,7 +75,7 @@ export type SuperReview = z.infer<typeof SuperReview>;
 // The loop decision (single reviewer: super-daddy) — CONTRACT §18 S5
 
 export type ConvergeDecision =
-  | { action: "author"; blockers: Finding[]; promote?: boolean }
+  | { action: "author"; blockers: Finding[] }
   | { action: "stop" }
   | { action: "escalate"; reason: string };
 
@@ -91,7 +91,6 @@ export const decideConvergence = (
   verificationGreen: boolean,
   pass: number,
   maxPasses: number,
-  promotionEnabled: boolean,
 ): ConvergeDecision => {
   if (review.verdict === "escalate" || review.human_decision_needed) {
     return { action: "escalate", reason: review.human_decision_needed ?? "reviewer escalated" };
@@ -115,9 +114,6 @@ export const decideConvergence = (
     };
   }
   if (pass >= maxPasses) {
-    if (promotionEnabled && pass === maxPasses) {
-      return { action: "author", blockers: review.findings, promote: true };
-    }
     return {
       action: "escalate",
       reason: `hard cap reached (${pass}/${maxPasses}) and the reviewer still wants changes — convergence failed`,
@@ -207,7 +203,7 @@ export const parseSuperReview = (raw: string): SuperReview => {
 // the same way a planner authors any handoff — picking its own outcomes, surface,
 // and verification to fix the blockers it raised. The engine owns only the
 // lineage/infra it must not be trusted to invent (the same fields the packet skill
-// says never to author): repo, base, the campaign/parent/pass/promoted lineage,
+// says never to author): repo, base, the campaign/parent/pass lineage,
 // and the regression seal. These two pure helpers do that engine half.
 
 // Super-daddy replies with the packet markdown; it MAY precede it with tool
@@ -237,7 +233,6 @@ export type FollowupLineage = {
   campaignId: string;
   parentRunId: string; // the run super-daddy just reviewed
   pass: number; // the NEW pass number (parent pass + 1)
-  promote: boolean; // secret n+1: Baby harness on Daddy's model
   priorOutcomes: OutcomeDef[]; // delivered outcomes carried forward as regression
 };
 
@@ -285,7 +280,6 @@ export const stampFollowupLineage = (authoredRaw: string, lineage: FollowupLinea
     campaign_id: lineage.campaignId,
     parent_run_id: lineage.parentRunId,
     pass: lineage.pass,
-    promoted: lineage.promote,
     regression_outcomes: regression,
   };
 

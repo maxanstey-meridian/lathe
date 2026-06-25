@@ -16,11 +16,9 @@
 //   packets + queries runs table for requeued (replicates StoreAdapter.listQueue).
 // - Staged: file-backed (paths.stagedDir + fsio writeAtomic), identical to StoreAdapter.
 
-import { DatabaseSync } from "node:sqlite";
 import {
   existsSync,
   readFileSync,
-  writeFileSync,
   mkdirSync,
   readdirSync,
   statSync,
@@ -28,6 +26,7 @@ import {
   renameSync,
 } from "node:fs";
 import { join, dirname, basename } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import type { Clock } from "../application/ports/clock.js";
 import type { Repo } from "../application/ports/repo.js";
@@ -178,9 +177,9 @@ export class SqliteStoreAdapter implements Store {
   // Run state (meta)
 
   readMeta(runId: string): RunMeta {
-    const row = this.db
-      .prepare("SELECT meta FROM runs WHERE run_id = ?")
-      .get(runId) as { meta: string } | undefined;
+    const row = this.db.prepare("SELECT meta FROM runs WHERE run_id = ?").get(runId) as
+      | { meta: string }
+      | undefined;
     if (!row) {
       throw new Error(`run not found: ${runId}`);
     }
@@ -189,9 +188,9 @@ export class SqliteStoreAdapter implements Store {
   }
 
   readMetaIfExists(runId: string): RunMeta | undefined {
-    const row = this.db
-      .prepare("SELECT meta FROM runs WHERE run_id = ?")
-      .get(runId) as { meta: string } | undefined;
+    const row = this.db.prepare("SELECT meta FROM runs WHERE run_id = ?").get(runId) as
+      | { meta: string }
+      | undefined;
     if (!row) {
       return undefined;
     }
@@ -236,9 +235,9 @@ export class SqliteStoreAdapter implements Store {
   }
 
   readLedger(runId: string): OutcomeLedger {
-    const row = this.db
-      .prepare("SELECT ledger FROM outcome_ledger WHERE run_id = ?")
-      .get(runId) as { ledger: string } | undefined;
+    const row = this.db.prepare("SELECT ledger FROM outcome_ledger WHERE run_id = ?").get(runId) as
+      | { ledger: string }
+      | undefined;
     if (!row) {
       throw new Error(`ledger not found: ${runId}`);
     }
@@ -267,9 +266,9 @@ export class SqliteStoreAdapter implements Store {
   }
 
   readReviewState(runId: string): ReviewState {
-    const row = this.db
-      .prepare("SELECT state FROM review_state WHERE run_id = ?")
-      .get(runId) as { state: string } | undefined;
+    const row = this.db.prepare("SELECT state FROM review_state WHERE run_id = ?").get(runId) as
+      | { state: string }
+      | undefined;
     if (!row) {
       throw new Error(`review state not found: ${runId}`);
     }
@@ -295,9 +294,7 @@ export class SqliteStoreAdapter implements Store {
   appendDecision(runId: string, decision: Decision): void {
     const validated = DecisionSchema.parse(decision);
     this.db
-      .prepare(
-        "INSERT INTO decisions (run_id, decision) VALUES (?, ?)",
-      )
+      .prepare("INSERT INTO decisions (run_id, decision) VALUES (?, ?)")
       .run(runId, jsonStringify(validated));
   }
 
@@ -314,17 +311,13 @@ export class SqliteStoreAdapter implements Store {
   appendConvergence(runId: string, entry: ConvergenceLogEntry): void {
     const validated = ConvergenceLogEntrySchema.parse(entry);
     this.db
-      .prepare(
-        "INSERT INTO convergence (run_id, entry) VALUES (?, ?)",
-      )
+      .prepare("INSERT INTO convergence (run_id, entry) VALUES (?, ?)")
       .run(runId, jsonStringify(validated));
   }
 
   readConvergence(runId: string): ConvergenceLogEntry[] {
     const rows = this.db
-      .prepare(
-        "SELECT entry FROM convergence WHERE run_id = ? ORDER BY seq",
-      )
+      .prepare("SELECT entry FROM convergence WHERE run_id = ? ORDER BY seq")
       .all(runId) as { entry: string }[];
     return rows.map((r) => ConvergenceLogEntrySchema.parse(jsonParse(r.entry)));
   }
@@ -384,9 +377,9 @@ export class SqliteStoreAdapter implements Store {
   // Active run pointer
 
   readActiveRun(): ActiveRun | undefined {
-    const row = this.db
-      .prepare("SELECT run FROM active_run WHERE key = '1'")
-      .get() as { run: string } | undefined;
+    const row = this.db.prepare("SELECT run FROM active_run WHERE key = '1'").get() as
+      | { run: string }
+      | undefined;
     if (!row) {
       return undefined;
     }
@@ -395,9 +388,7 @@ export class SqliteStoreAdapter implements Store {
 
   writeActiveRun(run: ActiveRun): void {
     this.db
-      .prepare(
-        "INSERT OR REPLACE INTO active_run (key, run) VALUES ('1', ?)",
-      )
+      .prepare("INSERT OR REPLACE INTO active_run (key, run) VALUES ('1', ?)")
       .run(jsonStringify(run));
   }
 
@@ -424,16 +415,14 @@ export class SqliteStoreAdapter implements Store {
       updatedAt: this.clock.nowIso(),
     };
     this.db
-      .prepare(
-        "INSERT OR REPLACE INTO campaigns (campaign_id, campaign) VALUES (?, ?)",
-      )
+      .prepare("INSERT OR REPLACE INTO campaigns (campaign_id, campaign) VALUES (?, ?)")
       .run(campaign.campaignId, jsonStringify(stamped));
   }
 
   listCampaigns(): Campaign[] {
-    const rows = this.db
-      .prepare("SELECT campaign FROM campaigns ORDER BY campaign_id")
-      .all() as { campaign: string }[];
+    const rows = this.db.prepare("SELECT campaign FROM campaigns ORDER BY campaign_id").all() as {
+      campaign: string;
+    }[];
     return rows.map((r) => CampaignSchema.parse(jsonParse(r.campaign)));
   }
 
@@ -589,9 +578,9 @@ export class SqliteStoreAdapter implements Store {
   // Gate state
 
   readGateState(runId: string): GateState {
-    const row = this.db
-      .prepare("SELECT state FROM gate_state WHERE run_id = ?")
-      .get(runId) as { state: string } | undefined;
+    const row = this.db.prepare("SELECT state FROM gate_state WHERE run_id = ?").get(runId) as
+      | { state: string }
+      | undefined;
     if (!row) {
       throw new Error(`gate state not found: ${runId}`);
     }
@@ -604,9 +593,7 @@ export class SqliteStoreAdapter implements Store {
       updatedAt: this.clock.nowIso(),
     };
     this.db
-      .prepare(
-        "INSERT OR REPLACE INTO gate_state (run_id, state) VALUES (?, ?)",
-      )
+      .prepare("INSERT OR REPLACE INTO gate_state (run_id, state) VALUES (?, ?)")
       .run(runId, jsonStringify(stamped));
   }
 
@@ -622,7 +609,9 @@ export class SqliteStoreAdapter implements Store {
       .filter((f) => f.endsWith(".json"))
       .sort();
     const last = files[files.length - 1];
-    return last ? CheckpointSchema.parse(JSON.parse(readFileSync(join(dir, last), "utf-8"))) : undefined;
+    return last
+      ? CheckpointSchema.parse(JSON.parse(readFileSync(join(dir, last), "utf-8")))
+      : undefined;
   }
 
   writeCheckpoint(runId: string, checkpoint: Checkpoint): void {
@@ -661,7 +650,13 @@ export class SqliteStoreAdapter implements Store {
         const raw = readFileSync(filePath, "utf-8");
         const result = parseStaged(raw, filePath);
         if (result.ok) {
-          return [{ runId: result.info.runId, parentRunId: result.info.parentRunId, repo: result.info.repo }];
+          return [
+            {
+              runId: result.info.runId,
+              parentRunId: result.info.parentRunId,
+              repo: result.info.repo,
+            },
+          ];
         }
         return [];
       });

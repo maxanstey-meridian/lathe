@@ -14,10 +14,5 @@ export type Planner = {
   handshake(seedPrompt: string, directory: string): Promise<string>;
   resumeSession(sessionId: string): Promise<string>;
   consult(input: AskPlannerInput): Promise<PlannerResponse>;
-  finalReview(
-    packet: Packet,
-    reviewableDiff: string,
-    ledger: OutcomeLedger,
-    report: SubmitReport,
-  ): Promise<FinalReview>;
+  finalReview(packet: Packet, ledger: OutcomeLedger, report: SubmitReport): Promise<FinalReview>;
 };

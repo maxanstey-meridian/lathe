@@ -28,9 +28,7 @@ import {
   isEditTool,
   isForbiddenGitCommand,
   isMutation,
-  isMutationCommand,
   editTargetOutOfSurface,
-  FORBIDDEN_GIT,
   commandFromArgs,
 } from "../src/domain/gate-tools.ts";
 import type { GateState } from "../src/domain/gate.ts";

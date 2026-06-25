@@ -201,11 +201,7 @@ export const outcomeProblems = (report: SubmitReport, ledger: OutcomeLedger): st
 // present, no phantom ids, done implies evidence.
 // ---------------------------------------------------------------------------
 
-const checkpointProblems = (
-  checkpoint: Checkpoint,
-  packet: Packet,
-  ledger: OutcomeLedger,
-): string[] => {
+const checkpointProblems = (checkpoint: Checkpoint, packet: Packet): string[] => {
   const problems: string[] = [];
   const packetIds = new Set(packet.frontmatter.outcomes.map((o) => o.id));
   const checkpointIds = new Set(checkpoint.outcomes.map((o) => o.id));
@@ -305,8 +301,16 @@ export const handleAskPlanner = async (ref: RunRef, input: AskPlannerInput) => {
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
-  if (ctx.awaitingVerification) return errorText(JSON.stringify({ error: "Handoff verification required. Call verify_handoff before any other tool." }));
-  if (ctx.turnComplete) return turnCompleteError();
+  if (ctx.awaitingVerification) {
+    return errorText(
+      JSON.stringify({
+        error: "Handoff verification required. Call verify_handoff before any other tool.",
+      }),
+    );
+  }
+  if (ctx.turnComplete) {
+    return turnCompleteError();
+  }
 
   // M2: argument failures must be visible. The SDK validates shapes before
   // this handler, but content-level emptiness slips through — and an
@@ -377,8 +381,16 @@ export const handleUpdateOutcomes = async (ref: RunRef, input: UpdateOutcomesInp
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
-  if (ctx.awaitingVerification) return errorText(JSON.stringify({ error: "Handoff verification required. Call verify_handoff before any other tool." }));
-  if (ctx.turnComplete) return turnCompleteError();
+  if (ctx.awaitingVerification) {
+    return errorText(
+      JSON.stringify({
+        error: "Handoff verification required. Call verify_handoff before any other tool.",
+      }),
+    );
+  }
+  if (ctx.turnComplete) {
+    return turnCompleteError();
+  }
 
   const ledger = ctx.store.readLedger(ctx.packet.runId);
   const problems: string[] = [];
@@ -431,8 +443,16 @@ export const handleWriteCheckpoint = async (ref: RunRef, input: WriteCheckpointI
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
-  if (ctx.awaitingVerification) return errorText(JSON.stringify({ error: "Handoff verification required. Call verify_handoff before any other tool." }));
-  if (ctx.turnComplete) return turnCompleteError();
+  if (ctx.awaitingVerification) {
+    return errorText(
+      JSON.stringify({
+        error: "Handoff verification required. Call verify_handoff before any other tool.",
+      }),
+    );
+  }
+  if (ctx.turnComplete) {
+    return turnCompleteError();
+  }
 
   const ledger = ctx.store.readLedger(ctx.packet.runId);
   const checkpoint = {
@@ -457,7 +477,7 @@ export const handleWriteCheckpoint = async (ref: RunRef, input: WriteCheckpointI
     writtenAt: nowIso(),
   } as Checkpoint;
 
-  const problems = checkpointProblems(checkpoint, ctx.packet, ledger);
+  const problems = checkpointProblems(checkpoint, ctx.packet);
   journal(ctx, {
     event: "checkpoint_written",
     number: checkpoint.number,
@@ -493,8 +513,16 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
-  if (ctx.awaitingVerification) return errorText(JSON.stringify({ error: "Handoff verification required. Call verify_handoff before any other tool." }));
-  if (ctx.turnComplete) return turnCompleteError();
+  if (ctx.awaitingVerification) {
+    return errorText(
+      JSON.stringify({
+        error: "Handoff verification required. Call verify_handoff before any other tool.",
+      }),
+    );
+  }
+  if (ctx.turnComplete) {
+    return turnCompleteError();
+  }
 
   // A re-submit while a final review is still pending. `pendingFinalReview` is
   // STICKY across turns, but the `final-review-requested` intent that triggers
@@ -664,8 +692,16 @@ export const handleGetDecisions = async (ref: RunRef, input: GetDecisionsInput) 
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
-  if (ctx.awaitingVerification) return errorText(JSON.stringify({ error: "Handoff verification required. Call verify_handoff before any other tool." }));
-  if (ctx.turnComplete) return turnCompleteError();
+  if (ctx.awaitingVerification) {
+    return errorText(
+      JSON.stringify({
+        error: "Handoff verification required. Call verify_handoff before any other tool.",
+      }),
+    );
+  }
+  if (ctx.turnComplete) {
+    return turnCompleteError();
+  }
 
   const decisions = ctx.store.readDecisions(ctx.packet.runId);
   const gateState = ctx.store.readGateState(ctx.packet.runId);

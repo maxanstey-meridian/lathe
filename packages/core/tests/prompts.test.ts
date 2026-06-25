@@ -1,4 +1,4 @@
-import { match, strictEqual } from "node:assert";
+import { doesNotMatch, match, strictEqual } from "node:assert";
 import { describe, it } from "node:test";
 import type {
   Packet,
@@ -27,8 +27,6 @@ import {
   renderPlannerQuestion,
   renderSuperReview,
   renderFinalReview,
-  renderSealedFiles,
-  type DriverFacts,
   type SuperReviewInput,
 } from "../src/domain/prompts.js";
 
@@ -143,9 +141,6 @@ describe("prompts — Q-table renderers", () => {
         },
       };
       const prompt = q1InitialSeed(packet, minLedger());
-      const packetIdx = prompt.indexOf("## The handoff packet");
-      const sealedIdx = prompt.indexOf("## Sealed files");
-      const startIdx = prompt.indexOf("## Start");
       match(prompt, /## The handoff packet[\s\S]*## Sealed files[\s\S]*## Start/);
     });
   });
@@ -169,7 +164,6 @@ describe("prompts — Q-table renderers", () => {
         minCheckpoint(),
         minReview(),
         minDecisions(),
-        "(clean)",
       );
       match(prompt, /## Predecessor's checkpoint/);
       match(prompt, /## Where the run stands/);
@@ -220,13 +214,7 @@ describe("prompts — Q-table renderers", () => {
 
   describe("q8ReconciliationSeed", () => {
     it("says no valid checkpoint and requires reconciliation", () => {
-      const prompt = q8ReconciliationSeed(
-        minPacket(),
-        minLedger(),
-        minReview(),
-        minDecisions(),
-        "(clean)",
-      );
+      const prompt = q8ReconciliationSeed(minPacket(), minLedger(), minReview(), minDecisions());
       match(prompt, /No valid checkpoint/);
       match(prompt, /RECONCILIATION, not implementation/);
       match(prompt, /questionType "reconciliation"/);
@@ -236,14 +224,7 @@ describe("prompts — Q-table renderers", () => {
   describe("qReorientSeed", () => {
     it("injects planner.answer and planner.safe_next_action", () => {
       const p = minPlanner();
-      const prompt = qReorientSeed(
-        minPacket(),
-        minLedger(),
-        minReview(),
-        minDecisions(),
-        "(clean)",
-        p,
-      );
+      const prompt = qReorientSeed(minPacket(), minLedger(), minReview(), minDecisions(), p);
       match(prompt, new RegExp(p.answer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
       match(prompt, new RegExp(p.safe_next_action.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
       match(prompt, /DERAILED/);
@@ -332,7 +313,6 @@ describe("prompts — Q-table renderers", () => {
     it("contains the MUST_EXECUTE mandate", () => {
       const input: SuperReviewInput = {
         packet: minPacket(),
-        diff: "",
         reportText: "(no report)",
         skillText: minSkillText,
         pass: 1,
@@ -346,7 +326,6 @@ describe("prompts — Q-table renderers", () => {
     it("contains the <<<RUBRIC ... RUBRIC block", () => {
       const input: SuperReviewInput = {
         packet: minPacket(),
-        diff: "",
         reportText: "(no report)",
         skillText: minSkillText,
         pass: 1,
@@ -360,7 +339,6 @@ describe("prompts — Q-table renderers", () => {
     it("contains the recommend_stop MUST be false rule", () => {
       const input: SuperReviewInput = {
         packet: minPacket(),
-        diff: "",
         reportText: "(no report)",
         skillText: minSkillText,
         pass: 1,
@@ -372,13 +350,15 @@ describe("prompts — Q-table renderers", () => {
   });
 
   describe("renderFinalReview", () => {
-    it("includes outcome lines, files changed, and diff", () => {
+    it("includes outcome lines and files changed, with no embedded diff", () => {
       const report = minReport();
-      const prompt = renderFinalReview(minPacket(), "(diff)", minLedger(), report);
+      const prompt = renderFinalReview(minPacket(), minLedger(), report);
       match(prompt, /## Packet outcomes/);
       match(prompt, /test-outcome: a test outcome/);
       match(prompt, /## Verification commands/);
-      match(prompt, /## Reviewable diff/);
+      // The reviewer inspects the worktree directly — no diff slice is injected.
+      doesNotMatch(prompt, /## Reviewable diff/);
+      match(prompt, /full read-only access to this worktree/);
     });
 
     it("lists files changed when present", () => {
@@ -393,7 +373,7 @@ describe("prompts — Q-table renderers", () => {
           },
         ],
       };
-      const prompt = renderFinalReview(minPacket(), "(diff)", minLedger(), report);
+      const prompt = renderFinalReview(minPacket(), minLedger(), report);
       match(prompt, /src\/main\.ts/);
     });
   });

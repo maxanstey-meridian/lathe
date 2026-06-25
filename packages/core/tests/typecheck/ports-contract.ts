@@ -1,40 +1,32 @@
-// Compile-time typecheck fixture: structural fakes that prove every port shape
-// is usable. Zero `as` casts — if a cast is needed, the port shape is wrong.
+// Compile-time port contract checks.
 //
-// These are no-ops: they do nothing at runtime and are never imported by
-// production code. They exist solely to satisfy the type system.
+// These structural fakes prove each application port can be implemented as a
+// plain object with no casts. They are intentionally not imported by runtime
+// code; `tsc -p tsconfig.typecheck.json` typechecks this file to catch port
+// drift when a port method is added, removed, or reshaped.
 
-import type { Caffeinate } from "./application/ports/caffeinate.js";
-import type { Clock } from "./application/ports/clock.js";
-import type { Executor } from "./application/ports/executor.js";
-import type { Planner } from "./application/ports/planner.js";
-import type { Repo } from "./application/ports/repo.js";
-import type { Reviewer } from "./application/ports/reviewer.js";
-import type { Store } from "./application/ports/store.js";
-import type { Verify } from "./application/ports/verify.js";
+import type { Caffeinate } from "../../src/application/ports/caffeinate.js";
+import type { Clock } from "../../src/application/ports/clock.js";
+import type { Executor } from "../../src/application/ports/executor.js";
+import type { Planner } from "../../src/application/ports/planner.js";
+import type { Repo } from "../../src/application/ports/repo.js";
+import type { Reviewer } from "../../src/application/ports/reviewer.js";
+import type { Store } from "../../src/application/ports/store.js";
+import type { Verify } from "../../src/application/ports/verify.js";
 
-// ---------------------------------------------------------------------------
-// Clock fake
-
-const fakeClock: Clock = {
+const _clockContract: Clock = {
   now: () => 0,
   nowIso: () => "00000000-00:00:00.000Z",
 };
 
-// ---------------------------------------------------------------------------
-// Executor fake
-
-const fakeExecutor: Executor = {
+const _executorContract: Executor = {
   createSession: async () => "fake-session-id",
   sendMessage: async () => ({ info: { id: "msg", sessionID: "sid" }, parts: [] }),
   listMessages: async () => [],
   deleteSession: async () => {},
 };
 
-// ---------------------------------------------------------------------------
-// Repo fake
-
-const fakeRepo: Repo = {
+const _repoContract: Repo = {
   createSandbox: () => {},
   wipCommit: () => undefined,
   amendCommit: () => "deadbeef0000",
@@ -52,10 +44,7 @@ const fakeRepo: Repo = {
   mergeAccept: () => {},
 };
 
-// ---------------------------------------------------------------------------
-// Store fake
-
-const fakeStore: Store = {
+const _storeContract: Store = {
   readMeta: () => ({
     runId: "fake",
     status: "queued",
@@ -131,10 +120,7 @@ const fakeStore: Store = {
   readJournalSince: () => [],
 };
 
-// ---------------------------------------------------------------------------
-// Planner fake
-
-const fakePlanner: Planner = {
+const _plannerContract: Planner = {
   handshake: async () => "PLANNER_OK",
   resumeSession: async () => "PLANNER_OK",
   consult: async () => ({
@@ -153,10 +139,7 @@ const fakePlanner: Planner = {
   }),
 };
 
-// ---------------------------------------------------------------------------
-// Reviewer fake
-
-const fakeReviewer: Reviewer = {
+const _reviewerContract: Reviewer = {
   superReview: async () => ({
     kind: "reviewed",
     review: {
@@ -172,17 +155,11 @@ const fakeReviewer: Reviewer = {
   authorFollowup: async () => ({ kind: "authored", content: "", raw: "" }),
 };
 
-// ---------------------------------------------------------------------------
-// Verify fake
-
-const fakeVerify: Verify = {
+const _verifyContract: Verify = {
   run: async () => [],
   runAutoFix: async () => {},
 };
 
-// ---------------------------------------------------------------------------
-// Caffeinate fake
-
-const fakeCaffeinate: Caffeinate = {
+const _caffeinateContract: Caffeinate = {
   holdPowerAssertion: async () => {},
 };

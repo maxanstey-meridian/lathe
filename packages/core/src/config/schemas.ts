@@ -42,6 +42,18 @@ export const Config = z.object({
       // generous and ratchet down in config.json; too low forces premature
       // answers on genuinely hard turns. null = uncapped (legacy behaviour).
       thinkingBudget: z.number().int().nullable().default(6_000),
+      // The model Baby is promoted to when daddy's final review rejects its
+      // report reportRejectionParkAt times — "one more try on a bigger model".
+      // Defaults to daddy's provider/model (GLM). The agent stays "baby" (baby's
+      // harness, just a stronger inference engine). Ephemeral: the promotion
+      // lasts only for the rest of THIS run's turn loop; the next run resets to
+      // baby's normal model.
+      promoteTo: z
+        .object({
+          providerId: z.string().default("zai-coding-plan"),
+          modelId: z.string().default("glm-5.1"),
+        })
+        .default({}),
     })
     .default({}),
   // Super-daddy: the convergence reviewer — the strongest frontier "pseudo-Max"
@@ -135,9 +147,10 @@ export const Config = z.object({
       // recorded); at it the run parks for Max as a real "Codex durably down".
       // Distinct from maxPasses, which counts real verdicts.
       maxReviewerUnreachable: z.number().int().min(1).default(3),
-      // At the convergence cap, run one more pass with Baby's full harness on
-      // Daddy's model before escalating to Max. false restores today's
-      // escalate-at-cap behaviour.
+      // When daddy's final review rejects baby's report reportRejectionParkAt
+      // times, swap baby's model to baby.promoteTo for one more set of retries
+      // before failing the run. false disables the swap — baby just fails at the
+      // rejection cap as if promoteTo were absent.
       promoteAtCap: z.boolean().default(true),
       // P6 liveness. maxStallRetries: automatic post-stall requeues before a
       // `wedged` run escalates to Max — the bounded "try again pls". maxRunMs:

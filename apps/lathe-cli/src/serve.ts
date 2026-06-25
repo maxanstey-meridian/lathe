@@ -13,29 +13,18 @@
 //   release lock → exit(0)
 // ---------------------------------------------------------------------------
 
+import { loadConfig } from "@lathe/core";
+import { createApp, createSupervisor, acquireSingleInstanceLock } from "@lathe/server";
 import { join } from "node:path";
 
-import { loadConfig } from "@lathe/core";
-import {
-  createApp,
-  createSupervisor,
-  acquireSingleInstanceLock,
-} from "@lathe/server";
-
-export const startDaemon = async (
-  userPort?: number,
-): Promise<void> => {
+export const startDaemon = async (userPort?: number): Promise<void> => {
   const { config, paths } = loadConfig();
   const port = userPort ?? config.daemon.port;
   const host = config.daemon.host;
 
   // 1. Acquire single-instance lock (socket bind + pidfile).
   const lockPath = join(paths.root, "lathe.lock");
-  const releaseLock = await acquireSingleInstanceLock(
-    lockPath,
-    port,
-    host,
-  );
+  const releaseLock = await acquireSingleInstanceLock(lockPath, port, host);
 
   // 2. Create supervisor (owns runDriver, journal tail, lifecycle methods).
   const supervisor = createSupervisor(config, paths);
@@ -52,7 +41,7 @@ export const startDaemon = async (
   // 5. Graceful shutdown.
   const shutdown = async (): Promise<void> => {
     console.log("shutting down…");
-    await new Promise<void>(resolve => server.close(() => resolve()));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     try {
       await supervisor.stop();
     } catch {

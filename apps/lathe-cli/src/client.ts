@@ -5,22 +5,25 @@
 // contract. Commands import this and call the client directly — no hand-rolled
 // fetch, no `any`, no casting responses to DTOs.
 //
-// The default baseUrl comes from config.daemon (host/port). For testing or
-// non-default daemon ports, call createDaemonClient(baseUrl) instead of the
-// default export.
+// The default baseUrl comes from config.daemon (host/port). Tests (or a non-
+// default daemon port) pass an explicit baseUrl, and optionally a custom fetch
+// so the client can be driven against an in-process app or a stub with no
+// network.
 // ---------------------------------------------------------------------------
 
-import createClient from "openapi-fetch";
 import type { paths } from "@lathe/contract";
 import { loadConfig } from "@lathe/core";
+import createClient from "openapi-fetch";
 
-export const createDaemonClient = (baseUrl?: string) => {
-  if (!baseUrl) {
+export const createDaemonClient = (baseUrl?: string, fetchImpl?: typeof fetch) => {
+  let url = baseUrl;
+  if (!url) {
     const { config } = loadConfig();
-    baseUrl = `http://${config.daemon.host}:${config.daemon.port}`;
+    url = `http://${config.daemon.host}:${config.daemon.port}`;
   }
-  return createClient<paths>({ baseUrl });
+  return fetchImpl
+    ? createClient<paths>({ baseUrl: url, fetch: fetchImpl })
+    : createClient<paths>({ baseUrl: url });
 };
 
-/** Default client instance — uses config.daemon host/port. */
-export const lathe = createDaemonClient();
+export type DaemonClient = ReturnType<typeof createDaemonClient>;

@@ -158,7 +158,6 @@ export const makeExecuteRun =
             checkpoint,
             store.readReviewState(runId),
             store.readDecisions(runId),
-            repo.diffStat(worktree, base),
           ),
         };
       } else {
@@ -176,7 +175,6 @@ export const makeExecuteRun =
             store.readLedger(runId),
             store.readReviewState(runId),
             store.readDecisions(runId),
-            repo.diffStat(worktree, base),
           ),
         };
       }

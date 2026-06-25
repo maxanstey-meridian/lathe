@@ -3,3 +3,4 @@ dist/
 .packets/
 form/
 .DS_Store
+.idea

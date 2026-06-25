@@ -47,9 +47,8 @@ export const gateTriggerReason = (state: GateState, delta: DeltaInput): string |
 
 // The volume reminder, evaluated at the turn boundary for the driver's VISIBLE
 // journal event (§10). Tool calls OR files OR LoC since the last planner check-in,
-// whichever crosses first — the work-interval cadence reborn as a shout. Pure;
-// returns the same reason string the plugin appends to Baby. Returns the reason
-// when due, else undefined.
+// whichever crosses first. Pure; returns the same reason string the plugin appends
+// to executor output. Returns the reason when due, else undefined.
 export const volumeCheckpointReason = (
   toolCalls: number,
   delta: { files: string[]; loc: number },
@@ -121,7 +120,7 @@ export const mutationDenyReason = (
 };
 
 // L1 (soft checkpoint reminder): time-based, non-blocking.
-// Once `intervalMs` has elapsed since Baby's last accepted decision,
+// Once `intervalMs` has elapsed since the executor's last accepted decision,
 // returns the elapsed whole minutes when due, else undefined.
 // Deliberately NOT throttled — repetition is the point (G10).
 export const checkpointNudgeDue = (
@@ -139,9 +138,9 @@ export const checkpointNudgeDue = (
   return Math.round(elapsed / 60_000);
 };
 
-// G10 (NOTICE): the checkpoint cadence reborn as a SHOUT on the
-// ALLOW path. Returns the notice string when due, else undefined.
-// The driver appends this to Baby's per-mutation results.
+// G10 (NOTICE): non-blocking checkpoint reminder on the ALLOW path.
+// Returns the notice string when due, else undefined.
+// The driver appends this to executor per-mutation results.
 export const checkpointNudgeNotice = (state: GateState, nowMs: number): string | undefined => {
   if (!state.firstEditApproved || !state.lastAcceptedDecisionAt) {
     return undefined;
@@ -155,11 +154,9 @@ export const checkpointNudgeNotice = (state: GateState, nowMs: number): string |
   return `MERIDIAN GATE NOTICE: ~${minutes} min since your last planner check-in. You are NOT blocked — this is a reminder, keep working with full tool access. If your direction could use Daddy's eyes, call ask_planner; otherwise carry on and call submit_report once the packet is complete.`;
 };
 
-// NON-BLOCKING VOLUME reminder (G10). The work-interval cadence
-// reborn as a shout on a COUNT axis. Pure: takes delta precomputed
-// by the caller (not readDiffStats). Tool-call axis checked first;
-// then if isMutationCall, files/LoC delta. Same wording as
-// volumeCheckpointReason for cross-file consistency.
+// NON-BLOCKING VOLUME reminder (G10). Pure: takes delta precomputed by the caller
+// (not readDiffStats). Tool-call axis checked first; then if isMutationCall,
+// files/LoC delta. Same wording as volumeCheckpointReason for cross-file consistency.
 export const volumeNoticeReason = (
   state: GateState,
   toolCallCount: number,

@@ -112,6 +112,8 @@ export const journal = (
 // ---------------------------------------------------------------------------
 
 export const buildHandoffInject = (handoffJson: string | undefined): string => {
-  if (!handoffJson) return "";
+  if (!handoffJson) {
+    return "";
+  }
   return `Predecessor handoff available: ${handoffJson.slice(0, 2000)}. Call verify_handoff once you have read the packet and the handoff, before starting new work.`;
 };

@@ -1,7 +1,6 @@
-// Pure logic for the Meridian v2 gate plugin. Lives in a separate file so the
-// plugin file itself exports ONLY the default plugin factory (CONTRACT G7,
-// v1 scar X3). This file runs inside OpenCode's runtime, not under the driver's
-// tsconfig — keep it dependency-free.
+// Pure logic for the Lathe gate plugin. Lives in a separate file so the plugin
+// file itself exports ONLY the default plugin factory. This file runs inside
+// OpenCode's runtime, not under the driver's tsconfig — keep it dependency-free.
 //
 // The plugin enforces; the driver decides (D1/D3). Everything here reads
 // driver-written state and computes cheap synchronous checks. Nothing here
@@ -156,7 +155,7 @@ export const editTargetOutOfSurface = (
   // gate is gone.
   if (relative.startsWith("/")) return raw
   // File-surface gate removed: in-worktree edits are no longer restricted to
-  // expectedGlobs. Baby may touch any file the work needs; surface drift is
+  // expectedGlobs. The executor may touch any file the work needs; surface drift is
   // caught after the fact in Daddy's final review, not blocked here.
   return undefined
 }
@@ -164,8 +163,8 @@ export const editTargetOutOfSurface = (
 // Deny reason for a mutation attempt, or undefined. Trigger order is CONTRACT G5.
 //
 // Checkpoint CADENCE removed (work-interval, time-interval): a periodic forced
-// checkpoint denied Baby's edits mid-turn and — post async-consult, where a
-// forced ask_planner ENDS the turn — cancelled Baby's turn on every trip, so a
+// checkpoint denied executor edits mid-turn and — post async-consult, where a
+// forced ask_planner ENDS the turn — cancelled the turn on every trip, so a
 // finished run could never chain verify→submit before the next interval cut it
 // off. The gate now denies ONLY what is structurally unsafe (out-of-surface
 // absolute writes) or explicitly latched (first-edit approval, reconciliation,
@@ -188,12 +187,10 @@ export const mutationDenyReason = (
   return undefined
 }
 
-// NON-BLOCKING per-call checkpoint reminder (§10) — the heir of the throwing
-// cadence, on the ALLOW path. The mutation runs; this notice is APPENDED to its
-// result (never thrown) once Baby has gone `checkpointNudgeMs` past its last
+// NON-BLOCKING per-call checkpoint reminder (§10), on the ALLOW path. The mutation runs; this notice is APPENDED to its
+// result (never thrown) once the executor has gone `checkpointNudgeMs` past its last
 // planner check-in, and rides EVERY subsequent mutation result until it checks
-// in (clearGate moves lastAcceptedDecisionAt forward). Deliberately un-throttled:
-// Baby is an easily-distracted child, so we keep the reminder in front of it.
+// in (clearGate moves lastAcceptedDecisionAt forward). Deliberately un-throttled.
 // Returns the notice when due, else undefined.
 export const checkpointNudgeNotice = (state: GateStateFile, nowMs: number): string | undefined => {
   if (!state.firstEditApproved || !state.lastAcceptedDecisionAt) return undefined
@@ -204,9 +201,8 @@ export const checkpointNudgeNotice = (state: GateStateFile, nowMs: number): stri
   return `MERIDIAN GATE NOTICE: ~${minutes} min since your last planner check-in. You are NOT blocked — this is a reminder, keep working with full tool access. If your direction could use Daddy's eyes, call ask_planner; otherwise carry on and call submit_report once the packet is complete.`
 }
 
-// Diff snapshot for the volume reminder's files/LoC axis. Restored from the old
-// work-interval gate (proven). Only called on mutation results — reads can't move
-// the diff — so it never runs git on the hot read path.
+// Diff snapshot for the volume reminder's files/LoC axis. Only called on mutation
+// results; reads can't move the diff, so it never runs git on the hot read path.
 type DiffStats = Record<string, { added: number; removed: number }>
 
 export const readDiffStats = (worktree: string): DiffStats => {
@@ -255,16 +251,15 @@ const diffSince = (baseline: DiffStats, current: DiffStats): { files: number; lo
   return { files, loc }
 }
 
-// NON-BLOCKING VOLUME reminder (§10) — the work-interval cadence reborn as a shout
-// on a COUNT axis. Returns the reason string (wrapped by denyMessage and APPENDED,
-// never thrown) once Baby has done too much work since its last planner check-in:
-// `checkpointToolCalls` tool calls (any tool — the read-heavy spiral the time/diff
-// axes miss), or `checkpointFiles`/`checkpointLoc` of diff. The tool-call axis is
+// NON-BLOCKING VOLUME reminder (§10) on a count axis. Returns the reason string
+// (wrapped by denyMessage and APPENDED, never thrown) once the executor has done too much work since its last planner check-in:
+// `checkpointToolCalls` tool calls (any tool), or `checkpointFiles`/`checkpointLoc`
+// of diff. The tool-call axis is
 // the in-memory tally the plugin keeps; files/LoC are only checked on a mutation
 // (a read can't move the diff), keeping git off the read hot path. The reminder
-// rides EVERY subsequent tool result until Baby checks in (the plugin resets the
+// rides EVERY subsequent tool result until the executor checks in (the plugin resets the
 // tally when the driver records a newer accepted decision). Returns undefined when
-// not due. Same wording as `volumeCheckpointReason` so Baby and the journal agree.
+// not due. Same wording as `volumeCheckpointReason` so the executor and journal agree.
 export const volumeNoticeReason = (
   state: GateStateFile,
   toolCallCount: number,

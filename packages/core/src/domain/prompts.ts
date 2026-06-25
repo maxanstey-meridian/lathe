@@ -1,18 +1,19 @@
 // The driver prompt inventory (CONTRACT §15). Every prompt the driver can
 // inject, by name. No ad-hoc prompts exist anywhere else.
 //
-// This is the single consolidated render module — ARCHITECTURE.v3.md:146-148.
-// Pure functions over durable-state snapshots. No file I/O.
+// This is the single consolidated render module. Pure functions over durable-state
+// snapshots. No file I/O.
 
+import type { Finding } from "./convergence.js";
 import type { OutcomeLedger, Checkpoint } from "./outcomes.js";
 import { redactPacketInfra } from "./packet.js";
-import type { Packet } from "./packet.js";
+import type { OutcomeDef, Packet } from "./packet.js";
 import type { SubmitReport } from "./report.js";
 import type { PlannerResponse, QuestionType } from "./review.js";
 import type { ReviewState, Decision } from "./run.js";
 
 // ---------------------------------------------------------------------------
-// BRIDGE_CONTRACT (reference prompts.ts:7-38)
+// BRIDGE_CONTRACT
 // ---------------------------------------------------------------------------
 
 const BRIDGE_CONTRACT = `## Your tools and routes
@@ -49,7 +50,7 @@ Tooling:
 - Run things through bash from the project root; it is your cwd.`;
 
 // ---------------------------------------------------------------------------
-// Private helpers (reference prompts.ts:40-64)
+// Private helpers
 // ---------------------------------------------------------------------------
 
 const renderOutcomes = (ledger: OutcomeLedger): string =>
@@ -93,7 +94,7 @@ const renderRecentDecisions = (decisions: Decision[], n: number): string => {
 };
 
 // ---------------------------------------------------------------------------
-// Q-table functions (reference prompts.ts:66-326)
+// Q-table functions
 // ---------------------------------------------------------------------------
 
 // Q1 — initial seed (B1)
@@ -124,7 +125,6 @@ export const q2RotationSeed = (
   checkpoint: Checkpoint,
   review: ReviewState,
   decisions: Decision[],
-  diffStat: string,
 ): string => {
   const done = ledger.outcomes.filter((o) => o.status === "done");
   const inProgress = ledger.outcomes.filter((o) => o.status === "in_progress");
@@ -177,22 +177,13 @@ ${renderObligations(review)}
 
 ${renderRecentDecisions(decisions, 6)}
 
-## Your work so far (diff against base — INCLUDES commits from earlier attempts)
-
-This is the cumulative diff of everything done on this run, committed and
-uncommitted. Earlier attempts' work is committed (it will NOT show in a plain
-git diff with no args — compare against the project's starting state to see it). "(clean)" here
-means genuinely nothing has been done yet, not that your prior work is missing.
-
-${diffStat || "(clean)"}
-
 ## The handoff packet
 
 ${redactPacketInfra(packet.raw)}
 
 ## Continue
 
-Continue with the in-progress outcome's next action. A "done" marker is the predecessor's claim, not proof: before you build on a done outcome, spot-check it against the diff, and if the claim doesn't hold, reopen it with meridian-bridge_update_outcomes rather than assuming it is finished. The point is not to blindly re-do work — it is to not blindly trust it either.`;
+Continue with the in-progress outcome's next action. A "done" marker is the predecessor's claim, not proof: before you build on a done outcome, spot-check it against the actual files in your worktree, and if the claim doesn't hold, reopen it with meridian-bridge_update_outcomes rather than assuming it is finished. The point is not to blindly re-do work — it is to not blindly trust it either.`;
 };
 
 // Q3 — neutral continuation (L5; v1 X8 carried: every exit named, none privileged)
@@ -248,15 +239,14 @@ export const q8ReconciliationSeed = (
   ledger: OutcomeLedger,
   review: ReviewState,
   decisions: Decision[],
-  diffStat: string,
-): string => `You are Baby: the Meridian executor, resuming a run whose previous session ended WITHOUT a valid checkpoint. No valid checkpoint exists; the diff, the decision ledger, and the outcome file below are ground truth; the previous session's intentions are unknown.
+): string => `You are Baby: the Meridian executor, resuming a run whose previous session ended WITHOUT a valid checkpoint. No valid checkpoint exists; the current state of your worktree, the decision ledger, and the outcome file below are ground truth; the previous session's intentions are unknown.
 
 Your first task is RECONCILIATION, not implementation:
 
-1. Read the current diff (git diff HEAD, git status) in the project root.
-2. Compare it against the outcome ledger and the packet's expected change surface.
-3. Form a reconstruction: which outcomes does the diff actually advance? Is anything half-finished or inconsistent?
-4. Call meridian-bridge_ask_planner with questionType "reconciliation", your reconstruction as the question, and the diff/ledger facts as evidence.
+1. Inspect the current state of the files in your worktree (your cwd).
+2. Compare them against the outcome ledger and the packet's expected change surface.
+3. Form a reconstruction: which outcomes the current code actually advances. Is anything half-finished or inconsistent?
+4. Call meridian-bridge_ask_planner with questionType "reconciliation", your reconstruction as the question, and the worktree/ledger facts as evidence.
 
 Edits are blocked until Daddy accepts your reconstruction. Reads are available.
 
@@ -274,20 +264,11 @@ ${renderObligations(review)}
 
 ${renderRecentDecisions(decisions, 6)}
 
-## Your work so far (diff against base — INCLUDES commits from earlier attempts)
-
-This is the cumulative diff of everything done on this run, committed and
-uncommitted. Earlier attempts' work is committed (it will NOT show in a plain
-git diff with no args — compare against the project's starting state to see it). "(clean)" here
-means genuinely nothing has been done yet, not that your prior work is missing.
-
-${diffStat || "(clean)"}
-
 ## The handoff packet
 
 ${redactPacketInfra(packet.raw)}`;
 
-// Qreorient — reorient seed (hallucination recovery). The predecessor session derailed
+// Reorient — reorient seed (hallucination recovery). The predecessor session derailed
 // (confabulated files/paths/projects, lost the thread) but Daddy worked out the
 // fix; this fresh session is handed it directly. Same durable-state rehydration
 // as the reconciliation seed (no valid checkpoint from a derailed Baby), with the
@@ -299,9 +280,8 @@ export const qReorientSeed = (
   ledger: OutcomeLedger,
   review: ReviewState,
   decisions: Decision[],
-  diffStat: string,
   planner: PlannerResponse,
-): string => `You are Baby: the Meridian executor, TAKING OVER from an earlier session that DERAILED. That session was working on this run and went off the rails — it began acting on things that do not exist (inventing files, paths, or projects) and lost the thread. You do not share its memory. Treat nothing from its final turns as real; the diff, the decision ledger, and the outcome file below are ground truth.
+): string => `You are Baby: the Meridian executor, TAKING OVER from an earlier session that DERAILED. That session was working on this run and went off the rails — it began acting on things that do not exist (inventing files, paths, or projects) and lost the thread. You do not share its memory. Treat nothing from its final turns as real; the current state of your worktree, the decision ledger, and the outcome file below are ground truth.
 
 You were brought in to fix one specific problem, and Daddy (the planner) has already worked out the fix. Do not re-derive it, do not second-guess it — apply it directly:
 
@@ -325,23 +305,12 @@ ${renderObligations(review)}
 
 ${renderRecentDecisions(decisions, 6)}
 
-## Your work so far (diff against base — INCLUDES commits from earlier attempts)
-
-This is the cumulative diff of everything done on this run, committed and
-uncommitted. Earlier attempts' work is committed (it will NOT show in a plain
-git diff with no args — compare against the project's starting state to see it). "(clean)" here
-means genuinely nothing has been done yet, not that your prior work is missing.
-
-${diffStat || "(clean)"}
-
 ## The handoff packet
 
 ${redactPacketInfra(packet.raw)}`;
 
-// Periodic NON-BLOCKING checkpoint reminder (§10). The cadence that used to
-// THROW `MERIDIAN GATE BLOCKED: …checkpoint interval reached` (and end Baby's
-// turn) is reborn here as a shout: Baby keeps full tool access and is free to
-// ignore it. No "BLOCKED" — that word would be a lie now.
+// Periodic NON-BLOCKING checkpoint reminder (§10). This preserves full tool access;
+// avoid "BLOCKED" wording because no gate is latched.
 export const softCheckpointNudge = (minutes: number): string =>
   `Meridian driver: it has been ~${minutes} min since your last planner check-in. You are NOT blocked — continue with full tool access. If you'd value Daddy's eyes on your direction, call meridian-bridge_ask_planner; otherwise carry on and call meridian-bridge_submit_report once the packet is complete. Prose reaches no one; act through tools.`;
 
@@ -351,8 +320,7 @@ export const ladderNudge = (count: number): string =>
 
 // Qp — planner decision delivery. The driver runs the meridian-bridge_ask_planner consult off
 // the MCP request path and delivers Daddy's verdict here, on the turn AFTER the
-// one Baby asked in. The payload mirrors what meridian-bridge_ask_planner used to return inline
-// (the { planner } object), so Baby reads the same shape it already knows.
+// one Baby asked in. The payload mirrors the former inline { planner } shape.
 export const qPlannerDecision = (
   planner: PlannerResponse,
 ): string => `Meridian driver: the planner (Daddy) answered the question you submitted.
@@ -377,7 +345,7 @@ Detail: ${detail}
 Do not improvise an answer. Call meridian-bridge_ask_planner once more; if it fails again, call meridian-bridge_submit_report with status blocked, blockedReason stop_condition, and this error in blockedQuestion.`;
 
 // ---------------------------------------------------------------------------
-// Daddy seed + planner question (reference planner.ts:10-138)
+// Daddy seed + planner question
 // ---------------------------------------------------------------------------
 
 // Mechanical facts the bridge injects into every question — the executor
@@ -520,7 +488,7 @@ Return ONLY JSON. No markdown fences, no prose outside JSON.
 };
 
 // ---------------------------------------------------------------------------
-// Super-daddy review prompt (reference super-review.ts:46-209)
+// Super-daddy review prompt
 // ---------------------------------------------------------------------------
 
 // SuperReviewInput — the structured input for renderSuperReview
@@ -528,7 +496,6 @@ export type SuperReviewInput = {
   packet: Packet; // the ORIGINAL packet — the intent super-daddy anchors to
   worktree: string; // the run's worktree — super-daddy's session cwd, so its bash
   // can run verification and `git diff HEAD` (the prompt promises "cwd is the worktree")
-  diff: string; // run branch vs base (committed WIP included)
   reportText: string; // the run's report.md, as supplementary context (not trusted)
   skillText: string; // Max's meridian skill — injected verbatim as the rubric
   pass: number; // which convergence pass produced this run
@@ -554,7 +521,7 @@ const reviewBody = (input: SuperReviewInput): string => {
     fm.constraints.length > 0 ? fm.constraints.map((c) => `- ${c}`).join("\n") : "- (none)";
 
   return `## The rubric — Max's house doctrine (this IS your grading criteria)
-Grade the diff against this. Its architecture rules (data-transforms, port
+Grade the change against this. Its architecture rules (data-transforms, port
 boundaries, real-DB integration tests, fake naming, TOCTOU/unique-index data
 safety) are what "meets doctrine" means; its "suppress noise" list is the
 DEFINITION of a nit — cite which rule fires when you downgrade something.
@@ -575,9 +542,6 @@ ${verificationLines}
 
 ## Delivered work — the run's own report (supplementary; verify against the tree)
 ${input.reportText}
-
-## Diff (run branch vs base; convenience — inspect the real tree yourself)
-${input.diff}
 
 ## The grounding rule — ground every finding in evidence
 Every finding must carry its evidence so the repair pass (and Max) can act without
@@ -645,7 +609,7 @@ Return ONLY JSON. No markdown fences, no prose outside the JSON.
 ## The commit message (accept only)
 On accept ONLY, author commit_message — it REPLACES the driver's throwaway WIP
 line on the run's single commit, so write it as the permanent history entry for
-this change. Base it on the diff you just read, not the report's wording:
+this change. Base it on the tree you inspected, not the report's wording:
 - subject: a conventional-commit line (\`feat:\`, \`fix:\`, \`refactor:\` …),
   imperative mood, no trailing period, ≤72 chars.
 - body: a short prose paragraph (or a few bullet lines) covering WHAT changed and
@@ -692,13 +656,12 @@ ${MUST_EXECUTE}
 ${reviewBody(input)}`;
 
 // ---------------------------------------------------------------------------
-// Final review — Daddy's acceptance check (reference final-review.ts:11-77)
+// Final review — Daddy's acceptance check
 // ---------------------------------------------------------------------------
 
 // renderFinalReview — Daddy's one non-mechanical acceptance check
 export const renderFinalReview = (
   packet: Packet,
-  reviewableDiff: string,
   ledger: OutcomeLedger,
   report: SubmitReport,
 ): string => {
@@ -722,8 +685,7 @@ classified. Do not re-litigate those. Your job is the one thing the machine
 cannot check: does this diff actually DELIVER each outcome, and is it sane?
 
 You have full read-only access to this worktree (your cwd): \`git diff HEAD\`,
-\`git log\`, rg, ast-grep, read. USE IT. The diff below is a possibly-truncated
-convenience — do not trust it over the real tree. Inspect the files the outcomes
+\`git log\`, rg, ast-grep, read. USE IT to inspect the files the outcomes
 touch; grep for anything that smells wrong.
 
 For EACH outcome, decide whether the diff delivers it and CITE where (file:line
@@ -742,9 +704,6 @@ ${verificationLines}
 
 ## Files changed (classified by the executor)
 ${filesLines}
-
-## Reviewable diff (convenience; inspect the real tree yourself)
-${reviewableDiff}
 
 ## Response shape
 
@@ -765,4 +724,105 @@ Return ONLY JSON. No markdown fences, no prose outside JSON.
   Max can make (product, UX, security, permission, tenancy, data retention,
   billing, legal, compliance, migration policy, scope beyond the packet). Put
   the exact decision in human_decision_needed.`;
+};
+
+// ---------------------------------------------------------------------------
+// Follow-up packet authoring (CONTRACT §18 — request_changes → repair pass)
+// ---------------------------------------------------------------------------
+
+// AuthorFollowupInput — the structured input for renderFollowupAuthoring. The
+// authoring turn runs in the SAME super-daddy session that just reviewed the run
+// (cwd = worktree), so the diff and the findings are already in context; this
+// payload restates them so the author grounds the packet on them.
+export type AuthorFollowupInput = {
+  worktree: string; // the run's worktree — super-daddy's session cwd, so it can
+  // inspect the tree to pick the follow-up's expected_surface accurately.
+  packetSkillText: string; // Max's packet-authoring skill — injected verbatim as the spec.
+  blockers: Finding[]; // the findings from this run's review that the packet must fix.
+  priorOutcomes: OutcomeDef[]; // delivered + converged outcomes — sealed regressions.
+  pass: number; // the NEW pass number (parent pass + 1) — for the author's urgency only.
+  campaignId: string; // session-scoping key (informational; the engine stamps it).
+  priorProblems?: string[]; // admission problems from a prior attempt, fed back to fix.
+};
+
+const renderBlockerLines = (blockers: Finding[]): string =>
+  blockers
+    .map((b) => {
+      const lines = [`- [${b.severity}] ${b.title}`];
+      if (b.grounding.kind !== "none" && b.grounding.ref.trim().length > 0) {
+        lines.push(`  - grounding (${b.grounding.kind}): ${b.grounding.ref}`);
+      }
+      for (const e of b.evidence) {
+        lines.push(`  - ${e}`);
+      }
+      return lines.join("\n");
+    })
+    .join("\n");
+
+// renderFollowupAuthoring — super-daddy authors the repair packet. This is a
+// planner authoring a handoff packet (the packet skill IS the spec), done by the
+// bigger, final-authority author. Two adaptations for the convergence context:
+// it emits the packet markdown as its reply (the engine admits + validates it,
+// rather than it writing a file and running `lathe queue add`), and it omits all
+// lineage/infra (the engine stamps repo/base/campaign_id/parent_run_id/pass
+// and seals regression_outcomes — the same fields the skill says never
+// to author).
+export const renderFollowupAuthoring = (input: AuthorFollowupInput): string => {
+  const priorProblemsBlock =
+    input.priorProblems && input.priorProblems.length > 0
+      ? `## Your previous attempt was REJECTED at admission
+
+${input.priorProblems.map((p) => `- ${p}`).join("\n")}
+
+Fix exactly these and re-emit the FULL packet (frontmatter + body). Do not apologise or explain — just the corrected packet.
+
+`
+      : "";
+
+  const sealedBlock =
+    input.priorOutcomes.length > 0
+      ? `## Already delivered — sealed, do NOT touch
+These outcomes were delivered and converged by earlier passes; their files are
+sealed. Integrate against them; do NOT modify, re-implement, or re-test them. The
+engine seals them as regression_outcomes for you — you do not author that field.
+
+${input.priorOutcomes.map((o) => `- ${o.id}: ${o.description}`).join("\n")}
+`
+      : "";
+
+  return `AUTHOR A FOLLOW-UP PACKET — you just reviewed this run (your cwd is its
+worktree) and returned request_changes. Now author the handoff packet a fresh
+executor will run to fix the blockers you raised. You are the author and the final
+authority: write it exactly as a planner authors any packet, picking the change
+surface, outcomes, and verification yourself from the code in front of you. This is
+not a constrained patch of the prior packet — it is a fresh packet whose job is to
+close the gaps you found.
+
+${priorProblemsBlock}## The authoring spec — Max's packet skill (follow it)
+This is the exact skill the planner uses to author packets. Follow its frontmatter
+discipline and body sections. TWO adaptations for this convergence context:
+  1. You are NOT writing a file or running \`lathe queue add\` — reply with the
+     packet markdown itself (a YAML frontmatter block, then the body). The engine
+     admits and validates it; if it fails admission you get the problems back to fix.
+  2. Do NOT author lineage/infra: omit \`repo\`, \`base\`, \`campaign_id\`,
+      \`parent_run_id\`, \`pass\`, and \`regression_outcomes\`. The engine
+     stamps every one of them. Author ONLY: \`summary\`, \`outcomes\`,
+     \`expected_surface\`, \`suspicious_surface\` (if any), \`verification\`,
+     \`constraints\` (if any), and the prose body.
+
+<<<PACKET-SKILL
+${input.packetSkillText}
+PACKET-SKILL
+
+## The blockers this packet must fix
+These are the findings from your review. The packet's outcomes must drive a fix for
+each; inspect the worktree to set an accurate \`expected_surface\` for where those
+fixes actually live.
+
+${renderBlockerLines(input.blockers)}
+
+${sealedBlock}
+## Output
+Reply with ONLY the packet — the YAML frontmatter block (\`---\` … \`---\`) followed
+by the markdown body. No prose, no code fences, nothing before or after it.`;
 };

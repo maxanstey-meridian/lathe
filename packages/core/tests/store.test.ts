@@ -1,27 +1,17 @@
 import { equal, strictEqual, ok, match, rejects } from "node:assert";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { mkdtemp, writeFile, mkdir, rm, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import type { Clock } from "../src/application/ports/clock.js";
 import type { Repo } from "../src/application/ports/repo.js";
 import type { ConvergenceLogEntry } from "../src/application/ports/store.js";
 import { makePaths } from "../src/config/paths.js";
-import { Campaign as CampaignSchema } from "../src/domain/campaign.js";
-import { SuperReview, Finding } from "../src/domain/convergence.js";
-import { GateState as GateStateSchema } from "../src/domain/gate.js";
-import { JournalEvent as JournalEventSchema } from "../src/domain/journal.js";
-import { OutcomeLedger as OutcomeLedgerSchema } from "../src/domain/outcomes.js";
-import { Checkpoint as CheckpointSchema } from "../src/domain/outcomes.js";
 import type { Packet } from "../src/domain/packet.js";
-import { RunMeta as RunMetaSchema } from "../src/domain/run.js";
-import { ReviewState as ReviewStateSchema } from "../src/domain/run.js";
-import { Decision as DecisionSchema } from "../src/domain/run.js";
-import { ActiveRun as ActiveRunSchema } from "../src/domain/run.js";
-import { StoreAdapter } from "../src/infrastructure/store.js";
 import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
+import { StoreAdapter } from "../src/infrastructure/store.js";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -59,14 +49,14 @@ const fakeRepo = (opts?: {
     removeSandbox: () => {
       throw new Error("unimplemented");
     },
-    headBranch: (w: string) => {
+    headBranch: (_w: string) => {
       headBranchCallCount++;
       if (opts?.headBranchThrows) {
         throw new Error("not a repo");
       }
       return opts?.headBranch ?? "main";
     },
-    branchExists: (w: string, b: string) => opts?.branchExists ?? true,
+    branchExists: (_w: string, _b: string) => opts?.branchExists ?? true,
     repoValid: () => opts?.repoValid ?? true,
     isCloneSandbox: () => false,
     mergeAccept: () => {
@@ -129,15 +119,6 @@ const makeValidConvergenceEntry = (
     ...overrides,
   };
 };
-
-const makeValidSuperReview = () => ({
-  verdict: "accept" as const,
-  findings: [],
-  convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
-  commit_message: null,
-  notes: "",
-  human_decision_needed: null,
-});
 
 const cleanTemp = async (dir: string) => {
   try {
@@ -425,12 +406,7 @@ test("store: convergence round-trip", async () => {
 test("store: convergence rejects bad schema", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-conv-bad"));
   const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
-  // decision with unknown action field should fail the local schema
-  const badEntry = makeValidConvergenceEntry({
-    decision: { action: "author" as any, blockers: [] },
-  });
-  // Actually, "author" IS a valid action in the union schema — test with a missing required field instead
-  // Override primary to a non-object (string) which will fail the SuperReview schema
+  // Override primary to a non-object (string) which will fail the SuperReview schema.
   const reallyBad = makeValidConvergenceEntry({ primary: "not-a-review" as any });
   await rejects(async () => store.appendConvergence("20260101-000000-test", reallyBad), {
     message: /refusing to append/,

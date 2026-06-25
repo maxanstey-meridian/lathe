@@ -46,6 +46,9 @@ const TERMINAL_STATUSES = ["ready_for_review", "blocked", "failed", "accepted"];
 type LineStyle = "think" | "text" | "tool";
 type PaneLine = { text: string; style: LineStyle };
 type PaneState = { lines: PaneLine[]; current: string; currentStyle: LineStyle; lastAt: number };
+// Which pane a live session feeds: baby (executor), daddy (planner), or super
+// (the convergence reviewer — super-daddy).
+type Speaker = "baby" | "daddy" | "super";
 
 const emptyPane = (): PaneState => ({ lines: [], current: "", currentStyle: "text", lastAt: 0 });
 
@@ -141,6 +144,7 @@ const TailApp = ({ store, budget, subscribe, runId, daddyDirectory }: TailUiDeps
   const { exit } = useApp();
   const [baby, setBaby] = useState<PaneState>(emptyPane());
   const [daddy, setDaddy] = useState<PaneState>(emptyPane());
+  const [superPane, setSuperPane] = useState<PaneState>(emptyPane());
   const [events, setEvents] = useState<string[]>([]);
   const [now, setNow] = useState(Date.now());
   const [stats, setStats] = useState({
@@ -194,6 +198,15 @@ const TailApp = ({ store, budget, subscribe, runId, daddyDirectory }: TailUiDeps
               charsThisTurn.current = 0;
               setStats((s) => ({ ...s, ctx: 0, rotations: s.rotations + 1 }));
             }
+            // Super-daddy's verdict: push a prominent line (+ findings) into the
+            // super pane so the outcome is visible right where its work streamed,
+            // not just in the shared driver-event strip (which can scroll off).
+            if (e.event === "super_review") {
+              setSuperPane((p) => pushToolLine(p, `🛡 verdict: ${e.verdict} (pass ${e.pass})`));
+              for (const f of e.findings) {
+                setSuperPane((p) => pushToolLine(p, `  ${f}`));
+              }
+            }
           }
         }
       }
@@ -217,7 +230,7 @@ const TailApp = ({ store, budget, subscribe, runId, daddyDirectory }: TailUiDeps
     if (!worktree) {
       return;
     }
-    const speakerFor = (sessionID: string): "baby" | "daddy" | undefined => {
+    const speakerFor = (sessionID: string): Speaker | undefined => {
       const active = store.readActiveRun();
       if (active?.runId === runId && sessionID === active.babySessionId) {
         return "baby";
@@ -226,13 +239,26 @@ const TailApp = ({ store, budget, subscribe, runId, daddyDirectory }: TailUiDeps
       if (m?.daddySessionId === sessionID) {
         return "daddy";
       }
+      // Super-daddy's session is rooted in the worktree (same feed as baby), so
+      // routing is by sessionID against meta.reviewerSessionId — written by
+      // converge-run the moment the reviewer binds its session.
+      if (m?.reviewerSessionId === sessionID) {
+        return "super";
+      }
       if (m?.babySessionId === sessionID) {
         return "baby";
       }
       return undefined;
     };
-    const apply = (speaker: "baby" | "daddy", fn: (p: PaneState) => PaneState) =>
-      speaker === "baby" ? setBaby(fn) : setDaddy(fn);
+    const apply = (speaker: Speaker, fn: (p: PaneState) => PaneState) => {
+      if (speaker === "baby") {
+        setBaby(fn);
+      } else if (speaker === "daddy") {
+        setDaddy(fn);
+      } else {
+        setSuperPane(fn);
+      }
+    };
 
     const onEvent = (event: OpencodeEvent) => {
       const props = event.properties;
@@ -300,12 +326,12 @@ const TailApp = ({ store, budget, subscribe, runId, daddyDirectory }: TailUiDeps
     };
 
     // opencode's /event feed is directory-scoped by EXACT match: the worktree feed
-    // carries only baby's session, the paths.root feed only daddy's planner session.
+    // carries every session rooted in the worktree — baby AND super-daddy (the
+    // convergence reviewer is scoped to the worktree so it can run git diff/test
+    // itself) — while the paths.root feed carries only daddy's planner session.
     // An ancestor directory does NOT see child sessions, so neither feed covers the
-    // other — we subscribe to both and let speakerFor route each event by sessionID.
-    // The two feeds never overlap, so there is no double-delivery. (An earlier
-    // single-feed attempt on the ancestor left baby's pane dead. The "doubling" that
-    // prompted it was the full-screen render bug below, not duplicate events.)
+    // other — we subscribe to both and let speakerFor route each event by sessionID
+    // (baby/daddy/super). The two feeds never overlap, so there is no double-delivery.
     const subBaby = subscribe(worktree, onEvent);
     const subDaddy = subscribe(daddyDirectory, onEvent);
     return () => {
@@ -317,8 +343,11 @@ const TailApp = ({ store, budget, subscribe, runId, daddyDirectory }: TailUiDeps
   const rows = process.stdout.rows ?? 35;
   const columns = process.stdout.columns ?? 80;
   const frameWidth = Math.max(20, columns - 1);
-  const leftPaneWidth = Math.floor(frameWidth / 2);
-  const rightPaneWidth = frameWidth - leftPaneWidth;
+  // Three panes (baby | daddy | super). Even thirds with the remainder widening
+  // the last; on a narrow terminal each is still usable for tool/command lines.
+  const babyWidth = Math.floor(frameWidth / 3);
+  const daddyWidth = Math.floor((frameWidth - babyWidth) / 2);
+  const superWidth = frameWidth - babyWidth - daddyWidth;
   const paneHeight = Math.max(8, rows - 9);
   const ctxEstimate = stats.ctx + Math.round(charsThisTurn.current / 4);
   const fraction = Math.min(1, budget > 0 ? ctxEstimate / budget : 0);
@@ -329,8 +358,15 @@ const TailApp = ({ store, budget, subscribe, runId, daddyDirectory }: TailUiDeps
   return (
     <Box flexDirection="column" width={frameWidth} overflow="hidden">
       <Box width={frameWidth} overflow="hidden">
-        <Pane title="baby" pane={baby} height={paneHeight} width={leftPaneWidth} accent="green" />
-        <Pane title="daddy" pane={daddy} height={paneHeight} width={rightPaneWidth} accent="magenta" />
+        <Pane title="baby" pane={baby} height={paneHeight} width={babyWidth} accent="green" />
+        <Pane title="daddy" pane={daddy} height={paneHeight} width={daddyWidth} accent="magenta" />
+        <Pane
+          title="super-daddy"
+          pane={superPane}
+          height={paneHeight}
+          width={superWidth}
+          accent="blue"
+        />
       </Box>
       <Box
         flexDirection="column"

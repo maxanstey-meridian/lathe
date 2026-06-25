@@ -27,9 +27,8 @@ const git = (cwd: string, args: string[]): string => {
 // keeps its `.git` as a FILE pointing back to <repo>/.git/worktrees/<name>, whose
 // commondir resolves to <repo>/.git — so opencode's glob/grep/LSP compute the
 // project root as <repo> and Daddy/super-daddy review the SOURCE tree, not the
-// run's work (proven live in the serve log). A clone owns a real `.git` directory,
-// so the project root resolves to the sandbox itself and the escape is structurally
-// impossible. `--local` (the default for a local source) hardlinks objects — cheap,
+// run's work. A clone owns a real `.git` directory, so the project root resolves
+// to the sandbox itself and the escape is structurally impossible. `--local` (the default for a local source) hardlinks objects — cheap,
 // and with no alternates dependency on the source's object store (unlike --shared,
 // which a source-repo GC could corrupt mid-run). `--branch <base>` creates a LOCAL
 // branch named <base> inside the clone, so every later `git diff <base>` resolves.
@@ -213,7 +212,7 @@ export const readDiffStats = (
 // contents of new untracked text files (the same node_modules/binary exclusions
 // readDiffStats uses), capped so a large run can't blow Daddy's context. A
 // truncation marker tells him to inspect the real tree (he has read-only repo
-// tools); the cap is a floor on visibility, not the source of truth.
+// tools); the cap is only a context bound.
 export const reviewableDiff = (worktree: string, maxBytes: number): string => {
   const sections: string[] = [];
   try {

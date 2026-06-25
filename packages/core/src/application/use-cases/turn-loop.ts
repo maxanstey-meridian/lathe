@@ -11,7 +11,6 @@
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-
 import { babyContextBudget } from "../../config/config.js";
 import type { Config } from "../../config/schemas.js";
 import { extractText, extractReasoning, gateDeniedPart } from "../../domain/agent-response.js";
@@ -43,6 +42,7 @@ import type { SubmitReport } from "../../domain/report.js";
 import { ACCEPTED_STATUSES } from "../../domain/review.js";
 import type { FinalReview } from "../../domain/review.js";
 import { evaluateTurn } from "../../domain/turn.js";
+import type { ModelConfig } from "../ports/executor.js";
 import { rotateSession } from "./rotation.js";
 import {
   journal,
@@ -53,7 +53,6 @@ import {
   type TurnLoopResult,
   type Seed,
 } from "./run-runtime.js";
-import type { ModelConfig } from "../ports/executor.js";
 
 // ---------------------------------------------------------------------------
 // Turn facts assembly: message text, reasoning, tool calls, context tokens.
@@ -184,17 +183,16 @@ const reseedFromCheckpoint = (
   const ledger = ports.store.readLedger(runId);
   const review = ports.store.readReviewState(runId);
   const decisions = ports.store.readDecisions(runId);
-  const diff = ports.repo.diffStat(worktree, packet.frontmatter.base);
   const checkpoint = ports.store.latestCheckpoint(runId);
 
   let seedText: string;
   let seedName: string;
   if (checkpoint) {
     seedName = "Q2";
-    seedText = q2RotationSeed(packet, ledger, checkpoint, review, decisions, diff);
+    seedText = q2RotationSeed(packet, ledger, checkpoint, review, decisions);
   } else {
     seedName = "Q8";
-    seedText = q8ReconciliationSeed(packet, ledger, review, decisions, diff);
+    seedText = q8ReconciliationSeed(packet, ledger, review, decisions);
   }
 
   // Handoff inject: if the predecessor wrote handoff.json, prepend a system
@@ -221,20 +219,19 @@ const reseedFromCheckpoint = (
 };
 
 // ---------------------------------------------------------------------------
-// resolveBabyModel — pure helper for the promoted round model swap
+// Model helpers — baby's normal model and the promoteTo fallback.
 
-export const resolveBabyModel = (config: Config, promoted: boolean): ModelConfig =>
-  promoted
-    ? {
-        providerId: config.daddy.providerId,
-        modelId: config.daddy.modelId,
-        agent: config.baby.agent,
-      }
-    : {
-        providerId: config.baby.providerId,
-        modelId: config.baby.modelId,
-        agent: config.baby.agent,
-      };
+export const babyModelConfig = (config: Config): ModelConfig => ({
+  providerId: config.baby.providerId,
+  modelId: config.baby.modelId,
+  agent: config.baby.agent,
+});
+
+export const promotedModelConfig = (config: Config): ModelConfig => ({
+  providerId: config.baby.promoteTo.providerId,
+  modelId: config.baby.promoteTo.modelId,
+  agent: config.baby.agent,
+});
 
 // ---------------------------------------------------------------------------
 // turnLoop — run one attempt to a terminal outcome.
@@ -255,7 +252,8 @@ export const turnLoop = async (
 ): Promise<TurnLoopResult> => {
   const { config, store, repo, executor, planner, clock } = ports;
   const runId = packet.runId;
-  const babyModel = resolveBabyModel(config, packet.frontmatter.promoted);
+  let babyModel = babyModelConfig(config);
+  let promoted = false;
   const contextBudget = babyContextBudget(config);
 
   let next = seed;
@@ -335,12 +333,12 @@ export const turnLoop = async (
         });
       }
       sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, false);
-       const { seed: reseed, hasCheckpoint, handoffInjected } = reseedFromCheckpoint(ports, packet, worktree);
-       next = reseed;
-       if (handoffInjected) {
-         channel.awaitingVerification = true;
-       }
-       continue;
+      const { seed: reseed, handoffInjected } = reseedFromCheckpoint(ports, packet, worktree);
+      next = reseed;
+      if (handoffInjected) {
+        channel.awaitingVerification = true;
+      }
+      continue;
     }
 
     // --- gather --------------------------------------------------------------
@@ -513,14 +511,7 @@ export const turnLoop = async (
           const decisions = store.readDecisions(runId);
           next = {
             name: "Q9",
-            text: qReorientSeed(
-              packet,
-              ledger,
-              review,
-              decisions,
-              repo.diffStat(worktree, packet.frontmatter.base),
-              plannerResponse,
-            ),
+            text: qReorientSeed(packet, ledger, review, decisions, plannerResponse),
           };
           continue;
         }
@@ -548,10 +539,9 @@ export const turnLoop = async (
           continue;
         }
         const ledger = store.readLedger(runId);
-        const diff = repo.reviewableDiff(worktree, config.superdaddy.diffCapBytes);
         let review: FinalReview;
         try {
-          review = await planner.finalReview(packet, diff, ledger, report);
+          review = await planner.finalReview(packet, ledger, report);
         } catch (err) {
           const detail = err instanceof Error ? err.message : String(err);
           review = {
@@ -592,6 +582,38 @@ export const turnLoop = async (
           const problems = review.findings.map((f) => `final review: ${f}`);
           journal(ports, runId, turn, { event: "report_rejected", problems });
           if (channel.reportRejectionCount >= config.thresholds.reportRejectionParkAt) {
+            // Promotion: daddy rejected baby's report reportRejectionParkAt times.
+            // Swap to the promoteTo model (a bigger inference engine under baby's
+            // harness) and give baby one more set of retries. Ephemeral — the next
+            // run starts fresh on baby's normal model. Only fires once per run.
+            if (!promoted && config.thresholds.promoteAtCap) {
+              promoted = true;
+              babyModel = promotedModelConfig(config);
+              channel.reportRejectionCount = 0;
+              journal(ports, runId, turn, {
+                event: "model_promoted",
+                from: `${config.baby.providerId}/${config.baby.modelId}`,
+                to: `${config.baby.promoteTo.providerId}/${config.baby.promoteTo.modelId}`,
+              });
+              const {
+                seed: reseed,
+                hasCheckpoint,
+                handoffInjected,
+              } = reseedFromCheckpoint(ports, packet, worktree);
+              sessionId = await rotateSession(
+                ports,
+                packet,
+                worktree,
+                sessionId,
+                turn,
+                hasCheckpoint,
+              );
+              next = reseed;
+              if (handoffInjected) {
+                channel.awaitingVerification = true;
+              }
+              continue;
+            }
             return finish({
               status: "failed",
               note: `report rejected ${channel.reportRejectionCount} times; last problems: ${problems.join("; ")}`,
@@ -622,7 +644,11 @@ export const turnLoop = async (
             contextTokens: obs.contextTokens,
           });
         }
-        const { seed: reseed, hasCheckpoint, handoffInjected } = reseedFromCheckpoint(ports, packet, worktree);
+        const {
+          seed: reseed,
+          hasCheckpoint,
+          handoffInjected,
+        } = reseedFromCheckpoint(ports, packet, worktree);
         sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, hasCheckpoint);
         next = reseed;
         if (handoffInjected) {
@@ -645,7 +671,11 @@ export const turnLoop = async (
           phase: "context_overflow",
           contextTokens: priorContextTokens,
         });
-        const { seed: reseed, hasCheckpoint, handoffInjected } = reseedFromCheckpoint(ports, packet, worktree);
+        const {
+          seed: reseed,
+          hasCheckpoint,
+          handoffInjected,
+        } = reseedFromCheckpoint(ports, packet, worktree);
         sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, hasCheckpoint);
         next = reseed;
         if (handoffInjected) {
@@ -692,9 +722,8 @@ export const turnLoop = async (
 
       case "continue": {
         ladder = 0;
-        // Volume reminder VISIBILITY (§10): the plugin already shouts the same
-        // message per tool call; journal a visible event when work crosses the
-        // interval so Max sees it in the tail.
+        // Volume reminder visibility (§10): journal a visible event when work
+        // crosses the interval so it appears in the tail.
         const volumeReason = volumeCheckpointReason(
           toolCallsSinceDecision,
           diffDelta(gate.baselineDiffStats, repo.readDiffStats(worktree)),

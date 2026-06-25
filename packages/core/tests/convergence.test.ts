@@ -1,31 +1,21 @@
 import assert from "node:assert/strict";
-import { execSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
-import { readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 import { upsertPass } from "../src/domain/campaign.js";
 import { parseStaged, convergedTip, decidePromotion } from "../src/domain/chain.js";
 import {
   decideConvergence,
   parseSuperReview,
-  renderFollowupPacket,
+  extractAuthoredPacket,
+  stampFollowupLineage,
   assembleCommitMessage,
   renderNits,
 } from "../src/domain/convergence.js";
-import { parsePacketShape, type AdmissionResult } from "../src/domain/packet.js";
+import { parsePacketShape } from "../src/domain/packet.js";
 import {
   parseFinalReview,
   parsePlannerResponse,
   tryParseFinalReview,
 } from "../src/domain/review.js";
-
-const parsePacket = (path: string): AdmissionResult => {
-  const raw = readFileSync(path, "utf-8");
-  const runId = path.split("/").pop()?.replace(/\.md$/, "");
-  return parsePacketShape(raw, runId);
-};
 
 // --- helpers ---
 
@@ -46,79 +36,56 @@ const review = (verdict, findings, human = null) => ({
   human_decision_needed: human,
 });
 
-// --- decideConvergence: all 6 branches ---
+// --- decideConvergence: all branches ---
 
 test("decideConvergence: request_changes hands EVERY finding to the pass, regardless of severity/grounding", () => {
   const nitsOnly = review("request_changes", [
     finding("a", "P2", "none"),
     finding("b", "P3", "none"),
   ]);
-  const d = decideConvergence(nitsOnly, true, 1, 3, false);
+  const d = decideConvergence(nitsOnly, true, 1, 3);
   assert.equal(d.action, "author");
   assert.equal(d.blockers.length, 2);
 });
 
 test("decideConvergence: request_changes with NO findings → escalate (wants changes, named none)", () => {
-  const empty = decideConvergence(review("request_changes", []), true, 1, 3, false);
+  const empty = decideConvergence(review("request_changes", []), true, 1, 3);
   assert.equal(empty.action, "escalate");
 });
 
 test("decideConvergence: stop only on accept + green (the ONLY stop path)", () => {
-  assert.equal(decideConvergence(review("accept", []), true, 1, 3, false).action, "stop");
+  assert.equal(decideConvergence(review("accept", []), true, 1, 3).action, "stop");
 });
 
 test("decideConvergence: accept + verification RED → escalate (under-reported)", () => {
-  const red = decideConvergence(review("accept", []), false, 1, 3, false);
+  const red = decideConvergence(review("accept", []), false, 1, 3);
   assert.equal(red.action, "escalate");
   assert.ok(red.reason.includes("under-reported"));
 });
 
 test("decideConvergence: blockers author until the cap, then escalate", () => {
   const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
-  const d1 = decideConvergence(blocked, true, 1, 3, false);
+  const d1 = decideConvergence(blocked, true, 1, 3);
   assert.equal(d1.action, "author");
   assert.equal(d1.blockers.length, 1);
-  const capped = decideConvergence(blocked, true, 3, 3, false);
+  const capped = decideConvergence(blocked, true, 3, 3);
   assert.equal(capped.action, "escalate");
   assert.ok(capped.reason.includes("cap"));
 });
 
 test("decideConvergence: explicit escalate / human_decision_needed always wins", () => {
-  assert.equal(decideConvergence(review("escalate", []), true, 1, 3, false).action, "escalate");
+  assert.equal(decideConvergence(review("escalate", []), true, 1, 3).action, "escalate");
   assert.equal(
-    decideConvergence(review("accept", [], "needs a call"), true, 1, 3, false).action,
+    decideConvergence(review("accept", [], "needs a call"), true, 1, 3).action,
     "escalate",
   );
 });
 
-// --- decideConvergence: promotion ---
-
-test("decideConvergence: cap reached with promotionEnabled=true → author with promote=true", () => {
+test("decideConvergence: pass > maxPasses → escalate", () => {
   const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
-  const d = decideConvergence(blocked, true, 3, 3, true);
-  assert.equal(d.action, "author");
-  assert.equal(d.promote, true);
-  assert.equal(d.blockers.length, 1);
-});
-
-test("decideConvergence: cap reached with promotionEnabled=false → escalate", () => {
-  const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
-  const d = decideConvergence(blocked, true, 3, 3, false);
-  assert.equal(d.action, "escalate");
-});
-
-test("decideConvergence: promoted round still fails (pass > maxPasses) → escalate", () => {
-  const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
-  const d = decideConvergence(blocked, true, 4, 3, true);
+  const d = decideConvergence(blocked, true, 4, 3);
   assert.equal(d.action, "escalate");
   assert.ok(d.reason.includes("cap"));
-});
-
-test("decideConvergence: passes left + promotionEnabled=true → author with promote falsy", () => {
-  const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
-  const d = decideConvergence(blocked, true, 1, 3, true);
-  assert.equal(d.action, "author");
-  assert.equal(d.promote, undefined);
 });
 
 // --- parseSuperReview: valid, fenced, garbage, scar ---
@@ -263,270 +230,118 @@ Here is my verdict:
   assert.equal(r.constraints[0], "copyBoard must deep-copy");
 });
 
-// --- renderFollowupPacket: round-trip through admission ---
+// --- extractAuthoredPacket: strip narration + fences ---
 
-test("renderFollowupPacket: produces a packet parsePacket accepts, with lineage + regression", () => {
-  const dir = mkdtempSync(join(tmpdir(), "plumb-converge-"));
-  try {
-    const repo = join(dir, "repo");
-    mkdirSync(repo);
-    execSync("git init -q -b main && git commit -q --allow-empty -m init", {
-      cwd: repo,
-      shell: "/bin/zsh",
-    });
-    execSync("git branch meridian/parent", { cwd: repo, shell: "/bin/zsh" });
-
-    const original = {
-      runId: "20260614-100000-feature",
-      frontmatter: {
-        repo,
-        base: "main",
-        outcomes: [{ id: "feature", description: "the feature" }],
-        expected_surface: ["src/**"],
-        suspicious_surface: [],
-        verification: [{ command: "true" }],
-        constraints: ["keep it clean"],
-        pass: 1,
-        regression_outcomes: [],
-      },
-      body: "original",
-      raw: "",
-    };
-
-    const out = renderFollowupPacket({
-      original,
-      parentRunId: "20260614-100000-feature",
-      campaignId: "feature",
-      pass: 2,
-      blockers: [
-        {
-          id: "fix-typecheck",
-          severity: "P0",
-          title: "ui typecheck fails",
-          evidence: ["use-x.ts:29"],
-          grounding: { kind: "command_fail", ref: "pnpm check" },
-          suggested_outcome_id: "ui-typecheck-passes",
-        },
-      ],
-      priorOutcomes: [{ id: "feature", description: "the feature" }],
-      baseBranch: "meridian/parent",
-      timestamp: "20260614-180000",
-      slug: "feature-followup",
-      promote: false,
-    });
-
-    assert.equal(out.runId, "20260614-180000-feature-followup");
-
-    const file = join(dir, out.filename);
-    writeFileSync(file, out.content);
-    const parsed = parsePacket(file);
-    assert.ok(
-      parsed.ok,
-      "rendered packet must pass admission: " + (parsed.ok ? "" : parsed.problems.join("; ")),
-    );
-    assert.equal(parsed.packet.frontmatter.base, "meridian/parent");
-    assert.equal(parsed.packet.frontmatter.summary, "convergence pass 2 — ui typecheck fails");
-    assert.equal(parsed.packet.frontmatter.campaign_id, "feature");
-    assert.equal(parsed.packet.frontmatter.parent_run_id, "20260614-100000-feature");
-    assert.equal(parsed.packet.frontmatter.pass, 2);
-    assert.equal(parsed.packet.frontmatter.outcomes[0].id, "ui-typecheck-passes");
-    assert.equal(parsed.packet.frontmatter.regression_outcomes[0].id, "feature");
-    assert.ok(parsed.packet.frontmatter.verification.some((v) => v.command === "pnpm check"));
-    assert.ok(parsed.packet.frontmatter.constraints.some((c) => c.includes("must STILL pass")));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("extractAuthoredPacket: slices from the first frontmatter delimiter, dropping narration", () => {
+  const reply = "Let me inspect the tree.\n\nHere is the packet:\n\n---\nrepo: x\n---\n\n# body\n";
+  const out = extractAuthoredPacket(reply);
+  assert.ok(out.startsWith("---\n"));
+  assert.ok(out.includes("# body"));
 });
 
-test("renderFollowupPacket: a repaired outcome is never also a regression guard", () => {
-  const dir = mkdtempSync(join(tmpdir(), "plumb-converge-"));
-  try {
-    const repo = join(dir, "repo");
-    mkdirSync(repo);
-    execSync("git init -q -b main && git commit -q --allow-empty -m init", {
-      cwd: repo,
-      shell: "/bin/zsh",
-    });
-    execSync("git branch work", { cwd: repo, shell: "/bin/zsh" });
-
-    const out = renderFollowupPacket({
-      original: {
-        runId: "20260101-000000-add",
-        frontmatter: {
-          repo,
-          base: "main",
-          outcomes: [{ id: "add-returns-sum", description: "add returns the sum" }],
-          expected_surface: ["*.js"],
-          suspicious_surface: [],
-          verification: [{ command: "node test.js" }],
-          constraints: [],
-          pass: 1,
-          regression_outcomes: [],
-        },
-        body: "",
-        raw: "",
-      },
-      parentRunId: "20260101-000000-add",
-      campaignId: "20260101-000000-add",
-      pass: 2,
-      blockers: [
-        finding("add-bug", "P1", "command_fail", { suggested_outcome_id: "add-returns-sum" }),
-      ],
-      priorOutcomes: [{ id: "add-returns-sum", description: "add returns the sum" }],
-      baseBranch: "work",
-      timestamp: "20260102-000000",
-      slug: "add-fix2",
-      promote: false,
-    });
-
-    const file = join(dir, out.filename);
-    writeFileSync(file, out.content);
-    const parsed = parsePacket(file);
-    assert.ok(parsed.ok, "packet must admit: " + (parsed.ok ? "" : parsed.problems.join("; ")));
-    const outIds = new Set(parsed.packet.frontmatter.outcomes.map((o) => o.id));
-    const regIds = new Set(parsed.packet.frontmatter.regression_outcomes.map((o) => o.id));
-    assert.ok(outIds.has("add-returns-sum"));
-    assert.equal(
-      [...outIds].some((id) => regIds.has(id)),
-      false,
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("extractAuthoredPacket: unwraps a trailing code fence", () => {
+  const reply = "```\n---\nrepo: x\n---\n\n# body\n```";
+  const out = extractAuthoredPacket(reply);
+  assert.ok(out.startsWith("---\n"));
+  assert.ok(!out.trimEnd().endsWith("```"));
 });
 
-test("renderFollowupPacket: no blockers → throws", () => {
-  assert.throws(() =>
-    renderFollowupPacket({
-      original: {
-        runId: "20260101-000000-a",
-        frontmatter: {
-          repo: "/tmp/x",
-          base: "main",
-          outcomes: [{ id: "a", description: "a" }],
-          expected_surface: ["src/**"],
-          verification: [{ command: "true" }],
-          constraints: [],
-          pass: 1,
-          regression_outcomes: [],
-        },
-        body: "",
-        raw: "",
-      },
-      parentRunId: "20260101-000000-a",
-      campaignId: "c",
-      pass: 2,
-      blockers: [],
-      priorOutcomes: [],
-      baseBranch: "main",
-      timestamp: "20260102-000000",
-      slug: "a-fix2",
-      promote: false,
+test("extractAuthoredPacket: no frontmatter → trimmed text (parse fails downstream)", () => {
+  assert.equal(extractAuthoredPacket("  no packet here  "), "no packet here");
+});
+
+// --- stampFollowupLineage: authored intent + engine-stamped lineage ---
+
+const AUTHORED = `---
+summary: "fix the typecheck"
+outcomes:
+  - id: fix-typecheck
+    description: "the typecheck passes"
+expected_surface:
+  - "src/a.ts"
+verification:
+  - command: "pnpm check"
+constraints:
+  - "smallest change"
+---
+
+# fix the typecheck
+
+Repair it.
+`;
+
+const LINEAGE = {
+  repo: "/tmp/repo",
+  baseBranch: "meridian/parent",
+  campaignId: "feature",
+  parentRunId: "20260614-100000-feature",
+  pass: 2,
+  priorOutcomes: [{ id: "feature", description: "the feature" }],
+};
+
+test("stampFollowupLineage: stamps lineage over authored intent; the packet admits", () => {
+  const stamped = stampFollowupLineage(AUTHORED, LINEAGE);
+  const parsed = parsePacketShape(stamped, "20260614-180000-feature-fix2");
+  assert.ok(
+    parsed.ok,
+    "stamped packet must admit: " + (parsed.ok ? "" : parsed.problems.join("; ")),
+  );
+  if (!parsed.ok) {
+    return;
+  }
+  const fm = parsed.packet.frontmatter;
+  // Authored intent is preserved verbatim — NOT a copy of any parent packet.
+  assert.equal(fm.summary, "fix the typecheck");
+  assert.equal(fm.outcomes[0].id, "fix-typecheck");
+  assert.deepEqual(fm.expected_surface, ["src/a.ts"]);
+  assert.ok(fm.constraints.includes("smallest change"));
+  assert.ok(parsed.packet.body.includes("Repair it."));
+  // Lineage is stamped by the engine, never authored.
+  assert.equal(fm.repo, "/tmp/repo");
+  assert.equal(fm.base, "meridian/parent");
+  assert.equal(fm.campaign_id, "feature");
+  assert.equal(fm.parent_run_id, "20260614-100000-feature");
+  assert.equal(fm.pass, 2);
+  assert.equal(fm.regression_outcomes[0].id, "feature");
+});
+
+test("stampFollowupLineage: lineage WINS over infra the author wrongly wrote", () => {
+  const polluted = AUTHORED.replace("summary:", "base: attacker-branch\nrepo: /evil\nsummary:");
+  const parsed = parsePacketShape(
+    stampFollowupLineage(polluted, LINEAGE),
+    "20260614-180000-feature-fix2",
+  );
+  assert.ok(parsed.ok);
+  if (!parsed.ok) {
+    return;
+  }
+  assert.equal(parsed.packet.frontmatter.base, "meridian/parent");
+  assert.equal(parsed.packet.frontmatter.repo, "/tmp/repo");
+});
+
+test("stampFollowupLineage: a repaired outcome is never also a regression guard", () => {
+  const parsed = parsePacketShape(
+    stampFollowupLineage(AUTHORED, {
+      ...LINEAGE,
+      priorOutcomes: [
+        { id: "fix-typecheck", description: "collides with the authored outcome" },
+        { id: "other", description: "stays sealed" },
+      ],
     }),
+    "20260614-180000-feature-fix2",
+  );
+  assert.ok(parsed.ok);
+  if (!parsed.ok) {
+    return;
+  }
+  assert.deepEqual(
+    parsed.packet.frontmatter.regression_outcomes.map((o) => o.id),
+    ["other"],
   );
 });
 
-test("renderFollowupPacket: promote=true → frontmatter carries promoted:true, body mentions nothing about promotion", () => {
-  const dir = mkdtempSync(join(tmpdir(), "plumb-converge-promo-"));
-  try {
-    const repo = join(dir, "repo");
-    mkdirSync(repo);
-    execSync("git init -q -b main && git commit -q --allow-empty -m init", {
-      cwd: repo,
-      shell: "/bin/zsh",
-    });
-
-    const out = renderFollowupPacket({
-      original: {
-        runId: "20260101-000000-add",
-        frontmatter: {
-          repo,
-          base: "main",
-          outcomes: [{ id: "add-returns-sum", description: "add returns the sum" }],
-          expected_surface: ["*.js"],
-          suspicious_surface: [],
-          verification: [{ command: "node test.js" }],
-          constraints: [],
-          pass: 3,
-          regression_outcomes: [],
-        },
-        body: "",
-        raw: "",
-      },
-      parentRunId: "20260101-000000-add",
-      campaignId: "20260101-000000-add",
-      pass: 4,
-      blockers: [finding("fix-bug", "P1", "command_fail", { suggested_outcome_id: "fix-bug" })],
-      priorOutcomes: [{ id: "add-returns-sum", description: "add returns the sum" }],
-      baseBranch: "main",
-      timestamp: "20260102-000000",
-      slug: "add-fix4",
-      promote: true,
-    });
-
-    const file = join(dir, out.filename);
-    writeFileSync(file, out.content);
-    const parsed = parsePacket(file);
-    assert.ok(
-      parsed.ok,
-      "promoted packet must admit: " + (parsed.ok ? "" : parsed.problems.join("; ")),
-    );
-    assert.strictEqual(parsed.packet.frontmatter.promoted, true);
-    // Body must not mention promotion (the secret lives only in frontmatter).
-    // The body already contains "Super-daddy" as an existing role name — that's fine.
-    const bodyText = out.content.slice(out.content.indexOf("\n---\n") + 5);
-    assert.ok(!bodyText.toLowerCase().includes("promot"));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("renderFollowupPacket: promote=false → promoted is false in frontmatter", () => {
-  const dir = mkdtempSync(join(tmpdir(), "plumb-converge-nopromo-"));
-  try {
-    const repo = join(dir, "repo");
-    mkdirSync(repo);
-    execSync("git init -q -b main && git commit -q --allow-empty -m init", {
-      cwd: repo,
-      shell: "/bin/zsh",
-    });
-
-    const out = renderFollowupPacket({
-      original: {
-        runId: "20260101-000000-add",
-        frontmatter: {
-          repo,
-          base: "main",
-          outcomes: [{ id: "add-returns-sum", description: "add returns the sum" }],
-          expected_surface: ["*.js"],
-          suspicious_surface: [],
-          verification: [{ command: "node test.js" }],
-          constraints: [],
-          pass: 1,
-          regression_outcomes: [],
-        },
-        body: "",
-        raw: "",
-      },
-      parentRunId: "20260101-000000-add",
-      campaignId: "20260101-000000-add",
-      pass: 2,
-      blockers: [finding("fix-bug", "P1", "command_fail", { suggested_outcome_id: "fix-bug" })],
-      priorOutcomes: [],
-      baseBranch: "main",
-      timestamp: "20260102-000000",
-      slug: "add-fix2",
-      promote: false,
-    });
-
-    const file = join(dir, out.filename);
-    writeFileSync(file, out.content);
-    const parsed = parsePacket(file);
-    assert.ok(parsed.ok);
-    assert.strictEqual(parsed.packet.frontmatter.promoted, false);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("stampFollowupLineage: a reply with no frontmatter throws (authoring failure)", () => {
+  assert.throws(() => stampFollowupLineage("I could not write a packet.", LINEAGE));
 });
 
 // --- upsertPass: first pass, append, replace ---

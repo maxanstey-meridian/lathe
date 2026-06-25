@@ -19,10 +19,9 @@ export const GateState = z.object({
   // interval as the driver's per-turn nudge. Optional so gate-state written before
   // this field still validates on resume (the plugin falls back to 20 min).
   checkpointNudgeMs: z.number().int().optional(),
-  // Volume-based checkpoint reminder (§10) — the work-interval cadence reborn as a
-  // non-blocking SHOUT. The plugin reads these and appends the SAME message a block
-  // would show (without throwing) once Baby has done this much work since its last
-  // planner check-in: `checkpointToolCalls` tool calls (any tool, reads included),
+  // Volume-based checkpoint reminder (§10). The plugin reads these and appends the
+  // same message a block would show (without throwing) once the executor has done
+  // this much work since its last planner check-in: `checkpointToolCalls` tool calls (any tool, reads included),
   // or `checkpointFiles`/`checkpointLoc` of diff. Optional → gate-state from before
   // these fields still validates (plugin falls back to no volume reminder).
   checkpointToolCalls: z.number().int().optional(),

@@ -10,13 +10,11 @@
 
 import {
   readFileSync,
-  writeFileSync,
   renameSync,
   mkdirSync,
   existsSync,
   readdirSync,
   statSync,
-  appendFileSync,
   unlinkSync,
 } from "node:fs";
 import { join, dirname, basename } from "node:path";
@@ -26,7 +24,6 @@ import { z } from "zod";
 import type { Clock } from "../application/ports/clock.js";
 import type { Repo } from "../application/ports/repo.js";
 import type { Store, QueueEntry, ConvergenceLogEntry } from "../application/ports/store.js";
-import type { VerificationResult } from "../application/ports/verify.js";
 import type { Paths } from "../config/paths.js";
 import { Campaign as CampaignSchema } from "../domain/campaign.js";
 import { parseStaged } from "../domain/chain.js";
@@ -123,7 +120,6 @@ const ConvergenceLogEntrySchema = z.union([
 
 // ---------------------------------------------------------------------------
 // Archive helper — collision-safe with numeric suffix and .problems.txt sidecar
-// (reference/src/queue.ts:19-27).
 
 const archivePacket = (paths: Paths, packetPath: string, problems?: string[]): string => {
   mkdirSync(paths.rejectedDir, { recursive: true });
@@ -577,8 +573,12 @@ export class StoreAdapter implements Store {
     }
     // Sort by timestamp, assign seq
     events.sort((a, b) => a.at.localeCompare(b.at));
-    events.forEach((e, i) => { e.seq = i; });
-    return events.filter((e) => e.seq > seq).map((e) => ({ seq: e.seq, runId: e.runId, event: e.event }));
+    events.forEach((e, i) => {
+      e.seq = i;
+    });
+    return events
+      .filter((e) => e.seq > seq)
+      .map((e) => ({ seq: e.seq, runId: e.runId, event: e.event }));
   }
 
   // ---------------------------------------------------------------------------

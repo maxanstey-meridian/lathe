@@ -475,7 +475,7 @@ test("runLoop: drain queue before waiting", () => {
     };
 
     let waitForWorkCalled = false;
-    const waitForWork: WaitForWorkCallback = async (signal) => {
+    const waitForWork: WaitForWorkCallback = async () => {
       waitForWorkCalled = true;
     };
 

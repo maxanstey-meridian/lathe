@@ -9,7 +9,11 @@ import type { Planner } from "../src/application/ports/planner.js";
 import type { Repo } from "../src/application/ports/repo.js";
 import type { Store } from "../src/application/ports/store.js";
 import type { RunPorts, RunChannel } from "../src/application/use-cases/run-runtime.js";
-import { turnLoop, resolveBabyModel } from "../src/application/use-cases/turn-loop.js";
+import {
+  turnLoop,
+  babyModelConfig,
+  promotedModelConfig,
+} from "../src/application/use-cases/turn-loop.js";
 import { makePaths } from "../src/config/paths.js";
 import { Config } from "../src/config/schemas.js";
 import type { MessagePart } from "../src/domain/agent-response.js";
@@ -310,6 +314,121 @@ test("turnLoop: final review request_changes → re-prompt Q7, then accept", () 
     equal(calls, 2);
     const journal = store.readJournal(RUN_ID);
     ok(journal.some((e) => e.event === "report_rejected"));
+    await cleanTemp(tmp);
+  })();
+});
+
+// ---------------------------------------------------------------------------
+// model promotion: 3 final-review rejections → swap to promoteTo model, rotate,
+// re-seed, then succeed on the bigger model.
+
+test("turnLoop: 3 final-review rejections → model_promoted → accept on promoted model", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-promo-"));
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+
+    const channel = emptyChannel();
+    const report = aSubmitReport();
+    let reviewCalls = 0;
+    const modelsUsed: string[] = [];
+    const planner = fakePlanner({
+      finalReview: async () => {
+        reviewCalls += 1;
+        return reviewCalls <= 3
+          ? {
+              verdict: "request_changes",
+              findings: ["add a test"],
+              notes: "",
+              human_decision_needed: null,
+            }
+          : ACCEPT_REVIEW;
+      },
+    });
+    const executor: Executor = {
+      createSession: async () => "baby-promoted",
+      sendMessage: async (_sid, _text, model) => {
+        modelsUsed.push(`${model.providerId}/${model.modelId}`);
+        channel.pendingFinalReview = report;
+        channel.intents.push({ kind: "final-review-requested" });
+        return { info: { id: `m${modelsUsed.length}`, sessionID: _sid, tokens: {} }, parts: [] };
+      },
+      listMessages: async () => [],
+      deleteSession: async () => {},
+    };
+    const ports = makePorts(store, fakeRepo(), executor, planner);
+
+    const result = await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    equal(result.outcome.status, "ready_for_review");
+    equal(reviewCalls, 4);
+    // The promotion journal event was emitted.
+    const journal = store.readJournal(RUN_ID);
+    const promoEvent = journal.find((e) => e.event === "model_promoted");
+    ok(promoEvent, "model_promoted journal event must be emitted");
+    if (promoEvent?.event === "model_promoted") {
+      equal(promoEvent.from, "omlx/Qwen3.6-35B-A3B-UD-MLX-4bit");
+      equal(promoEvent.to, "zai-coding-plan/glm-5.1");
+    }
+    // The first 3 sends used baby's model; after promotion (rotation + reseed),
+    // the 4th send used the promoted model.
+    equal(modelsUsed[0], "omlx/Qwen3.6-35B-A3B-UD-MLX-4bit");
+    equal(modelsUsed[modelsUsed.length - 1], "zai-coding-plan/glm-5.1");
+    await cleanTemp(tmp);
+  })();
+});
+
+test("turnLoop: promoted model also rejected → run fails (no double promotion)", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-promo-fail-"));
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+
+    const channel = emptyChannel();
+    const report = aSubmitReport();
+    const reject: FinalReview = {
+      verdict: "request_changes",
+      findings: ["still wrong"],
+      notes: "",
+      human_decision_needed: null,
+    };
+    const planner = fakePlanner({ finalReview: async () => reject });
+    const executor: Executor = {
+      createSession: async () => "baby-promoted",
+      sendMessage: async () => {
+        channel.pendingFinalReview = report;
+        channel.intents.push({ kind: "final-review-requested" });
+        return { info: { id: "m", sessionID: "s", tokens: {} }, parts: [] };
+      },
+      listMessages: async () => [],
+      deleteSession: async () => {},
+    };
+    const ports = makePorts(store, fakeRepo(), executor, planner);
+
+    const result = await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    // 3 rejections on baby model → promote → 3 more rejections on promoted model → fail.
+    equal(result.outcome.status, "failed");
+    const journal = store.readJournal(RUN_ID);
+    ok(journal.some((e) => e.event === "model_promoted"));
     await cleanTemp(tmp);
   })();
 });
@@ -937,19 +1056,19 @@ test("turnLoop: rotationPending with no checkpoint → re_demand_teardown Q5, la
 });
 
 // ---------------------------------------------------------------------------
-// resolveBabyModel — pure helper
+// model helpers — pure
 
-test("resolveBabyModel: promoted=false returns baby provider/model/agent", () => {
+test("babyModelConfig: returns baby provider/model/agent", () => {
   const config = Config.parse({});
-  const model = resolveBabyModel(config, false);
+  const model = babyModelConfig(config);
   equal(model.providerId, "omlx");
   equal(model.modelId, "Qwen3.6-35B-A3B-UD-MLX-4bit");
   equal(model.agent, "baby");
 });
 
-test("resolveBabyModel: promoted=true returns daddy provider/model with baby agent", () => {
+test("promotedModelConfig: returns promoteTo provider/model with baby agent", () => {
   const config = Config.parse({});
-  const model = resolveBabyModel(config, true);
+  const model = promotedModelConfig(config);
   equal(model.providerId, "zai-coding-plan");
   equal(model.modelId, "glm-5.1");
   equal(model.agent, "baby");

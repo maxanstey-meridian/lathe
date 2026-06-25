@@ -9,24 +9,23 @@
 // ---------------------------------------------------------------------------
 
 import type { Executor, ModelConfig } from "../../application/ports/executor.js";
+import { extractText } from "../../domain/agent-response.js";
 import type { HandoffArtifact, VerifyVerdict } from "../../domain/handoff.js";
 import { parseVerifyVerdict } from "../../domain/handoff.js";
-import { extractText } from "../../domain/agent-response.js";
 
 // ---------------------------------------------------------------------------
 // buildVerifyPrompt — pure function, no I/O
 // ---------------------------------------------------------------------------
 
 // Build the prompt for daddy's verify mode. Daddy reads baby's claimed
-// completions, the git diff stat for the declared surface, and file samples
-// for each step, then responds with ONLY a VerifyVerdict JSON block.
+// completions and the file samples for the declared surface, then responds with
+// ONLY a VerifyVerdict JSON block.
 //
 // The prompt is intentionally compact — it targets only the declared surface,
 // no full convergence, no report. Daddy reads as much as it needs to give a
 // confident verdict (do not cap or truncate daddy's context).
 export const buildVerifyPrompt = (
   handoff: HandoffArtifact,
-  diff: string,
   fileSamples: Record<string, string>,
   questions: string[],
 ): string => {
@@ -45,25 +44,18 @@ ${handoff.completedSteps
 `
       : "";
 
-  const diffsBlock =
-    diff.trim().length > 0
-      ? `## Git diff stat (declared surface only)
-
-${diff}
-
-`
-      : "";
-
   const samplesBlock =
     Object.keys(fileSamples).length > 0
       ? `## File samples (declared surface)
 
 ${Object.entries(fileSamples)
-  .map(([path, content]) => `### ${path}
+  .map(
+    ([path, content]) => `### ${path}
 
 \`\`\`
 ${content}
-\`\`\``)
+\`\`\``,
+  )
   .join("\n\n")}
 
 `
@@ -80,10 +72,10 @@ ${questions.map((q) => `- ${q}`).join("\n")}
 
   return `You are in verify mode. Spot-check baby's handoff artifact and return ONLY a VerifyVerdict JSON block — no reasoning, no prose, no markdown fences, nothing before the opening { or after the closing }.
 
-${stepsBlock}${diffsBlock}${samplesBlock}${questionsBlock}## Your task
+${stepsBlock}${samplesBlock}${questionsBlock}## Your task
 
 1. Read each claimed completion. For each, check that the files listed in completedSteps[*].files exist and contain the work described.
-2. Read the diff stat to confirm the claimed surface was actually changed.
+2. Confirm each file listed in the handoff actually contains the claimed change.
 3. Read file samples to verify the work is structurally sound (types, no obvious errors).
 4. Answer baby's questions if any.
 5. Respond with ONLY a VerifyVerdict JSON block:
@@ -120,21 +112,15 @@ export const runVerify = async (
   verifyTimeoutMs: number,
   worktree: string,
   handoff: HandoffArtifact,
-  diff: string,
   fileSamples: Record<string, string>,
   questions: string[],
 ): Promise<VerifyVerdict> => {
-  const prompt = buildVerifyPrompt(handoff, diff, fileSamples, questions);
+  const prompt = buildVerifyPrompt(handoff, fileSamples, questions);
 
   let sessionId: string | undefined;
   try {
     sessionId = await executor.createSession("meridian-verify", worktree);
-    const response = await executor.sendMessage(
-      sessionId,
-      prompt,
-      verifyModel,
-      verifyTimeoutMs,
-    );
+    const response = await executor.sendMessage(sessionId, prompt, verifyModel, verifyTimeoutMs);
     const raw = extractText(response);
     return parseVerifyVerdict(raw);
   } catch (err) {

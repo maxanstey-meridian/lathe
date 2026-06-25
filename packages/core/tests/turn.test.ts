@@ -546,8 +546,7 @@ test("evaluateTurn: dead-session guard — low tokens, not first turn, no progre
 });
 
 test("evaluateTurn: dead-session guard — fires when ladder > 0 (dead session after no-progress rotation)", () => {
-  // The primary v2 scar: dead session landing after a no-progress rotation has ladder > 0.
-  // The guard must NOT depend on ladder — it fires regardless.
+  // The guard must not depend on ladder.
   const facts = def({
     contextTokens: 10,
     contextTokensFloor: 128,
@@ -627,8 +626,8 @@ test("evaluateTurn: dead-session guard — empty turn after HIGH prior context r
 });
 
 test("evaluateTurn: dead-session guard — empty turn after LOW prior context still parks (dead reseed)", () => {
-  // The v2 scar: the reseed itself never landed, so prior context is low. Rotating
-  // again would just repeat the dead reseed — park.
+  // The reseed itself never landed, so prior context is low. Rotating again would
+  // repeat the dead reseed.
   const facts = def({
     contextTokens: 0,
     contextBudget: 100_000,

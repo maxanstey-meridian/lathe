@@ -50,8 +50,8 @@ export const JournalEvent = z.discriminatedUnion("event", [
   }),
   z.object({ ...base, event: z.literal("gate_latched"), reason: z.string() }),
   z.object({ ...base, event: z.literal("gate_cleared"), decisionAt: z.string() }),
-  // The non-blocking volume reminder crossed its threshold this turn — journaled so
-  // it is VISIBLE in the tail (the plugin's per-call shout to Baby is not). §10.
+  // The non-blocking volume reminder crossed its threshold this turn; journal it
+  // so the tail shows the threshold crossing. §10.
   z.object({
     ...base,
     event: z.literal("checkpoint_volume_nudge"),
@@ -129,6 +129,12 @@ export const JournalEvent = z.discriminatedUnion("event", [
     stallRetries: z.number().int(),
   }),
   z.object({ ...base, event: z.literal("reorient"), attempt: z.number().int(), fix: z.string() }),
+  z.object({
+    ...base,
+    event: z.literal("model_promoted"),
+    from: z.string(),
+    to: z.string(),
+  }),
 ]);
 export type JournalEvent = z.infer<typeof JournalEvent>;
 
@@ -151,7 +157,7 @@ export const renderJournalEvent = (e: JournalEvent): string => {
     case "gate_cleared":
       return `${t} ✓ gate cleared`;
     case "checkpoint_volume_nudge":
-      return `${t} 📣 checkpoint shout: ${e.reason}`;
+      return `${t} 📣 checkpoint reminder: ${e.reason}`;
     case "planner_exchange":
       return `${t} ☎ [${e.status}] Q: ${e.question.slice(0, 120)}\n   A: ${e.answer.slice(0, 160)}${e.constraints.length ? `\n   constraints: ${e.constraints.join(" | ")}` : ""}`;
     case "outcomes_updated":
@@ -184,6 +190,8 @@ export const renderJournalEvent = (e: JournalEvent): string => {
       return `${t} ${e.action === "requeue" ? "↻" : "🅿"} stall ${e.action} (auto-retry ${e.stallRetries})`;
     case "reorient":
       return `${t} 🧭 reorient #${e.attempt} (Baby derailed) → fix: ${e.fix.slice(0, 120)}`;
+    case "model_promoted":
+      return `${t} ⬆ model promoted: ${e.from} → ${e.to}`;
   }
 };
 

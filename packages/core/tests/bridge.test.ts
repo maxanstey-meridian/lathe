@@ -3,14 +3,13 @@
 
 import { execSync } from "child_process";
 import { equal, strictEqual, ok, deepStrictEqual, match, rejects } from "node:assert";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import type { Clock } from "../src/application/ports/clock.js";
 import type { Repo } from "../src/application/ports/repo.js";
 import { makePaths } from "../src/config/paths.js";
-import { OutcomeStatus } from "../src/domain/outcomes.js";
 import type { Packet } from "../src/domain/packet.js";
 import {
   buildMcpServer,
@@ -21,13 +20,6 @@ import {
   handleGetDecisions,
   startBridgeServer,
   listenBridge,
-} from "../src/infrastructure/bridge.js";
-import type {
-  AskPlannerInput,
-  UpdateOutcomesInput,
-  WriteCheckpointInput,
-  SubmitReportInput,
-  GetDecisionsInput,
 } from "../src/infrastructure/bridge.js";
 import { StoreAdapter } from "../src/infrastructure/store.js";
 
@@ -227,8 +219,7 @@ test("ask_planner: records consult-requested intent on valid call", async () => 
     approach: "I'll follow the store.test.ts pattern.",
     evidence: ["tests/store.test.ts"],
   });
-  // pendingConsult is cleared after handling — actually it's NOT cleared,
-  // the driver drains it on the next turn. So it should still be set.
+  // The driver drains pendingConsult on the next turn.
   ok(ref.current.pendingConsult);
   await cleanTemp(tmp);
 });
@@ -725,7 +716,7 @@ const seedWorktreeGit = async (worktree: string, addedFile: string) => {
 };
 
 test("submit_report: pass-2 naming a real changed test file → floor clean", async () => {
-  const { ref, tmp, clock } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
+  const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
   await handleUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
@@ -789,10 +780,7 @@ test("submit_report: named test in COMMITTED work (diff HEAD clean) → floor cl
 });
 
 test("submit_report: pass-2 with non-empty justification and no test → floor clean", async () => {
-  // For this test we need the worktree to have a git repo with some changed
-  // test file (to pass anti-fabrication: no tests to check) and pass >= 2.
-  // Actually, if no tests are named, there's nothing to anti-fabricate-check.
-  // We just need justification to be present.
+  // With no named tests, anti-fabrication only requires a justification.
   const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
   await handleUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
@@ -1066,7 +1054,7 @@ test("get_decisions: gate unchanged for stale accepted decision", async () => {
 // ===========================================================================
 
 test("update_outcomes: ledger persists through store read", async () => {
-  const { ref, tmp, clock } = makeRef();
+  const { ref, tmp } = makeRef();
   await handleUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });

@@ -69,7 +69,7 @@ describe("createPlanner.finalReview", () => {
 
     const planner = createPlanner(mockExecutor, modelConfig, 30000);
     await planner.handshake("seed", "test-dir");
-    const result = await planner.finalReview(minPacket(), "(diff)", minLedger(), minReport());
+    const result = await planner.finalReview(minPacket(), minLedger(), minReport());
 
     assert.equal(sendCount, 2);
     assert.equal(result.verdict, "accept");
@@ -100,7 +100,7 @@ describe("createPlanner.finalReview", () => {
 
     const planner = createPlanner(mockExecutor, modelConfig, 30000);
     await planner.handshake("seed", "test-dir");
-    const result = await planner.finalReview(minPacket(), "(diff)", minLedger(), minReport());
+    const result = await planner.finalReview(minPacket(), minLedger(), minReport());
 
     assert.equal(
       sendCount,
@@ -137,7 +137,7 @@ describe("createPlanner.finalReview", () => {
 
     const planner = createPlanner(mockExecutor, modelConfig, 30000);
     await planner.handshake("seed", "test-dir");
-    const result = await planner.finalReview(minPacket(), "(diff)", minLedger(), minReport());
+    const result = await planner.finalReview(minPacket(), minLedger(), minReport());
 
     assert.equal(sendCount, 3);
     assert.equal(result.verdict, "request_changes");
@@ -161,7 +161,7 @@ describe("createPlanner.finalReview", () => {
 
     const planner = createPlanner(mockExecutor, modelConfig, 30000);
     await planner.handshake("seed", "test-dir");
-    const result = await planner.finalReview(minPacket(), "(diff)", minLedger(), minReport());
+    const result = await planner.finalReview(minPacket(), minLedger(), minReport());
 
     assert.equal(
       sendCount,

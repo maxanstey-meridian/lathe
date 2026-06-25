@@ -96,8 +96,7 @@ const modelOf = (m: { providerId: string; modelId: string; agent: string }): Mod
 // Serve substrate: the single-driver lock + the opencode server, brought up and
 // torn down together. listenBridge IS the lock (binds :bridgePort, throws
 // EADDRINUSE if another driver is live) — R1 demands it resolve before any state
-// mutation, so the opencode spawn lives behind it, exactly as the reference
-// ordered the lifecycle.
+// mutation, so the opencode spawn lives behind it.
 
 type Serve = { httpServer: Server; opencode: ChildProcess };
 
@@ -311,7 +310,7 @@ export const superReviewOnce = async (
   paths: Paths,
   runId: string,
 ): Promise<number> =>
-  withServe(config, paths, async ({ store, repo }) => {
+  withServe(config, paths, async ({ store }) => {
     const meta = store.readMetaIfExists(runId);
     if (!meta) {
       console.error(`run ${runId} not found`);
@@ -336,11 +335,6 @@ export const superReviewOnce = async (
       config.superdaddy.timeoutMs,
       config.superdaddy.transportRetries,
     );
-    const diff = repo.reviewableDiffAgainst(
-      meta.worktree,
-      meta.base,
-      config.superdaddy.diffCapBytes,
-    );
     const reportText = existsSync(paths.reportFile(runId))
       ? readFileSync(paths.reportFile(runId), "utf-8")
       : "";
@@ -350,7 +344,6 @@ export const superReviewOnce = async (
     const outcome = await reviewer.superReview({
       packet: shape.packet,
       worktree: meta.worktree,
-      diff,
       reportText,
       skillText,
       pass: shape.packet.frontmatter.pass,

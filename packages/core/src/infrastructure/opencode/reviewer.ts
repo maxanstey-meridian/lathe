@@ -6,12 +6,16 @@
 // state. A parse failure stays a reviewed escalate (parseSuperReview fails closed).
 
 import type { Executor, ModelConfig } from "../../application/ports/executor.js";
-import type { Reviewer, SuperReviewOutcome } from "../../application/ports/reviewer.js";
+import type {
+  AuthorFollowupOutcome,
+  Reviewer,
+  SuperReviewOutcome,
+} from "../../application/ports/reviewer.js";
 import type { TurnResponse } from "../../domain/agent-response.js";
 import { extractText, messageError } from "../../domain/agent-response.js";
 import { parseSuperReview } from "../../domain/convergence.js";
-import type { SuperReviewInput } from "../../domain/prompts.js";
-import { renderSuperReview } from "../../domain/prompts.js";
+import type { AuthorFollowupInput, SuperReviewInput } from "../../domain/prompts.js";
+import { renderFollowupAuthoring, renderSuperReview } from "../../domain/prompts.js";
 import { classifyReviewerError, describeUnreachable } from "../../domain/reviewer-transport.js";
 
 // ---------------------------------------------------------------------------
@@ -28,7 +32,6 @@ type ReviewHarvest = { text: string; error: string | null };
 // super-daddy runs bash across several steps and the verdict often appears in an
 // earlier step, leaving the final message empty). Falls back to the sendMessage
 // response text if listing fails. Checks for provider errors across all turns.
-// Reference: reference/src/super-review.ts:230-250
 const harvestReview = async (
   executor: Executor,
   sessionId: string,
@@ -66,56 +69,50 @@ export const createReviewer = (
   let reviewerSessionId: string | undefined;
   let currentWorktree: string | undefined;
 
-  const superReview = async (input: SuperReviewInput): Promise<SuperReviewOutcome> => {
-    // The session's cwd is fixed at creation, and super-daddy MUST run verification
-    // and `git diff HEAD` in the run's worktree (renderSuperReview promises "your cwd
-    // is the run's worktree"). Each run/pass has its own worktree, so when it changes
-    // the prior session points at a stale cwd — delete and rebind. This also isolates
-    // context across campaigns: different campaigns never share a worktree.
-    // On the very first call both are undefined — skip deleteSession.
-    if (reviewerSessionId !== undefined && input.worktree !== currentWorktree) {
+  // The session's cwd is fixed at creation, and super-daddy MUST run verification
+  // and `git diff HEAD` in the run's worktree (renderSuperReview promises "your cwd
+  // is the run's worktree"). Each run/pass has its own worktree, so when it changes
+  // the prior session points at a stale cwd — delete and rebind. This also isolates
+  // context across campaigns: different campaigns never share a worktree. The
+  // authoring turn reuses whatever session the review just created (same worktree),
+  // so the diff and findings are still in context. On the very first call both are
+  // undefined — skip deleteSession. Scoped to the worktree, NOT paths.root (not a
+  // git repo — the cwd-escalate bug).
+  const ensureSession = async (worktree: string): Promise<string> => {
+    if (reviewerSessionId !== undefined && worktree !== currentWorktree) {
       try {
         await executor.deleteSession(reviewerSessionId);
       } catch {}
       reviewerSessionId = undefined;
     }
-
-    // Created lazily on first superReview call, or after a worktree rebind. Scoped to
-    // the run's worktree so super-daddy's bash + read tools land inside the change
-    // surface — NOT paths.root, which is not a git repo (the cwd-escalate bug).
     if (!reviewerSessionId) {
-      reviewerSessionId = await executor.createSession("meridian-superdaddy", input.worktree);
-      currentWorktree = input.worktree;
+      reviewerSessionId = await executor.createSession("meridian-superdaddy", worktree);
+      currentWorktree = worktree;
     }
+    return reviewerSessionId;
+  };
 
-    const prompt = renderSuperReview(input);
-
-    // A transport drop is NOT a verdict — it must be retried, never recorded as
-    // a pass. Classify each failure: TRANSIENT (socket hang up, 5xx, reset) →
-    // retry up to maxTransportRetries; FATAL (auth, 400) → stop immediately.
-    // Either way the call resolves to an `unreachable` outcome the use case can
-    // treat as retryable; we never forge an escalate SuperReview here. A parse
-    // failure is different — parseSuperReview fails closed to an escalate VERDICT
-    // (a real reviewed outcome), so it stays on the reviewed branch below.
+  // One turn against the super-daddy session, with the transport-drop retry policy
+  // shared by review and authoring. A drop is NOT a result — it must be retried,
+  // never recorded. Classify each failure: TRANSIENT (socket hang up, 5xx, reset) →
+  // retry up to maxTransportRetries; FATAL (auth, 400) → stop immediately. Resolves
+  // to the harvested text, or `unreachable` with the last detail; never throws.
+  type TurnOutcome = { kind: "text"; raw: string } | { kind: "unreachable"; detail: string };
+  const runTurn = async (sessionId: string, prompt: string): Promise<TurnOutcome> => {
     let lastDetail = "unknown error";
     for (let attempt = 0; ; attempt++) {
       let detail: string;
       try {
-        const response = await executor.sendMessage(
-          reviewerSessionId,
-          prompt,
-          superdaddyModel,
-          timeoutMs,
-        );
-        const { text: raw, error } = await harvestReview(executor, reviewerSessionId, response);
+        const response = await executor.sendMessage(sessionId, prompt, superdaddyModel, timeoutMs);
+        const { text: raw, error } = await harvestReview(executor, sessionId, response);
 
         // A provider/transport failure returns HTTP 200 with the failure on the
-        // turn's `error` and no text — not the model returning a bad verdict.
+        // turn's `error` and no text — not the model returning a bad reply.
         // Surface the real reason ("APIError (HTTP 503): …") for classification.
         if (error) {
           detail = error;
         } else {
-          return { kind: "reviewed", review: parseSuperReview(raw), raw };
+          return { kind: "text", raw };
         }
       } catch (err) {
         // A timeout or dead socket rejects out of sendMessage to here.
@@ -130,14 +127,53 @@ export const createReviewer = (
       }
       break;
     }
-
-    // Retries exhausted (or a fatal error) — unreachable, NOT escalate.
-    return {
-      kind: "unreachable",
-      detail: describeUnreachable(lastDetail),
-      raw: `«reviewer unreachable»: ${lastDetail}`,
-    };
+    return { kind: "unreachable", detail: lastDetail };
   };
 
-  return { superReview };
+  const superReview = async (
+    input: SuperReviewInput,
+    onSessionBound?: (sessionId: string) => void,
+  ): Promise<SuperReviewOutcome> => {
+    const sessionId = await ensureSession(input.worktree);
+    // Surface the bound session BEFORE the turn so the caller (converge-run) can
+    // record it in run meta — `lathe tail` then routes super-daddy's live tool
+    // calls to its pane during the review, not after.
+    onSessionBound?.(sessionId);
+    const turn = await runTurn(sessionId, renderSuperReview(input));
+
+    // Retries exhausted (or a fatal error) — unreachable, NOT escalate. A parse
+    // failure is different — parseSuperReview fails closed to an escalate VERDICT
+    // (a real reviewed outcome), so it stays on the reviewed branch.
+    if (turn.kind === "unreachable") {
+      return {
+        kind: "unreachable",
+        detail: describeUnreachable(turn.detail),
+        raw: `«reviewer unreachable»: ${turn.detail}`,
+      };
+    }
+    return { kind: "reviewed", review: parseSuperReview(turn.raw), raw: turn.raw };
+  };
+
+  // The authoring turn — runs in the SAME session that just reviewed, so the diff
+  // and the findings are in context. We do not parse here: the use case stamps the
+  // lineage and validates on admission, re-asking (priorProblems) or escalating if
+  // it does not parse. Returns the raw authored markdown, or unreachable.
+  const authorFollowup = async (
+    input: AuthorFollowupInput,
+    onSessionBound?: (sessionId: string) => void,
+  ): Promise<AuthorFollowupOutcome> => {
+    const sessionId = await ensureSession(input.worktree);
+    onSessionBound?.(sessionId);
+    const turn = await runTurn(sessionId, renderFollowupAuthoring(input));
+    if (turn.kind === "unreachable") {
+      return {
+        kind: "unreachable",
+        detail: describeUnreachable(turn.detail),
+        raw: `«author unreachable»: ${turn.detail}`,
+      };
+    }
+    return { kind: "authored", content: turn.raw, raw: turn.raw };
+  };
+
+  return { superReview, authorFollowup };
 };

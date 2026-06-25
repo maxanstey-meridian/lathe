@@ -1,14 +1,6 @@
-import { equal, strictEqual, ok, match, deepStrictEqual } from "node:assert";
+import { equal, strictEqual, ok, match } from "node:assert";
 import { execSync } from "node:child_process";
-import {
-  mkdtemp,
-  readdir,
-  readdirSync,
-  writeFileSync,
-  existsSync,
-  readFileSync,
-  mkdirSync,
-} from "node:fs";
+import { readdirSync, writeFileSync, existsSync, readFileSync, mkdirSync } from "node:fs";
 import { mkdtemp as mkdtempP, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

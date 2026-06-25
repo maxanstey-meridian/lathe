@@ -62,7 +62,7 @@ export type Packet = {
 export type AdmissionResult = { ok: true; packet: Packet } | { ok: false; problems: string[] };
 
 // ---------------------------------------------------------------------------
-// Regexes (CONTRACT §4 — must match reference exactly)
+// Regexes (CONTRACT §4)
 
 export const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/;
 const RUNID_RE = /^\d{8}-\d{6}-[a-z0-9-]+$/;

@@ -1,7 +1,5 @@
 // Agent response shapes (opencode HTTP API). Pure types and pure helpers — the
 // adapter name "opencode" never leaks into domain. Imported by the Executor port.
-//
-// Reference: reference/src/opencode.ts:270-310, 497-512.
 
 export type MessagePart = {
   type: string;

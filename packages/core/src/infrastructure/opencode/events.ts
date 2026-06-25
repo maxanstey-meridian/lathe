@@ -1,5 +1,5 @@
 // Events adapter: subscribes to the serve instance's global SSE feed — the same
-// stream the opencode TUI renders from (ported from reference/src/opencode.ts).
+// stream the opencode TUI renders from.
 // Used by `meridian tail` for live token-level output; the driver never depends
 // on it. node:http (not fetch): a long-lived GET that streams until closed.
 

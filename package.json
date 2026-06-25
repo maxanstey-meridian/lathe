@@ -2,7 +2,7 @@
   "name": "lathe",
   "version": "0.0.0",
   "private": true,
-  "description": "Meridian v3 — sequential overnight executor of human-written specs.",
+  "description": "Lathe — sequential overnight executor of human-written specs.",
   "type": "module",
   "scripts": {
     "build": "pnpm -r --reporter=append-only build",

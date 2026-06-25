@@ -265,9 +265,6 @@ test("amendCommit: rewords HEAD and returns new SHA", () => {
     const sha = amendCommit(repo, newMsg);
 
     assert.ok(typeof sha === "string" && sha.length === 40);
-    // HEAD sha should be different (tree changed because message changed).
-    // Actually amend without --no-edit keeps same tree, but --amend -m changes the commit object.
-    // The sha should be valid.
     const afterMsg = execSync("git log -1 --format=%s", { cwd: repo }).toString().trim();
     assert.equal(afterMsg, newMsg);
   } finally {

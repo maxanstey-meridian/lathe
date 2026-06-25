@@ -1,8 +1,8 @@
 // The driver prompt inventory (CONTRACT §15). Every prompt the driver can
 // inject, by name. No ad-hoc prompts exist anywhere else.
 //
-// This is the single consolidated render module — ARCHITECTURE.v3.md:146-148.
-// Pure functions over durable-state snapshots. No file I/O.
+// This is the single consolidated render module. Pure functions over durable-state
+// snapshots. No file I/O.
 
 import type { Finding } from "./convergence.js";
 import type { OutcomeLedger, Checkpoint } from "./outcomes.js";
@@ -13,7 +13,7 @@ import type { PlannerResponse, QuestionType } from "./review.js";
 import type { ReviewState, Decision } from "./run.js";
 
 // ---------------------------------------------------------------------------
-// BRIDGE_CONTRACT (reference prompts.ts:7-38)
+// BRIDGE_CONTRACT
 // ---------------------------------------------------------------------------
 
 const BRIDGE_CONTRACT = `## Your tools and routes
@@ -50,7 +50,7 @@ Tooling:
 - Run things through bash from the project root; it is your cwd.`;
 
 // ---------------------------------------------------------------------------
-// Private helpers (reference prompts.ts:40-64)
+// Private helpers
 // ---------------------------------------------------------------------------
 
 const renderOutcomes = (ledger: OutcomeLedger): string =>
@@ -94,7 +94,7 @@ const renderRecentDecisions = (decisions: Decision[], n: number): string => {
 };
 
 // ---------------------------------------------------------------------------
-// Q-table functions (reference prompts.ts:66-326)
+// Q-table functions
 // ---------------------------------------------------------------------------
 
 // Q1 — initial seed (B1)
@@ -309,10 +309,8 @@ ${renderRecentDecisions(decisions, 6)}
 
 ${redactPacketInfra(packet.raw)}`;
 
-// Periodic NON-BLOCKING checkpoint reminder (§10). The cadence that used to
-// THROW `MERIDIAN GATE BLOCKED: …checkpoint interval reached` (and end Baby's
-// turn) is reborn here as a shout: Baby keeps full tool access and is free to
-// ignore it. No "BLOCKED" — that word would be a lie now.
+// Periodic NON-BLOCKING checkpoint reminder (§10). This preserves full tool access;
+// avoid "BLOCKED" wording because no gate is latched.
 export const softCheckpointNudge = (minutes: number): string =>
   `Meridian driver: it has been ~${minutes} min since your last planner check-in. You are NOT blocked — continue with full tool access. If you'd value Daddy's eyes on your direction, call meridian-bridge_ask_planner; otherwise carry on and call meridian-bridge_submit_report once the packet is complete. Prose reaches no one; act through tools.`;
 
@@ -322,8 +320,7 @@ export const ladderNudge = (count: number): string =>
 
 // Qp — planner decision delivery. The driver runs the meridian-bridge_ask_planner consult off
 // the MCP request path and delivers Daddy's verdict here, on the turn AFTER the
-// one Baby asked in. The payload mirrors what meridian-bridge_ask_planner used to return inline
-// (the { planner } object), so Baby reads the same shape it already knows.
+// one Baby asked in. The payload mirrors the former inline { planner } shape.
 export const qPlannerDecision = (
   planner: PlannerResponse,
 ): string => `Meridian driver: the planner (Daddy) answered the question you submitted.
@@ -348,7 +345,7 @@ Detail: ${detail}
 Do not improvise an answer. Call meridian-bridge_ask_planner once more; if it fails again, call meridian-bridge_submit_report with status blocked, blockedReason stop_condition, and this error in blockedQuestion.`;
 
 // ---------------------------------------------------------------------------
-// Daddy seed + planner question (reference planner.ts:10-138)
+// Daddy seed + planner question
 // ---------------------------------------------------------------------------
 
 // Mechanical facts the bridge injects into every question — the executor
@@ -491,7 +488,7 @@ Return ONLY JSON. No markdown fences, no prose outside JSON.
 };
 
 // ---------------------------------------------------------------------------
-// Super-daddy review prompt (reference super-review.ts:46-209)
+// Super-daddy review prompt
 // ---------------------------------------------------------------------------
 
 // SuperReviewInput — the structured input for renderSuperReview
@@ -659,7 +656,7 @@ ${MUST_EXECUTE}
 ${reviewBody(input)}`;
 
 // ---------------------------------------------------------------------------
-// Final review — Daddy's acceptance check (reference final-review.ts:11-77)
+// Final review — Daddy's acceptance check
 // ---------------------------------------------------------------------------
 
 // renderFinalReview — Daddy's one non-mechanical acceptance check

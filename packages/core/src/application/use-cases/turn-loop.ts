@@ -709,9 +709,8 @@ export const turnLoop = async (
 
       case "continue": {
         ladder = 0;
-        // Volume reminder VISIBILITY (§10): the plugin already shouts the same
-        // message per tool call; journal a visible event when work crosses the
-        // interval so Max sees it in the tail.
+        // Volume reminder visibility (§10): journal a visible event when work
+        // crosses the interval so it appears in the tail.
         const volumeReason = volumeCheckpointReason(
           toolCallsSinceDecision,
           diffDelta(gate.baselineDiffStats, repo.readDiffStats(worktree)),

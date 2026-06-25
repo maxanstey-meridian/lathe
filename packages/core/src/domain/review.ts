@@ -74,7 +74,6 @@ export type FinalReview = z.infer<typeof FinalReview>;
 // Each parser's candidate-extraction strategy is unique — they guard different scars.
 
 // Balanced top-level objects, ignoring braces inside JSON strings.
-// Used by parsePlannerResponse (reference/src/planner.ts:146-173).
 const extractBalancedObjects = (text: string): string[] => {
   const objects: string[] = [];
   let depth = 0;
@@ -114,7 +113,6 @@ const extractBalancedObjects = (text: string): string[] => {
 // Candidate JSON substrings to try, best-first: fenced blocks then every
 // balanced object (last-first, since reasoning models trail the real verdict),
 // then the legacy whole-string fallbacks.
-// Reference: reference/src/planner.ts:178-195
 const plannerResponseCandidates = (raw: string): string[] => {
   const cleaned = raw.trim();
   const candidates: string[] = [];
@@ -138,7 +136,6 @@ const plannerResponseCandidates = (raw: string): string[] => {
 
 // Parse a planner response, or null if nothing validates. Robust to verbose
 // reasoning models that bury the verdict in prose or fenced blocks.
-// Reference: reference/src/planner.ts:199-209
 export const tryParsePlannerResponse = (raw: string): PlannerResponse | null => {
   for (const candidate of plannerResponseCandidates(raw)) {
     try {
@@ -154,7 +151,6 @@ export const tryParsePlannerResponse = (raw: string): PlannerResponse | null => 
 };
 
 // Fail closed: a planner whose reply still won't parse becomes a hard stop.
-// Reference: reference/src/planner.ts:213-221
 export const parsePlannerResponse = (raw: string): PlannerResponse =>
   tryParsePlannerResponse(raw) ?? {
     status: "stop",
@@ -165,11 +161,9 @@ export const parsePlannerResponse = (raw: string): PlannerResponse =>
     human_decision_needed: null,
   };
 
-// Why the last reply could not be accepted, phrased for Daddy. Prefers a schema
+// Why the last reply could not be accepted. Prefers a schema
 // error (valid JSON, wrong shape — directly actionable) over a JSON syntax error
-// (usually a truncated or prose-wrapped reply). Fed verbatim into the re-ask so
-// Daddy is told exactly what to fix, not just "try again".
-// Reference: reference/src/planner.ts:227-244
+// (usually a truncated or prose-wrapped reply). Fed verbatim into the re-ask.
 export const diagnosePlannerParse = (raw: string): string => {
   let syntaxError: string | null = null;
   for (const candidate of plannerResponseCandidates(raw)) {
@@ -194,14 +188,12 @@ export const diagnosePlannerParse = (raw: string): string => {
 // Sent back to Daddy on the same session when his reply did not parse, carrying
 // the concrete reason: most misses are a verbose model burying or truncating the
 // JSON, recoverable in one re-ask (Baby recovered exactly this way live).
-// Reference: reference/src/planner.ts:249-250
 export const jsonReaskNudge = (reason: string): string =>
   `Your previous reply could not be accepted: ${reason}. Reply again with ONLY the JSON verdict object in the response shape above — no reasoning, no markdown fences, nothing before the opening { or after the closing }.`;
 
 // Parse a final-review response, or null if nothing validates. Mirrors
 // parseSuperReview's scan: every balanced {...} object, LAST first (the real
 // verdict trails any prose example), return the FIRST candidate that validates.
-// Reference: reference/src/convergence.ts:154-165
 export const tryParseFinalReview = (raw: string): FinalReview | null => {
   for (const candidate of extractBalancedObjects(raw).reverse()) {
     try {

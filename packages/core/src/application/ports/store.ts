@@ -24,8 +24,7 @@ import type { VerificationResult } from "./verify.js";
 // Queue entry — inline; no domain function consumes it.
 export type QueueEntry = { runId: string; admittedAt: string };
 
-// Convergence log entry — shape from reference/src/converge.ts:331-346.
-// A discriminated union so an UNREACHABLE attempt (transport drop, no verdict)
+// Convergence log entry — a discriminated union so an UNREACHABLE attempt (transport drop, no verdict)
 // is logged honestly instead of forging an escalate SuperReview. The shared head
 // (at/runId/campaignId/pass/maxPasses/verification) is on both branches.
 type ConvergenceLogHead = {

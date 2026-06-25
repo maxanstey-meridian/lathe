@@ -1,15 +1,13 @@
-// Meridian v2 gate plugin (CONTRACT §10). Two synchronous responsibilities, no
-// persistence, no prompts, no ladder, no file writes — lifecycle belongs to the
-// driver. Behavioral spec: ~/Sites/plumb/CONTRACT.md; behavior changes amend it
-// in the same change.
+// Lathe gate plugin. Two synchronous responsibilities, no persistence, no prompts,
+// no ladder, no file writes — lifecycle belongs to the driver.
 //
-//   1. DENY (tool.execute.before): block by THROWING (G4, v1 scar X4) — the only
+//   1. DENY (tool.execute.before): block by THROWING — the only
 //      hard stops are structural safety / explicit latch (see guard()).
 //   2. NOTICE (tool.execute.after): on the ALLOW path, APPEND a non-blocking
-//      checkpoint reminder to mutation results once Baby is past its check-in
-//      interval. Never throws, never blocks — the throwing cadence's heir.
+//      checkpoint reminder to mutation results once the executor is past its
+//      check-in interval. Never throws, never blocks.
 //
-// This file exports ONLY the default plugin factory (G7, v1 scar X3). Pure
+// This file exports ONLY the default plugin factory. Pure
 // logic lives in ./gate-core.ts. Both messages carry the MERIDIAN GATE marker.
 
 import {
@@ -41,9 +39,8 @@ const GatePlugin = async (_input: unknown) => {
   // decision in gate-state.json.
   let memoryLatch: { reason: string; at: number } | undefined
 
-  // Volume reminder tally (§10): tool calls since the last accepted decision, for
-  // the non-blocking per-call shout. Reset when the driver records a newer accepted
-  // decision — the planner check-in the reminder steers Baby toward.
+  // Volume reminder tally (§10): tool calls since the last accepted decision.
+  // Reset when the driver records a newer accepted decision.
   let toolCallsSinceDecision = 0
   let volumeCountedAgainst: string | undefined
 
@@ -99,8 +96,7 @@ const GatePlugin = async (_input: unknown) => {
         const state = gateState(run)
         if (!state) return
 
-        // Reset the volume tally when a newer accepted decision lands (the planner
-        // check-in the reminder steers Baby toward) — same rule as the memory latch.
+        // Reset the volume tally when a newer accepted decision lands.
         if (state.lastAcceptedDecisionAt !== volumeCountedAgainst) {
           volumeCountedAgainst = state.lastAcceptedDecisionAt
           toolCallsSinceDecision = 0
@@ -109,9 +105,8 @@ const GatePlugin = async (_input: unknown) => {
 
         const mutation = isMutation(toolInput.tool, toolInput.args, state.mutationCommandPatterns)
 
-        // VOLUME reminder: on EVERY tool call (reads included) once over threshold,
-        // append the SAME message a block would show — never thrown. This is the
-        // tool-call cap reborn as a shout: it spams every call until Baby checkpoints.
+        // VOLUME reminder: on every tool call (reads included) once over threshold,
+        // append the same message a block would show. Never thrown.
         const volume = volumeNoticeReason(state, toolCallsSinceDecision, mutation, run.worktree)
         if (volume) {
           output.output += `\n\n${denyMessage(volume)}`
@@ -128,9 +123,8 @@ const GatePlugin = async (_input: unknown) => {
     },
 
     // Second net under the same surface for permission-mediated calls (G4 tail).
-    // Headless rule: EVERY ask gets an answer — deny when gated, allow
-    // otherwise. An unanswered ask hangs the turn until timeout (learned live
-    // on build day: external_directory asks wedged the first e2e run).
+    // Headless rule: every ask gets an answer. Deny when gated, allow otherwise;
+    // an unanswered ask hangs the turn until timeout.
     "permission.ask": async (permissionInput: PermissionInput, output: { status?: string }) => {
       const run = activeRun()
       if (!run) return

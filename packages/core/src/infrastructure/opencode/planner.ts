@@ -46,7 +46,6 @@ export const createPlanner = (
   };
 
   // M4: the re-ask loop — tryParse → on null, diagnose → jsonReaskNudge → retry → tryParse → on null, fail-closed.
-  // Reference: reference/src/bridge.ts:125-139
   // Port contract: returns PlannerResponse directly (NOT { planner } — that's the bridge's internal shape).
   const consult = async (input: Parameters<Planner["consult"]>[0]): Promise<PlannerResponse> => {
     if (!daddySessionId) {
@@ -85,7 +84,6 @@ export const createPlanner = (
 
   // V7: fails closed to request_changes on ANY error (transport, parse, timeout).
   // Re-asks ONCE on a parse miss, then fails closed.
-  // Reference: reference/src/bridge.ts:55-87
   const finalReview = async (
     packet: Packet,
     ledger: OutcomeLedger,

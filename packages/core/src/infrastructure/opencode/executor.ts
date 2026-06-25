@@ -1,4 +1,4 @@
-// Executor adapter: thin HTTP client over the opencode API (reference/src/opencode.ts:270-446).
+// Executor adapter: thin HTTP client over the opencode API.
 // sendMessage uses node:http.request (NOT fetch — the >300s turn-death scar).
 // createSession/listMessages/deleteSession use fetch (short calls only).
 
@@ -8,7 +8,7 @@ import type { Config } from "../../config/schemas.js";
 import type { TurnResponse } from "../../domain/agent-response.js";
 
 // ---------------------------------------------------------------------------
-// Streaming body parser (reference/src/opencode.ts:312-333)
+// Streaming body parser
 // SSE / NDJSON bodies carry data: lines or bare JSON lines;
 // the complete message (info + parts) is among the payloads.
 
@@ -41,7 +41,7 @@ const parseStreamingBody = (body: string): TurnResponse => {
 export const createOpencodeClient = (config: Config): Executor => {
   const base = `http://127.0.0.1:${config.opencode.port}`;
 
-  // Sessions are scoped to a directory via the query param (proven live):
+  // Sessions are scoped to a directory via the query param:
   // Baby and Daddy both live in the run's worktree, so file access inside it
   // is internal and the repo never trips external-directory permission asks.
   const createSession = async (title: string, directory: string): Promise<string> => {
@@ -60,11 +60,9 @@ export const createOpencodeClient = (config: Config): Executor => {
     return data.id;
   };
 
-  // node:http, not fetch: a turn's response can take as long as the model
-  // takes (30-min default for a local 35B). undici's fetch kills any request
-  // whose headers/body stall past ~300s — learned live when every Baby turn
-  // longer than 5 minutes died with "fetch failed". The only timeout here is
-  // ours.
+  // node:http, not fetch: a turn's response can take as long as the model takes.
+  // undici's fetch can abort long-running responses before the configured model
+  // timeout. The only timeout here is ours.
   const sendMessage = (
     sessionId: string,
     text: string,

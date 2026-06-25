@@ -1,8 +1,7 @@
 // ---------------------------------------------------------------------------
 // Liveness decisions (CONTRACT §5 R10, L3)
 //
-// Pure functions — no I/O, no clock. The reference boundaries in
-// reference/tests/core.test.mjs:907-968 are pin-tight.
+// Pure functions — no I/O, no clock. Boundary behavior is covered by liveness tests.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------

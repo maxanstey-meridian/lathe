@@ -103,11 +103,7 @@ test("classifyChangedFiles: suspicious surface takes precedence for matching pat
     ["weird/**"],
   );
   const byPath = Object.fromEntries(files.map((f) => [f.path, f.classification]));
-  // weird/sus.ts is in suspicious surface but also in expected via conflict — expected wins
-  assert.strictEqual(byPath["weird/sus.ts"], "expected"); // src/** doesn't match this; it's suspicious
-  // Actually expected is ["src/**", "weird/**"] and suspicious is [...]
-  // Wait: expectedGlobs=["src/**", "weird/**"], suspiciousGlobs=["weird/**"]
-  // Classification: expected checked first, so weird/sus.ts matches expected → "expected"
+  assert.strictEqual(byPath["weird/sus.ts"], "expected");
 });
 
 // ===========================================================================
@@ -628,7 +624,7 @@ test("volumeNoticeReason: files/LoC on mutation calls", () => {
 });
 
 // ===========================================================================
-// Messages (byte-identical to reference)
+// Messages
 // ===========================================================================
 
 test("denyMessage: starts with MERIDIAN GATE BLOCKED", () => {

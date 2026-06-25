@@ -72,11 +72,9 @@ export type ActiveRunRef = {
   verifyModel: ModelConfig;
 };
 
-// RunRef holder — the reference the bridge receives. Matches the reference
-// driver's CurrentRunRef = { current: RunContext | undefined } (reference
-// src/driver.ts:89). The bridge starts before any run exists; ALL ActiveRunRef
-// fields are per-run, not just packet. The holder is { current: undefined }
-// at startup, then set/cleared per run by the driver loop.
+// RunRef holder — the bridge starts before any run exists; ALL ActiveRunRef fields
+// are per-run, not just packet. The holder is { current: undefined } at startup,
+// then set/cleared per run by the driver loop.
 export type RunRef = {
   current: ActiveRunRef | undefined;
 };
@@ -110,7 +108,7 @@ const clearGate = (ctx: ActiveRunRef): void => {
 };
 
 // ---------------------------------------------------------------------------
-// Verification helpers (ported from reference/src/verification.ts)
+// Verification helpers
 // ---------------------------------------------------------------------------
 
 export type VerificationResult = { command: string; exitCode: number; outputTail: string };
@@ -647,8 +645,8 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
   // this handler. Defer it: record the report and return; the driver runs the
   // review off the MCP path.
   if (report.status === "ready_for_review") {
-    // A report that passes the floor SUPERSEDES any report-rejected intent from
-    // an earlier submit THIS turn — that earlier report is no longer the truth.
+    // A report that passes the floor supersedes any report-rejected intent from
+    // an earlier submit this turn.
     // Drop it so final-review-requested is the highest pending intent and
     // run_final_review fires this turn (else branch 4 > branch 6 orphans the
     // review and Baby livelocks on review_pending forever).

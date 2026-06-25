@@ -208,7 +208,7 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
         config.thresholds.verificationTimeoutMs,
       );
 
-      // 2. Verification — driver's own run, ground truth (S6).
+      // 2. Verification — driver's own command execution (S6).
       const verificationResults = await verify.run(
         packet.frontmatter.verification,
         meta.worktree,

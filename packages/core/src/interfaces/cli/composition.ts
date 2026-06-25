@@ -96,8 +96,7 @@ const modelOf = (m: { providerId: string; modelId: string; agent: string }): Mod
 // Serve substrate: the single-driver lock + the opencode server, brought up and
 // torn down together. listenBridge IS the lock (binds :bridgePort, throws
 // EADDRINUSE if another driver is live) — R1 demands it resolve before any state
-// mutation, so the opencode spawn lives behind it, exactly as the reference
-// ordered the lifecycle.
+// mutation, so the opencode spawn lives behind it.
 
 type Serve = { httpServer: Server; opencode: ChildProcess };
 

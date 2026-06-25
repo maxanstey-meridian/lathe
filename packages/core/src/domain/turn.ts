@@ -332,10 +332,10 @@ export const evaluateTurn = (facts: z.infer<typeof TurnFacts>): Dec => {
   // exempt (a fresh session always starts with the full seed). Fires BEFORE the
   // no-progress ladder so a dead landing is handled deliberately instead of
   // spiralling up the ladder. Two distinct causes, split on the PRIOR turn:
-  //   - High prior context → a working session whose request OVERFLOWED the
-  //     server window (opencode returns an empty completion on the 4xx). This is
-  //     RECOVERABLE: rotating reseeds low and continues. NOT the v2 scar.
-  //   - Low prior context → the v2 reseed-dead-session scar: the reseed itself
+  //   - High prior context → a working session whose request overflowed the
+  //     server window (opencode returns an empty completion on the 4xx). Rotate
+  //     and continue.
+  //   - Low prior context → the reseed-dead-session case: the reseed itself
   //     never landed, so rotating again just repeats it → park.
   // The divide is contextBudget/2: above it, real context was in flight.
   if (!isFirstTurn && contextTokens < contextTokensFloor) {

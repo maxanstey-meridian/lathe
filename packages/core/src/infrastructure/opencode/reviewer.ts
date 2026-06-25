@@ -32,7 +32,6 @@ type ReviewHarvest = { text: string; error: string | null };
 // super-daddy runs bash across several steps and the verdict often appears in an
 // earlier step, leaving the final message empty). Falls back to the sendMessage
 // response text if listing fails. Checks for provider errors across all turns.
-// Reference: reference/src/super-review.ts:230-250
 const harvestReview = async (
   executor: Executor,
   sessionId: string,

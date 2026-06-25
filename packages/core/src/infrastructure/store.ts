@@ -120,7 +120,6 @@ const ConvergenceLogEntrySchema = z.union([
 
 // ---------------------------------------------------------------------------
 // Archive helper — collision-safe with numeric suffix and .problems.txt sidecar
-// (reference/src/queue.ts:19-27).
 
 const archivePacket = (paths: Paths, packetPath: string, problems?: string[]): string => {
   mkdirSync(paths.rejectedDir, { recursive: true });

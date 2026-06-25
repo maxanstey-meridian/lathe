@@ -40,7 +40,7 @@ export const projectJournalEvent = (
       return { kind: "run.state", runId, status: "running", at };
 
     case "prompt_sent":
-      // Prompt-to-Baby is the visible start of a turn. `turn` rides on base.
+      // A prompt is the visible start of a turn. `turn` rides on base.
       return { kind: "turn.started", runId, pass: ctx.pass, turn: e.turn ?? 0, at };
 
     case "turn_ended":

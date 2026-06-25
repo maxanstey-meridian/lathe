@@ -219,8 +219,7 @@ test("ask_planner: records consult-requested intent on valid call", async () => 
     approach: "I'll follow the store.test.ts pattern.",
     evidence: ["tests/store.test.ts"],
   });
-  // pendingConsult is cleared after handling — actually it's NOT cleared,
-  // the driver drains it on the next turn. So it should still be set.
+  // The driver drains pendingConsult on the next turn.
   ok(ref.current.pendingConsult);
   await cleanTemp(tmp);
 });
@@ -781,10 +780,7 @@ test("submit_report: named test in COMMITTED work (diff HEAD clean) → floor cl
 });
 
 test("submit_report: pass-2 with non-empty justification and no test → floor clean", async () => {
-  // For this test we need the worktree to have a git repo with some changed
-  // test file (to pass anti-fabrication: no tests to check) and pass >= 2.
-  // Actually, if no tests are named, there's nothing to anti-fabricate-check.
-  // We just need justification to be present.
+  // With no named tests, anti-fabrication only requires a justification.
   const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
   await handleUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],

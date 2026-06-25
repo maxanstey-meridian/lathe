@@ -37,6 +37,7 @@ import type {
   Checkpoint,
   GateState,
   ActiveRun,
+  ActiveConvergence,
   Packet,
   Campaign,
   SubmitReport,
@@ -55,6 +56,7 @@ import { RunMeta as RunMetaSchema } from "../domain/run.js";
 import { ReviewState as ReviewStateSchema } from "../domain/run.js";
 import { Decision as DecisionSchema } from "../domain/run.js";
 import { ActiveRun as ActiveRunSchema } from "../domain/run.js";
+import { ActiveConvergence as ActiveConvergenceSchema } from "../domain/run.js";
 // ---------------------------------------------------------------------------
 // Convergence log entry schema — local, matching the port's ConvergenceLogEntry
 // shape (the port ships only the type; appendJsonl/readJsonl require a schema).
@@ -79,7 +81,7 @@ const VerificationResultSchema = z.object({
 });
 
 const ConvergeDecisionSchema = z.union([
-  z.object({ action: z.literal("author"), blockers: z.array(Finding) }),
+  z.object({ action: z.literal("author"), blockers: z.array(Finding), promote: z.boolean() }),
   z.object({ action: z.literal("stop") }),
   z.object({ action: z.literal("escalate"), reason: z.string() }),
 ]);
@@ -364,6 +366,23 @@ export class StoreAdapter implements Store {
   }
 
   // ---------------------------------------------------------------------------
+  // Active convergence pointer
+
+  readActiveConvergence(): ActiveConvergence | undefined {
+    return readValidatedIfExists(this.paths.activeConvergenceFile, ActiveConvergenceSchema);
+  }
+
+  writeActiveConvergence(convergence: ActiveConvergence): void {
+    writeValidated(this.paths.activeConvergenceFile, ActiveConvergenceSchema, convergence);
+  }
+
+  clearActiveConvergence(): void {
+    if (existsSync(this.paths.activeConvergenceFile)) {
+      unlinkSync(this.paths.activeConvergenceFile);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Campaign
 
   readCampaign(campaignId: string): Campaign | undefined {
@@ -617,6 +636,7 @@ export class StoreAdapter implements Store {
       stallRetries: 0,
       reorientRetries: 0,
       reviewerUnreachable: 0,
+      promoted: false,
       updatedAt: this.clock.nowIso(),
     };
   }

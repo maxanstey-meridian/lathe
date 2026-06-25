@@ -13,6 +13,7 @@ import type {
   Checkpoint,
   GateState,
   ActiveRun,
+  ActiveConvergence,
   OutcomeLedger,
   Packet,
   Campaign,
@@ -102,6 +103,11 @@ export type Store = {
   readActiveRun(): ActiveRun | undefined;
   writeActiveRun(run: ActiveRun): void;
   clearActiveRun(): void;
+
+  // Active convergence pointer
+  readActiveConvergence(): ActiveConvergence | undefined;
+  writeActiveConvergence(convergence: ActiveConvergence): void;
+  clearActiveConvergence(): void;
 
   // Campaign
   readCampaign(campaignId: string): Campaign | undefined;

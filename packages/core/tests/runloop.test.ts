@@ -174,7 +174,7 @@ test("recoverStalledRun: wedged with retries below cap → requeued", () => {
   })();
 });
 
-test("recoverStalledRun: wedged at cap → escalated to human_decision", () => {
+test("recoverStalledRun: wedged at cap (not yet promoted) → promote + requeue", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-stall-2-"));
     const clock = fixedClock();
@@ -190,13 +190,42 @@ test("recoverStalledRun: wedged at cap → escalated to human_decision", () => {
       }),
     );
 
-    recoverStalledRun(store, "20260101-000000-wedged", 2, clock);
+    const decision = recoverStalledRun(store, "20260101-000000-wedged", 2, clock);
 
+    equal(decision.action, "promote");
+    const read = store.readMeta("20260101-000000-wedged");
+    equal(read.status, "queued");
+    equal(read.promoted, true);
+    equal(read.stallRetries, 0); // fresh retry budget on the strong model
+    equal(read.blockedReason, undefined);
+    await cleanTemp(tmp);
+  })();
+});
+
+test("recoverStalledRun: wedged at cap AFTER promotion → escalate to human_decision", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "runloop-stall-2b-"));
+    const clock = fixedClock();
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+    store.writeMeta(
+      makeMeta({
+        runId: "20260101-000000-wedged",
+        status: "blocked" as const,
+        blockedReason: "wedged" as const,
+        stallRetries: 2,
+        promoted: true,
+        blockedQuestion: "stalled on turn 5",
+      }),
+    );
+
+    const decision = recoverStalledRun(store, "20260101-000000-wedged", 2, clock);
+
+    equal(decision.action, "escalate");
     const read = store.readMeta("20260101-000000-wedged");
     equal(read.status, "blocked");
     equal(read.blockedReason, "human_decision");
-    ok(read.blockedQuestion?.includes("Auto-retried"));
-    ok(read.blockedQuestion?.includes("stalled again"));
+    ok(read.blockedQuestion?.includes("strong model"));
     await cleanTemp(tmp);
   })();
 });
@@ -315,7 +344,7 @@ test("recoverStalledRunsAtStartup: wedged below cap → requeued", () => {
   })();
 });
 
-test("recoverStalledRunsAtStartup: wedged at cap → escalated to human_decision", () => {
+test("recoverStalledRunsAtStartup: wedged at cap (not yet promoted) → promote + requeue", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-startup-2-"));
     const clock = fixedClock();
@@ -333,9 +362,35 @@ test("recoverStalledRunsAtStartup: wedged at cap → escalated to human_decision
     recoverStalledRunsAtStartup(store, 2, clock);
 
     const read = store.readMeta("20260101-000000-wedged");
+    equal(read.status, "queued");
+    equal(read.promoted, true);
+    equal(read.blockedReason, undefined);
+    await cleanTemp(tmp);
+  })();
+});
+
+test("recoverStalledRunsAtStartup: wedged at cap AFTER promotion → escalate", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "runloop-startup-2b-"));
+    const clock = fixedClock();
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+    store.writeMeta(
+      makeMeta({
+        runId: "20260101-000000-wedged",
+        status: "blocked" as const,
+        blockedReason: "wedged" as const,
+        stallRetries: 2,
+        promoted: true,
+      }),
+    );
+
+    recoverStalledRunsAtStartup(store, 2, clock);
+
+    const read = store.readMeta("20260101-000000-wedged");
     equal(read.status, "blocked");
     equal(read.blockedReason, "human_decision");
-    ok(read.blockedQuestion?.includes("stall retry cap"));
+    ok(read.blockedQuestion?.includes("promoted"));
     await cleanTemp(tmp);
   })();
 });
@@ -427,7 +482,7 @@ test("recoverOrphanedRuns + recoverStalledRunsAtStartup: mixed states at startup
 // ---------------------------------------------------------------------------
 // recoverStalledRun: wedged with 0 maxStallRetries → immediate escalate
 
-test("recoverStalledRun: maxStallRetries=0 with wedged → escalate immediately", () => {
+test("recoverStalledRun: maxStallRetries=0 + promoteAtCap disabled → escalate immediately", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-no-retry-"));
     const clock = fixedClock();
@@ -442,11 +497,38 @@ test("recoverStalledRun: maxStallRetries=0 with wedged → escalate immediately"
       }),
     );
 
-    recoverStalledRun(store, "20260101-000000-wedged", 0, clock);
+    // promoteAtCap=false → no promoted attempt, escalate straight to Max.
+    const decision = recoverStalledRun(store, "20260101-000000-wedged", 0, clock, false);
 
+    equal(decision.action, "escalate");
     const read = store.readMeta("20260101-000000-wedged");
     equal(read.status, "blocked");
     equal(read.blockedReason, "human_decision");
+    await cleanTemp(tmp);
+  })();
+});
+
+test("recoverStalledRun: maxStallRetries=0 with promoteAtCap → promote once before escalating", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "runloop-no-retry-promote-"));
+    const clock = fixedClock();
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+    store.writeMeta(
+      makeMeta({
+        runId: "20260101-000000-wedged",
+        status: "blocked" as const,
+        blockedReason: "wedged" as const,
+        stallRetries: 0,
+      }),
+    );
+
+    const decision = recoverStalledRun(store, "20260101-000000-wedged", 0, clock);
+
+    equal(decision.action, "promote");
+    const read = store.readMeta("20260101-000000-wedged");
+    equal(read.status, "queued");
+    equal(read.promoted, true);
     await cleanTemp(tmp);
   })();
 });

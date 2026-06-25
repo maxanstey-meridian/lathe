@@ -75,27 +75,47 @@ export type SuperReview = z.infer<typeof SuperReview>;
 // The loop decision (single reviewer: super-daddy) — CONTRACT §18 S5
 
 export type ConvergeDecision =
-  | { action: "author"; blockers: Finding[] }
+  // `promote` is the n+1 cap escape hatch: when set, the authored follow-up runs
+  // Baby's harness on Daddy's model (the same task, a stronger engine). Only the
+  // cap branch ever sets it true; every normal pass authors with promote=false.
+  | { action: "author"; blockers: Finding[]; promote: boolean }
   | { action: "stop" }
   | { action: "escalate"; reason: string };
 
-// We trust the verdict. Order matters and every branch fails CLOSED toward Max:
-//   1. reviewer escalated / needs a human            → escalate
-//   2. accept but verification red                    → escalate
-//   3. accept + green                                 → stop (the ONLY stop path)
-//   4. request_changes with no findings              → escalate
-//   5. request_changes + cap reached                  → escalate
-//   6. request_changes + passes left                  → author EVERY finding
+// Policy the caller supplies (it owns config, the pure decision does not): whether
+// the cap may spend ONE promoted pass, and whether THIS run already was that pass.
+export type PromotePolicy = { promoteAtCap: boolean; alreadyPromoted: boolean };
+
+// We trust the verdict. Order matters and every branch fails CLOSED toward Max,
+// with ONE deliberate escape hatch — the promoted pass at the cap:
+//   1. accept + human_decision_needed                 → escalate
+//   2. accept + green                                 → stop (the ONLY stop path)
+//   3. accept but verification red                    → escalate
+//   ── at the cap (last resort) ──
+//   4. cap + promotion available + findings to author → author PROMOTED (Daddy's model)
+//   5. cap + promotion spent / nothing to author      → escalate
+//   ── below the cap ──
+//   6. explicit escalate / human_decision_needed      → escalate
+//   7. request_changes with no findings               → escalate
+//   8. request_changes + passes left                  → author EVERY finding
+//
+// The cap branch is the ONLY place an `escalate` verdict can be turned back into a
+// pass, and only once per campaign (alreadyPromoted guards re-promotion): before
+// rejecting OR escalating at the cap, give Baby one more attempt at the same task
+// on Daddy's model.
 export const decideConvergence = (
   review: SuperReview,
   verificationGreen: boolean,
   pass: number,
   maxPasses: number,
+  promote: PromotePolicy = { promoteAtCap: false, alreadyPromoted: false },
 ): ConvergeDecision => {
-  if (review.verdict === "escalate" || review.human_decision_needed) {
-    return { action: "escalate", reason: review.human_decision_needed ?? "reviewer escalated" };
-  }
+  // Accept is handled first so a clean accept is never diverted into a pass. A
+  // human_decision_needed on an accept is a genuine "ask Max" and still escalates.
   if (review.verdict === "accept") {
+    if (review.human_decision_needed) {
+      return { action: "escalate", reason: review.human_decision_needed };
+    }
     if (verificationGreen) {
       return { action: "stop" };
     }
@@ -105,21 +125,42 @@ export const decideConvergence = (
         "reviewer accepted but a verification command is red — under-reported; not safe to auto-stop",
     };
   }
-  // request_changes — author every finding, bounded only by the pass cap.
-  if (review.findings.length === 0) {
+
+  // Not accepted: request_changes or escalate. At the cap, the promoted pass is the
+  // last resort BEFORE giving up — but only if there are concrete findings to author
+  // a repair from, and only if we have not already spent the promotion this campaign.
+  const canAuthor = review.findings.length > 0;
+  if (pass >= maxPasses) {
+    if (promote.promoteAtCap && !promote.alreadyPromoted && canAuthor) {
+      return { action: "author", blockers: review.findings, promote: true };
+    }
+    if (promote.alreadyPromoted) {
+      return {
+        action: "escalate",
+        reason: `hard cap reached (${pass}/${maxPasses}) after a promoted pass on Daddy's model and the reviewer still will not converge — escalating to Max`,
+      };
+    }
+    return {
+      action: "escalate",
+      reason: canAuthor
+        ? `hard cap reached (${pass}/${maxPasses}) and the reviewer still wants changes — convergence failed`
+        : `hard cap reached (${pass}/${maxPasses}) and the reviewer named no findings — convergence failed`,
+    };
+  }
+
+  // Below the cap an explicit escalate / human ask still parks for Max.
+  if (review.verdict === "escalate" || review.human_decision_needed) {
+    return { action: "escalate", reason: review.human_decision_needed ?? "reviewer escalated" };
+  }
+  // request_changes below the cap — author every finding, no promotion.
+  if (!canAuthor) {
     return {
       action: "escalate",
       reason:
         "reviewer requested changes but named no findings — nothing to author; not safe to auto-loop",
     };
   }
-  if (pass >= maxPasses) {
-    return {
-      action: "escalate",
-      reason: `hard cap reached (${pass}/${maxPasses}) and the reviewer still wants changes — convergence failed`,
-    };
-  }
-  return { action: "author", blockers: review.findings };
+  return { action: "author", blockers: review.findings, promote: false };
 };
 
 // ---------------------------------------------------------------------------
@@ -234,6 +275,7 @@ export type FollowupLineage = {
   parentRunId: string; // the run super-daddy just reviewed
   pass: number; // the NEW pass number (parent pass + 1)
   priorOutcomes: OutcomeDef[]; // delivered outcomes carried forward as regression
+  promoted: boolean; // run this follow-up on Daddy's model (cap escape hatch)
 };
 
 // Pure: (super-daddy's authored packet markdown) + lineage → an admittable packet.
@@ -281,6 +323,10 @@ export const stampFollowupLineage = (authoredRaw: string, lineage: FollowupLinea
     parent_run_id: lineage.parentRunId,
     pass: lineage.pass,
     regression_outcomes: regression,
+    // Infra, never authored: a model cannot promote its own follow-up onto Daddy's
+    // model. Coerce so a lineage that omits it (legacy callers) stamps an explicit
+    // false rather than a YAML `null`.
+    promoted: lineage.promoted === true,
   };
 
   const body = (match[2] ?? "").trim();

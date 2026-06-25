@@ -450,6 +450,24 @@ test("store: active run lifecycle", async () => {
   await cleanTemp(tmp);
 });
 
+test("store: active convergence lifecycle", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-active-convergence-"));
+  const clock = fixedClock();
+  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  equal(store.readActiveConvergence(), undefined);
+  const convergence = {
+    runId: "20260101-000000-test",
+    startedAt: clock.nowIso(),
+  };
+  store.writeActiveConvergence(convergence);
+  const read = store.readActiveConvergence();
+  ok(read);
+  equal(read!.runId, convergence.runId);
+  store.clearActiveConvergence();
+  equal(store.readActiveConvergence(), undefined);
+  await cleanTemp(tmp);
+});
+
 // ---------------------------------------------------------------------------
 // Campaign
 
@@ -1081,6 +1099,25 @@ const runContractTests = async (
     equal(read!.runId, run.runId);
     store.clearActiveRun();
     equal(store.readActiveRun(), undefined);
+    await cleanTemp(tmp);
+  }
+
+  // Active convergence lifecycle
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-active-convergence-`));
+    const clock = fixedClock();
+    const store = createStore(tmp, fakeRepo(), clock);
+    equal(store.readActiveConvergence(), undefined);
+    const convergence = {
+      runId: "20260101-000000-test",
+      startedAt: clock.nowIso(),
+    };
+    store.writeActiveConvergence(convergence);
+    const read = store.readActiveConvergence();
+    ok(read);
+    equal(read!.runId, convergence.runId);
+    store.clearActiveConvergence();
+    equal(store.readActiveConvergence(), undefined);
     await cleanTemp(tmp);
   }
 

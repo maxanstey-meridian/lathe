@@ -309,7 +309,7 @@ export const superReviewOnce = async (
   paths: Paths,
   runId: string,
 ): Promise<number> =>
-  withServe(config, paths, async ({ store }) => {
+  withServe(config, paths, async ({ store, clock }) => {
     const meta = store.readMetaIfExists(runId);
     if (!meta) {
       console.error(`run ${runId} not found`);
@@ -340,30 +340,52 @@ export const superReviewOnce = async (
     const skillText = readFileSync(expandHome(config.superdaddy.skillPath), "utf-8");
 
     const campaignId = campaignIdForRun(shape.packet, runId);
-    const outcome = await reviewer.superReview({
-      packet: shape.packet,
-      worktree: meta.worktree,
-      reportText,
-      skillText,
-      pass: shape.packet.frontmatter.pass,
-      maxPasses: config.thresholds.maxPasses,
-      campaignId,
-    });
 
-    if (outcome.kind === "unreachable") {
-      console.error(`super-daddy unreachable: ${outcome.detail}`);
-      console.error("(transport drop, not a verdict — retry when the connection is back)");
-      return 1;
-    }
+    // Make the dry-run visible in `lathe tail`: publish the active-convergence
+    // marker so tail resolves THIS run as its target, and record super-daddy's
+    // session into meta so tail routes the reviewer's live tool calls to the super
+    // pane DURING the review (mirrors convergeRun). Both are transient UI markers —
+    // the marker is cleared in finally; reviewerSessionId is additive meta the next
+    // real converge overwrites. Still read-only by intent: no packet, no run state.
+    store.writeActiveConvergence({ runId, startedAt: clock.nowIso() });
+    const recordReviewerSession = (sessionId: string): void => {
+      const current = store.readMeta(runId);
+      if (current.reviewerSessionId !== sessionId) {
+        store.writeMeta({ ...current, reviewerSessionId: sessionId, updatedAt: clock.nowIso() });
+      }
+    };
 
-    console.log(`super-daddy verdict: ${outcome.review.verdict}`);
-    for (const f of outcome.review.findings) {
-      console.log(`  - [${f.severity}] ${f.title}`);
+    try {
+      const outcome = await reviewer.superReview(
+        {
+          packet: shape.packet,
+          worktree: meta.worktree,
+          reportText,
+          skillText,
+          pass: shape.packet.frontmatter.pass,
+          maxPasses: config.thresholds.maxPasses,
+          campaignId,
+        },
+        recordReviewerSession,
+      );
+
+      if (outcome.kind === "unreachable") {
+        console.error(`super-daddy unreachable: ${outcome.detail}`);
+        console.error("(transport drop, not a verdict — retry when the connection is back)");
+        return 1;
+      }
+
+      console.log(`super-daddy verdict: ${outcome.review.verdict}`);
+      for (const f of outcome.review.findings) {
+        console.log(`  - [${f.severity}] ${f.title}`);
+      }
+      if (outcome.review.notes) {
+        console.log(`notes: ${outcome.review.notes}`);
+      }
+      return 0;
+    } finally {
+      store.clearActiveConvergence();
     }
-    if (outcome.review.notes) {
-      console.log(`notes: ${outcome.review.notes}`);
-    }
-    return 0;
   });
 
 // `meridian tail` on a TTY: the Ink split-pane UI (CONTRACT X3). Read-only —

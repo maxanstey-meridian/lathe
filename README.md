@@ -43,6 +43,16 @@ The defaults live in `packages/core/src/config/schemas.ts`. The main knobs are:
 - `superdaddy`: final convergence reviewer provider, model, agent, timeout, and review skill paths
 - `thresholds`: rotation, checkpoint, verification, promotion, stall, and convergence limits
 
+## Authoring Packets
+
+The repo-owned opencode skill for writing Lathe packets lives at:
+
+```text
+.opencode/skills/packet/SKILL.md
+```
+
+Use that skill when turning a design into an overnight packet. It documents the current packet rules, admission flow, legacy `~/.meridian/v3` naming, and the expectation that packets are validated with `lathe queue add <packet.md>` rather than dropped into the queue by hand.
+
 ## Packet Shape
 
 Packets are Markdown files with YAML frontmatter. Required fields are:

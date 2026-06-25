@@ -15,12 +15,15 @@
 
 import type { Config } from "../../config/schemas.js";
 import { decideStallRecovery } from "../../domain/liveness.js";
+import type { StallRecoveryDecision } from "../../domain/liveness.js";
 import type { BridgePort } from "../ports/bridge.js";
 import type { Caffeinate } from "../ports/caffeinate.js";
 import type { Clock } from "../ports/clock.js";
 import type { Repo } from "../ports/repo.js";
 import type { Store } from "../ports/store.js";
 import { promoteStaged } from "./chain-promotion.js";
+import { journal } from "./run-runtime.js";
+import { promotedModelLabel } from "./turn-loop.js";
 
 // ---------------------------------------------------------------------------
 // Callback interfaces — owned by the caller (future CLI entry point or
@@ -64,7 +67,12 @@ export const runLoop = async <Ref>(
 
   // Recovery sweeps — behind the lock, before draining.
   recoverOrphanedRuns(store, repo, clock);
-  recoverStalledRunsAtStartup(store, config.thresholds.maxStallRetries, clock);
+  recoverStalledRunsAtStartup(
+    store,
+    config.thresholds.maxStallRetries,
+    clock,
+    config.thresholds.promoteAtCap,
+  );
 
   // Chain promotion at startup.
   promoteStaged(store, repo);
@@ -156,7 +164,20 @@ export const runLoop = async <Ref>(
           if (status === "blocked") {
             // R10: wedged runs recover immediately.
             if (terminalMeta.blockedReason === "wedged") {
-              recoverStalledRun(store, runId, config.thresholds.maxStallRetries, clock);
+              const stall = recoverStalledRun(
+                store,
+                runId,
+                config.thresholds.maxStallRetries,
+                clock,
+                config.thresholds.promoteAtCap,
+              );
+              if (stall.action === "promote") {
+                journal({ store, clock }, runId, 0, {
+                  event: "model_promoted",
+                  from: `${config.baby.providerId}/${config.baby.modelId}`,
+                  to: promotedModelLabel(config),
+                });
+              }
             }
             // R6: a blocked run parks and driver moves on.
             if (terminalMeta.worktree) {
@@ -185,7 +206,20 @@ export const runLoop = async <Ref>(
           // Post-run steps: convergence, chain promotion, stall recovery.
           await convergeStep(runId);
           promoteStaged(store, repo);
-          recoverStalledRun(store, runId, config.thresholds.maxStallRetries, clock);
+          const stall = recoverStalledRun(
+            store,
+            runId,
+            config.thresholds.maxStallRetries,
+            clock,
+            config.thresholds.promoteAtCap,
+          );
+          if (stall.action === "promote") {
+            journal({ store, clock }, runId, 0, {
+              event: "model_promoted",
+              from: `${config.baby.providerId}/${config.baby.modelId}`,
+              to: promotedModelLabel(config),
+            });
+          }
 
           // Clear the bridge context so the next run starts fresh.
           bridge.clearActive(ref);
@@ -251,15 +285,16 @@ export const recoverStalledRun = (
   runId: string,
   maxStallRetries: number,
   clock: Clock,
-): void => {
+  promoteAtCap = true,
+): StallRecoveryDecision => {
   const meta = store.readMetaIfExists(runId);
   if (!meta) {
-    return;
+    return { action: "none" };
   }
 
-  const decision = decideStallRecovery(meta, maxStallRetries);
+  const decision = decideStallRecovery(meta, maxStallRetries, promoteAtCap);
   if (decision.action === "none") {
-    return;
+    return decision;
   }
 
   if (decision.action === "requeue") {
@@ -270,16 +305,35 @@ export const recoverStalledRun = (
       stallRetries: decision.stallRetries,
       updatedAt: clock.nowIso(),
     });
-    return;
+    return decision;
   }
 
-  // Cap reached — escalate to Max.
+  if (decision.action === "promote") {
+    // Cap reached on baby's normal model: requeue with the strong model latched
+    // (promoted) and a fresh retry budget. The requeued attempt resumes from the
+    // latest checkpoint — same task, bigger inference.
+    const { blockedReason: _r, blockedQuestion: _q, ...rest } = meta;
+    store.writeMeta({
+      ...rest,
+      status: "queued" as const,
+      stallRetries: decision.stallRetries,
+      promoted: true,
+      updatedAt: clock.nowIso(),
+    });
+    return decision;
+  }
+
+  // Cap reached — escalate to Max. After a promotion the strong model also
+  // stalled out, so say so.
   store.writeMeta({
     ...meta,
     blockedReason: "human_decision" as const,
-    blockedQuestion: `Auto-retried ${decision.stallRetries}× after stalling and stalled again — needs Max. Last stall: ${meta.blockedQuestion ?? "(no detail)"}`,
+    blockedQuestion: meta.promoted
+      ? `Stalled to the retry cap even after promoting baby to the strong model — needs Max. Last stall: ${meta.blockedQuestion ?? "(no detail)"}`
+      : `Auto-retried ${decision.stallRetries}× after stalling and stalled again — needs Max. Last stall: ${meta.blockedQuestion ?? "(no detail)"}`,
     updatedAt: clock.nowIso(),
   });
+  return decision;
 };
 
 // Startup sweep for stalled runs (R10): a wedge that outlived its process —
@@ -292,6 +346,7 @@ export const recoverStalledRunsAtStartup = (
   store: Store,
   maxStallRetries: number,
   clock: Clock,
+  promoteAtCap = true,
 ): void => {
   const runs = store.listRunIds();
 
@@ -301,7 +356,7 @@ export const recoverStalledRunsAtStartup = (
       continue;
     }
 
-    const decision = decideStallRecovery(meta, maxStallRetries);
+    const decision = decideStallRecovery(meta, maxStallRetries, promoteAtCap);
     if (decision.action === "none") {
       continue;
     }
@@ -315,11 +370,23 @@ export const recoverStalledRunsAtStartup = (
         blockedQuestion: undefined,
         updatedAt: clock.nowIso(),
       });
+    } else if (decision.action === "promote") {
+      store.writeMeta({
+        ...meta,
+        status: "queued" as const,
+        stallRetries: decision.stallRetries,
+        promoted: true,
+        blockedReason: undefined,
+        blockedQuestion: undefined,
+        updatedAt: clock.nowIso(),
+      });
     } else if (decision.action === "escalate") {
       store.writeMeta({
         ...meta,
         blockedReason: "human_decision" as const,
-        blockedQuestion: `stall retry cap reached (${maxStallRetries}) for run ${runId}`,
+        blockedQuestion: meta.promoted
+          ? `stall retry cap reached on the promoted (strong) model for run ${runId}`
+          : `stall retry cap reached (${maxStallRetries}) for run ${runId}`,
         updatedAt: clock.nowIso(),
       });
     }

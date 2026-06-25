@@ -72,9 +72,32 @@ test("decideStallRecovery: wedged park under the cap → requeue, count incremen
   );
 });
 
-test("decideStallRecovery: wedged park at the cap → escalate", () => {
+test("decideStallRecovery: wedged park at the cap → promote (one set on the strong model)", () => {
   assert.deepEqual(
     decideStallRecovery({ status: "blocked", blockedReason: "wedged", stallRetries: 2 }, 2),
+    {
+      action: "promote",
+      stallRetries: 0,
+    },
+  );
+});
+
+test("decideStallRecovery: wedged at the cap AFTER promotion → escalate", () => {
+  assert.deepEqual(
+    decideStallRecovery(
+      { status: "blocked", blockedReason: "wedged", stallRetries: 2, promoted: true },
+      2,
+    ),
+    {
+      action: "escalate",
+      stallRetries: 2,
+    },
+  );
+});
+
+test("decideStallRecovery: wedged at the cap with promoteAtCap disabled → escalate", () => {
+  assert.deepEqual(
+    decideStallRecovery({ status: "blocked", blockedReason: "wedged", stallRetries: 2 }, 2, false),
     {
       action: "escalate",
       stallRetries: 2,
@@ -104,9 +127,25 @@ test("decideStallRecovery: non-blocked statuses are never touched", () => {
   });
 });
 
-test("decideStallRecovery: maxStallRetries 0 disables auto-recovery", () => {
+test("decideStallRecovery: maxStallRetries 0 with promoteAtCap → promote once, then escalate", () => {
+  // cap=0 means no retries on the normal model, but promote-at-cap still grants
+  // ONE set on the strong model before parking for Max.
   assert.deepEqual(
     decideStallRecovery({ status: "blocked", blockedReason: "wedged", stallRetries: 0 }, 0),
+    { action: "promote", stallRetries: 0 },
+  );
+  assert.deepEqual(
+    decideStallRecovery(
+      { status: "blocked", blockedReason: "wedged", stallRetries: 0, promoted: true },
+      0,
+    ),
+    { action: "escalate", stallRetries: 0 },
+  );
+});
+
+test("decideStallRecovery: maxStallRetries 0 + promoteAtCap disabled → escalate immediately", () => {
+  assert.deepEqual(
+    decideStallRecovery({ status: "blocked", blockedReason: "wedged", stallRetries: 0 }, 0, false),
     { action: "escalate", stallRetries: 0 },
   );
 });

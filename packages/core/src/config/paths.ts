@@ -14,6 +14,7 @@ export type Paths = {
   stagedFile: (runId: string) => string;
   runsDir: string;
   activeRunFile: string;
+  activeConvergenceFile: string;
   xdgConfigHome: string;
   opencodeConfigFile: string;
   serveLogFile: string;
@@ -50,6 +51,7 @@ export const makePaths = (stateRoot: string): Paths => {
     stagedFile: (runId) => join(root, "staged", `${runId}.md`),
     runsDir,
     activeRunFile: join(root, "active-run.json"),
+    activeConvergenceFile: join(root, "active-convergence.json"),
     xdgConfigHome: join(root, "xdg"),
     opencodeConfigFile: join(root, "xdg", "opencode", "opencode.json"),
     serveLogFile: join(root, "opencode-serve.log"),

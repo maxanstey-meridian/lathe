@@ -103,6 +103,8 @@ export type Supervisor = {
   isChainTip(runId: string): boolean;
   /** Latest reviewer verdict summary for a run (from store.readDecisions). */
   lastVerdict(runId: string): string | null;
+  /** Staged entries for chain-walking in error messages. */
+  listStaged(): Array<{ runId: string; parentRunId: string | undefined }>;
 };
 
 // ---------------------------------------------------------------------------
@@ -261,6 +263,10 @@ export const createSupervisor = (
         );
       if (!verdict) return null;
       return verdict.answer ?? null;
+    },
+
+    listStaged(): Array<{ runId: string; parentRunId: string | undefined }> {
+      return store.listStaged().map(s => ({ runId: s.runId, parentRunId: s.parentRunId }));
     },
 
     async stop(): Promise<void> {

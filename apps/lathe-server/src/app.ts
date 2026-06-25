@@ -16,6 +16,9 @@ import type { LatheContract, LatheEvent, RejectRunRequest } from "@lathe/contrac
 export type { LatheEvent };
 import contract from "@lathe/contract/generated/api.contract.json" with { type: "json" };
 
+import type { RunMeta } from "@lathe/core";
+import type { RunDtoCtx } from "./run-to-dto.js";
+import { RunNotFoundError, NonChainTipError } from "./supervisor.js";
 import type { Supervisor } from "./supervisor.js";
 import { configToDto } from "./config-to-dto.js";
 import { runToSummary, runToDetail } from "./run-to-dto.js";
@@ -114,7 +117,7 @@ export const createApp = (
         try {
           supervisor.abortRun(params.runId);
         } catch (err) {
-          if (err instanceof Error && err.name === "RunNotFoundError") {
+          if (err instanceof RunNotFoundError) {
             throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
           }
           throw err;
@@ -131,8 +134,8 @@ export const createApp = (
         try {
           supervisor.acceptRun(params.runId);
         } catch (err) {
-          if (err instanceof Error && err.name === "NonChainTipError") {
-            const tip = findChainTip(supervisor);
+          if (err instanceof NonChainTipError) {
+            const tip = findChainTip(supervisor, params.runId);
             throw rivetHttpError(409, {
               code: "chain_tip_required",
               message: `${params.runId} is not a chain tip — accept ${tip} first`,
@@ -220,20 +223,27 @@ export const createApp = (
 // Handler helpers
 // ---------------------------------------------------------------------------
 
-import type { RunDtoCtx } from "./run-to-dto.js";
-import type { RunMeta } from "@lathe/core";
-
 const buildDtoCtx = (sup: Supervisor, meta: RunMeta): RunDtoCtx => ({
   isChainTip: sup.isChainTip(meta.runId),
   contextWindow: sup.config.baby.contextWindow,
   lastVerdict: sup.lastVerdict(meta.runId),
 });
 
-/** Find the first chain-tip run for use in error messages (accepting the tip unblocks the chain). */
-const findChainTip = (sup: Supervisor): string => {
+/** Find the tip of the chain containing failingRunId by walking up from each tip. */
+const findChainTip = (sup: Supervisor, failingRunId: string): string => {
+  const staged = sup.listStaged();
   const runs = sup.listRuns();
-  for (const run of runs) {
-    if (sup.isChainTip(run.runId)) return run.runId;
+
+  const tips = runs.filter(r => sup.isChainTip(r.runId));
+
+  for (const tip of tips) {
+    let current: string | undefined = tip.runId;
+    while (current) {
+      if (current === failingRunId) return tip.runId;
+      const entry = staged.find(s => s.runId === current);
+      current = entry?.parentRunId;
+    }
   }
-  return runs.at(-1)?.runId ?? "unknown";
+
+  return tips.at(0)?.runId ?? runs.at(-1)?.runId ?? "unknown";
 };

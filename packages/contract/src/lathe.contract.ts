@@ -25,7 +25,6 @@ export type RunStatus =
   | "paused"
   | "converged" // super-daddy passed; awaiting accept/reject
   | "accepted" // merged to base, branch deleted
-  | "rejected"
   | "aborted"
   | "failed";
 

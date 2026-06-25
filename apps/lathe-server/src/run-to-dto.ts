@@ -22,10 +22,6 @@ const DOMAIN_TO_WIRE: Record<RunMeta["status"], RunStatus> = {
   running: "running",
   interrupted: "paused",
   ready_for_review: "converged",
-  // GAP: domain 'blocked' has no direct wire equivalent. The wire union has
-  // 'rejected' but rejectRun sets status to 'blocked', never 'rejected'.
-  // Mapped to 'paused' — blocked is a recoverable/non-terminal state
-  // (human_decision, scope_expansion, stop_condition, wedged are all retryable).
   blocked: "paused",
   failed: "failed",
   accepted: "accepted",
@@ -33,13 +29,12 @@ const DOMAIN_TO_WIRE: Record<RunMeta["status"], RunStatus> = {
 } as const satisfies Record<RunMeta["status"], RunStatus>;
 
 /**
- * Map domain status → wire RunStatus.
+ * Map domain status → wire RunStatus. Exhaustive — every domain state
+ * has a wire case, no fallthrough default.
  *
- * GAP: domain 'blocked' has no direct wire equivalent. The wire union has
- * 'rejected' but rejectRun sets status to 'blocked' (never 'rejected').
- * 'blocked' maps to 'paused' (recoverable state, not terminal).
- *
- * GAP: wire 'rejected' has no domain source.
+ * Note: both `interrupted` and `blocked` map to `"paused"` (recoverable
+ * state). Multiple domain states share one wire value; the wire union
+ * has no unreachable values.
  */
 export const mapStatus = (domain: RunMeta["status"]): RunStatus =>
   DOMAIN_TO_WIRE[domain];

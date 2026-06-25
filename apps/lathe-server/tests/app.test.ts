@@ -24,7 +24,7 @@ const defaultConfig = {
 
 const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
   const metaStore = new Map<string, RunMeta>();
-  const stagedParents = new Set<string>();
+  const stagedEntries: Array<{ runId: string; parentRunId: string }> = [];
 
   const base = {
     stop: async () => {},
@@ -68,7 +68,7 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
     },
 
     acceptRun: (runId: string): number => {
-      if (stagedParents.has(runId)) throw new NonChainTipError(runId);
+      if (stagedEntries.some(s => s.parentRunId === runId)) throw new NonChainTipError(runId);
       const meta = metaStore.get(runId);
       if (!meta) throw new RunNotFoundError(runId);
       metaStore.set(runId, { ...meta, status: "accepted" as const, updatedAt: new Date().toISOString() });
@@ -81,7 +81,9 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
       metaStore.set(runId, { ...meta, status: "blocked" as const, updatedAt: new Date().toISOString() });
     },
 
-    isChainTip: (runId: string): boolean => !stagedParents.has(runId),
+    isChainTip: (runId: string): boolean => !stagedEntries.some(s => s.parentRunId === runId),
+
+    listStaged: (): Array<{ runId: string; parentRunId: string }> => stagedEntries,
 
     lastVerdict: (_runId: string): string | null => "approved",
   };
@@ -315,9 +317,10 @@ test("GetConfig returns ConfigDto", async () => {
   ok("thresholds" in body);
 });
 
-test("AcceptRun on mid-chain link returns 409", async () => {
+test("AcceptRun on mid-chain link returns 409 naming correct tip", async () => {
   const parentRunId = "parent-chain";
-  const meta = {
+  const childRunId = "child-chain";
+  const parentMeta = {
     runId: parentRunId,
     status: "ready_for_review" as const,
     attempt: 1,
@@ -331,11 +334,28 @@ test("AcceptRun on mid-chain link returns 409", async () => {
     updatedAt: new Date().toISOString(),
     queuedAt: new Date().toISOString(),
   } as RunMeta;
+  const childMeta = {
+    runId: childRunId,
+    status: "queued" as const,
+    attempt: 1,
+    repo: "/tmp/test",
+    base: "main",
+    branch: "meridian/child-chain",
+    worktree: "/tmp/w",
+    stallRetries: 0,
+    reorientRetries: 0,
+    reviewerUnreachable: 0,
+    updatedAt: new Date().toISOString(),
+    queuedAt: new Date().toISOString(),
+  } as RunMeta;
 
   const supervisor = makeFakeSupervisor({
-    getRun: (id: string) => (id === parentRunId ? meta : undefined),
-    isChainTip: (id: string) => id !== parentRunId,
+    getRun: (id: string) => (id === parentRunId ? parentMeta : id === childRunId ? childMeta : undefined),
+    listRuns: () => [parentMeta, childMeta],
+    isChainTip: (id: string) => id === childRunId,
   });
+
+  supervisor.listStaged().push({ runId: childRunId, parentRunId: parentRunId });
   const app = createApp(supervisor.appDeps, supervisor);
 
   const req = new Request(`http://localhost/runs/${parentRunId}/accept`, { method: "POST" });
@@ -344,6 +364,73 @@ test("AcceptRun on mid-chain link returns 409", async () => {
   const body = await res.json() as { code: string; message: string };
   equal(body.code, "chain_tip_required");
   ok(body.message.includes("not a chain tip"));
+  ok(body.message.includes(childRunId), `409 message names correct tip (${childRunId}), not an unrelated chain's tip`);
+});
+
+test("AcceptRun 409 names the tip of the correct chain when multiple chains exist", async () => {
+  const aMeta = {
+    runId: "a-chain",
+    status: "ready_for_review" as const,
+    attempt: 1,
+    repo: "/tmp/test",
+    base: "main",
+    branch: "meridian/a-chain",
+    worktree: "/tmp/w",
+    stallRetries: 0,
+    reorientRetries: 0,
+    reviewerUnreachable: 0,
+    updatedAt: new Date().toISOString(),
+    queuedAt: new Date().toISOString(),
+  } as RunMeta;
+  const bMeta = {
+    runId: "b-chain",
+    status: "ready_for_review" as const,
+    attempt: 1,
+    repo: "/tmp/test",
+    base: "main",
+    branch: "meridian/b-chain",
+    worktree: "/tmp/w",
+    stallRetries: 0,
+    reorientRetries: 0,
+    reviewerUnreachable: 0,
+    updatedAt: new Date().toISOString(),
+    queuedAt: new Date().toISOString(),
+  } as RunMeta;
+  const bChildMeta = {
+    runId: "b-child",
+    status: "queued" as const,
+    attempt: 1,
+    repo: "/tmp/test",
+    base: "main",
+    branch: "meridian/b-child",
+    worktree: "/tmp/w",
+    stallRetries: 0,
+    reorientRetries: 0,
+    reviewerUnreachable: 0,
+    updatedAt: new Date().toISOString(),
+    queuedAt: new Date().toISOString(),
+  } as RunMeta;
+
+  const supervisor = makeFakeSupervisor({
+    getRun: (id: string) => (id === "a-chain" ? aMeta : id === "b-chain" ? bMeta : id === "b-child" ? bChildMeta : undefined),
+    listRuns: () => [aMeta, bMeta, bChildMeta],
+    isChainTip: (id: string) => id === "a-chain" || id === "b-child",
+  });
+
+  // Chain A: a-chain is standalone (no children).
+  // Chain B: b-chain → b-child (tip is b-child).
+  supervisor.listStaged().push({ runId: "b-child", parentRunId: "b-chain" });
+
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  // Accept b-chain (not a tip) — should name b-child, NOT a-chain.
+  const req = new Request("http://localhost/runs/b-chain/accept", { method: "POST" });
+  const res = await app.request(req);
+  equal(res.status, 409);
+  const body = await res.json() as { code: string; message: string };
+  equal(body.code, "chain_tip_required");
+  ok(body.message.includes("b-child"), "409 names b-child (tip of the correct chain), not a-chain");
+  ok(!body.message.includes("a-chain"), "409 does not name a-chain (tip of unrelated chain)");
 });
 
 test("AbortRun for unknown runId returns 404", async () => {
@@ -688,7 +775,6 @@ test("status mapping handles all domain values", async () => {
   strictEqual(mapStatus("running"), "running");
   strictEqual(mapStatus("interrupted"), "paused");
   strictEqual(mapStatus("ready_for_review"), "converged");
-  // blocked → paused (contract gap: no direct wire equivalent)
   strictEqual(mapStatus("blocked"), "paused");
   strictEqual(mapStatus("failed"), "failed");
   strictEqual(mapStatus("accepted"), "accepted");

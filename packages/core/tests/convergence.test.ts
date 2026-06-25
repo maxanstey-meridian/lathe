@@ -309,6 +309,21 @@ test("extractAuthoredPacket: no frontmatter → trimmed text (parse fails downst
   assert.equal(extractAuthoredPacket("  no packet here  "), "no packet here");
 });
 
+test("extractAuthoredPacket: unwraps a LEADING code fence around the whole packet", () => {
+  const reply = "```markdown\n---\nrepo: x\n---\n\n# body\n```";
+  const out = extractAuthoredPacket(reply);
+  assert.ok(out.startsWith("---\n"));
+  assert.ok(out.includes("# body"));
+  assert.ok(!out.includes("```"));
+});
+
+test("extractAuthoredPacket: tolerates CRLF line endings", () => {
+  const reply = "---\r\nrepo: x\r\n---\r\n\r\n# body\r\n";
+  const out = extractAuthoredPacket(reply);
+  assert.ok(out.startsWith("---\n"));
+  assert.ok(!out.includes("\r"));
+});
+
 // --- stampFollowupLineage: authored intent + engine-stamped lineage ---
 
 const AUTHORED = `---
@@ -401,6 +416,29 @@ test("stampFollowupLineage: a repaired outcome is never also a regression guard"
 
 test("stampFollowupLineage: a reply with no frontmatter throws (authoring failure)", () => {
   assert.throws(() => stampFollowupLineage("I could not write a packet.", LINEAGE));
+});
+
+test("stampFollowupLineage: a fence-wrapped authored reply still admits (the live park bug)", () => {
+  const wrapped = "```markdown\n" + AUTHORED + "```\n";
+  const parsed = parsePacketShape(
+    stampFollowupLineage(wrapped, LINEAGE),
+    "20260614-180000-feature-fix2",
+  );
+  assert.ok(parsed.ok, parsed.ok ? "" : parsed.problems.join("; "));
+  if (parsed.ok) {
+    assert.equal(parsed.packet.frontmatter.summary, "fix the typecheck");
+    assert.equal(parsed.packet.frontmatter.base, "meridian/parent");
+    assert.ok(parsed.packet.body.includes("Repair it."));
+  }
+});
+
+test("stampFollowupLineage: narration before the frontmatter still admits", () => {
+  const narrated = "Here is the follow-up packet you asked for:\n\n" + AUTHORED;
+  const parsed = parsePacketShape(
+    stampFollowupLineage(narrated, LINEAGE),
+    "20260614-180000-feature-fix2",
+  );
+  assert.ok(parsed.ok, parsed.ok ? "" : parsed.problems.join("; "));
 });
 
 // --- upsertPass: first pass, append, replace ---

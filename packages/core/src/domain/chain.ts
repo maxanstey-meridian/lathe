@@ -2,7 +2,7 @@ import { basename } from "path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { type Campaign } from "./campaign.js";
-import { PacketFrontmatter, FRONTMATTER_RE } from "./packet.js";
+import { PacketFrontmatter, extractFrontmatter } from "./packet.js";
 import { type RunMeta } from "./run.js";
 
 // ---------------------------------------------------------------------------
@@ -33,13 +33,13 @@ export const parseStaged = (raw: string, fileName: string): StageParse => {
       problems: [`packet filename must be YYYYMMDD-HHMMSS-<slug>.md, got: ${fileName}`],
     };
   }
-  const match = FRONTMATTER_RE.exec(raw);
-  if (!match || match[1] === undefined) {
+  const parts = extractFrontmatter(raw);
+  if (!parts) {
     return { ok: false, problems: ["no YAML frontmatter block (--- ... ---) at top of packet"] };
   }
   let yamlValue: unknown;
   try {
-    yamlValue = parseYaml(match[1]);
+    yamlValue = parseYaml(parts.yaml);
   } catch (err) {
     return {
       ok: false,

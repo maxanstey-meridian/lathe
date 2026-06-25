@@ -770,6 +770,9 @@ export type AuthorFollowupInput = {
   pass: number; // the NEW pass number (parent pass + 1) — for the author's urgency only.
   campaignId: string; // session-scoping key (informational; the engine stamps it).
   priorProblems?: string[]; // admission problems from a prior attempt, fed back to fix.
+  priorRawSnippet?: string; // the START of what the prior attempt actually emitted, so
+  // the model can SEE its own malformed output rather than being told an error about
+  // output it believes was fine. Omitted on the first attempt.
 };
 
 const renderBlockerLines = (blockers: Finding[]): string =>
@@ -795,12 +798,20 @@ const renderBlockerLines = (blockers: Finding[]): string =>
 // and seals regression_outcomes — the same fields the skill says never
 // to author).
 export const renderFollowupAuthoring = (input: AuthorFollowupInput): string => {
+  const receivedBlock = input.priorRawSnippet
+    ? `\nFor reference, this is the START of what you actually sent last time — it is NOT a clean packet (a packet must BEGIN with \`---\`, with no prose or code fence before it):
+<<<RECEIVED
+${input.priorRawSnippet}
+RECEIVED
+`
+    : "";
+
   const priorProblemsBlock =
     input.priorProblems && input.priorProblems.length > 0
       ? `## Your previous attempt was REJECTED at admission
 
 ${input.priorProblems.map((p) => `- ${p}`).join("\n")}
-
+${receivedBlock}
 Fix exactly these and re-emit the FULL packet (frontmatter + body). Do not apologise or explain — just the corrected packet.
 
 `
@@ -851,5 +862,7 @@ ${renderBlockerLines(input.blockers)}
 ${sealedBlock}
 ## Output
 Reply with ONLY the packet — the YAML frontmatter block (\`---\` … \`---\`) followed
-by the markdown body. No prose, no code fences, nothing before or after it.`;
+by the markdown body. The FIRST character of your reply must be \`---\`. No prose, no
+commentary, no code fences (do NOT wrap the packet in \`\`\`) — nothing before or
+after the packet.`;
 };

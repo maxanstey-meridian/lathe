@@ -1,6 +1,12 @@
 import assert from "node:assert";
 import { test } from "node:test";
-import { parsePacketShape, redactPacketInfra, stampBase } from "../src/domain/index.ts";
+import {
+  extractFrontmatter,
+  normalizeForFrontmatter,
+  parsePacketShape,
+  redactPacketInfra,
+  stampBase,
+} from "../src/domain/index.ts";
 
 // ---- parsePacketShape ----
 
@@ -373,4 +379,83 @@ test("stampBase: returns raw when no frontmatter", () => {
   const raw = "no frontmatter here";
   const result = stampBase(raw, "main");
   assert.strictEqual(result, raw);
+});
+
+// ---- tolerant frontmatter extraction (the followup-authoring robustness fix) ----
+
+const BARE = `---
+repo: /tmp/repo
+base: main
+outcomes:
+  - id: feature-a
+    description: Adds feature A
+expected_surface:
+  - src/**
+verification:
+  - command: pnpm test
+---
+
+# body
+
+Repair it.
+`;
+
+// The parse a clean packet produces — every tolerant variant must match this.
+const parseBare = () => {
+  const r = parsePacketShape(BARE, "20260618-030000-test");
+  assert.ok(r.ok);
+  return r.ok ? r.packet : undefined;
+};
+
+test("tolerant: a code fence wrapping the whole document parses like the bare packet", () => {
+  const wrapped = "```markdown\n" + BARE + "```\n";
+  const got = parsePacketShape(wrapped, "20260618-030000-test");
+  const bare = parseBare();
+  assert.ok(got.ok, got.ok ? "" : got.problems.join("; "));
+  if (got.ok && bare) {
+    assert.deepEqual(got.packet.frontmatter, bare.frontmatter);
+    // Body content matches; fence-stripping may drop the trailing newline.
+    assert.equal(got.packet.body.trim(), bare.body.trim());
+    assert.ok(!got.packet.body.includes("```"));
+  }
+});
+
+test("tolerant: narration before the first --- (multi-message harvest) is skipped", () => {
+  const narrated = "Let me inspect the tree.\n\nHere is the packet:\n\n" + BARE;
+  const got = parsePacketShape(narrated, "20260618-030000-test");
+  const bare = parseBare();
+  assert.ok(got.ok, got.ok ? "" : got.problems.join("; "));
+  if (got.ok && bare) {
+    assert.deepEqual(got.packet.frontmatter, bare.frontmatter);
+    assert.equal(got.packet.body, bare.body);
+  }
+});
+
+test("tolerant: trailing whitespace on the --- delimiter lines parses", () => {
+  const dirty = BARE.replace("---\nrepo:", "---  \nrepo:").replace(
+    "\n---\n\n# body",
+    "\n---\t\n\n# body",
+  );
+  const got = parsePacketShape(dirty, "20260618-030000-test");
+  assert.ok(got.ok, got.ok ? "" : got.problems.join("; "));
+});
+
+test("tolerant: CRLF line endings parse", () => {
+  const crlf = BARE.replace(/\n/g, "\r\n");
+  const got = parsePacketShape(crlf, "20260618-030000-test");
+  const bare = parseBare();
+  assert.ok(got.ok, got.ok ? "" : got.problems.join("; "));
+  if (got.ok && bare) {
+    assert.deepEqual(got.packet.frontmatter, bare.frontmatter);
+  }
+});
+
+test("tolerant: a reply with no frontmatter still fails closed (never invents one)", () => {
+  assert.equal(extractFrontmatter("I could not write a packet."), undefined);
+  const got = parsePacketShape("just prose, no packet", "20260618-030000-test");
+  assert.equal(got.ok, false);
+});
+
+test("tolerant: normalizeForFrontmatter is a no-op on an already-clean packet", () => {
+  assert.equal(normalizeForFrontmatter(BARE), BARE);
 });

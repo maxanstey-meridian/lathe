@@ -1,3 +1,4 @@
+import type { LatheEvent, Reviewer } from "@lathe/contract";
 /**
  * STAGING REFERENCE — drop into apps/lathe-server/src (or @lathe/core) in P00.
  *
@@ -13,7 +14,6 @@
  * full projection lives in the supervisor packet (P02); this is its seed.
  */
 import type { JournalEvent } from "@lathe/core";
-import type { LatheEvent, Reviewer } from "@lathe/contract";
 
 /** Per-run state the supervisor holds and the journal event can't supply. */
 export interface ProjectionContext {
@@ -28,10 +28,7 @@ export interface ProjectionContext {
  * dashboard projection. Exhaustive over the journal union — a new `event`
  * variant is a compile error here (good: forces a projection decision).
  */
-export const projectJournalEvent = (
-  e: JournalEvent,
-  ctx: ProjectionContext,
-): LatheEvent | null => {
+export const projectJournalEvent = (e: JournalEvent, ctx: ProjectionContext): LatheEvent | null => {
   const at = e.at;
   const runId = ctx.runId;
 
@@ -44,7 +41,13 @@ export const projectJournalEvent = (
       return { kind: "turn.started", runId, pass: ctx.pass, turn: e.turn ?? 0, at };
 
     case "turn_ended":
-      return { kind: "tokens", runId, contextTokens: e.contextTokens, window: ctx.contextWindow, at };
+      return {
+        kind: "tokens",
+        runId,
+        contextTokens: e.contextTokens,
+        window: ctx.contextWindow,
+        at,
+      };
 
     case "tool_call":
       // Only surface the gate decision, not every call. Denied → block.
@@ -85,6 +88,16 @@ export const projectJournalEvent = (
     case "model_promoted":
       return { kind: "log", runId, line: `model promoted: ${e.from} -> ${e.to}`, at };
 
+    case "authoring_attempt":
+      return {
+        kind: "log",
+        runId,
+        line: e.ok
+          ? `follow-up authoring attempt ${e.attempt} admitted`
+          : `follow-up authoring attempt ${e.attempt} failed: ${e.problems.join("; ")}`,
+        at,
+      };
+
     // Internal-only: no dashboard projection.
     case "gate_cleared":
     case "planner_exchange":
@@ -95,7 +108,6 @@ export const projectJournalEvent = (
     case "report_rejected":
     case "report_accepted":
     case "ladder_step":
-    case "super_review":
       return null;
 
     default: {

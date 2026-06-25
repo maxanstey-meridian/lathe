@@ -135,6 +135,17 @@ export const JournalEvent = z.discriminatedUnion("event", [
     from: z.string(),
     to: z.string(),
   }),
+  // Super-daddy authored a follow-up repair packet. Persisted for EVERY attempt
+  // (success and failure) so an authoring failure is diagnosable post-hoc — the
+  // raw reply is otherwise discarded. `authoredRaw` is the full model reply.
+  z.object({
+    ...base,
+    event: z.literal("authoring_attempt"),
+    attempt: z.number().int(),
+    ok: z.boolean(),
+    problems: z.array(z.string()).default([]),
+    authoredRaw: z.string(),
+  }),
 ]);
 export type JournalEvent = z.infer<typeof JournalEvent>;
 
@@ -192,6 +203,8 @@ export const renderJournalEvent = (e: JournalEvent): string => {
       return `${t} 🧭 reorient #${e.attempt} (Baby derailed) → fix: ${e.fix.slice(0, 120)}`;
     case "model_promoted":
       return `${t} ⬆ model promoted: ${e.from} → ${e.to}`;
+    case "authoring_attempt":
+      return `${t} ${e.ok ? "✍︎" : "✗"} follow-up authoring attempt ${e.attempt}${e.ok ? " admitted" : `: ${e.problems.join("; ")}`}`;
   }
 };
 

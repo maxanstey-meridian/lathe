@@ -209,7 +209,16 @@ export const makeExecuteRun =
     }
     let result: TurnLoopResult;
     try {
-      result = await turnLoop(ports, packet, worktree, babySessionId, channel, seed, deadlineMs, signal);
+      result = await turnLoop(
+        ports,
+        packet,
+        worktree,
+        babySessionId,
+        channel,
+        seed,
+        deadlineMs,
+        signal,
+      );
     } finally {
       bridge.endRun(ref);
     }

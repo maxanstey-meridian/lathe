@@ -217,7 +217,9 @@ body
     ok(fetchOpts.fetchBranchFromCloneCalled, "fetchBranchFromClone should be called");
     // Base off the tip branch — its work lives only in the clone until accept.
     ok(
-      store.readQueuePacket("20260101-000000-child")?.includes("base: meridian/20260101-000000-tip"),
+      store
+        .readQueuePacket("20260101-000000-child")
+        ?.includes("base: meridian/20260101-000000-tip"),
       "child should be based on the tip branch",
     );
     await cleanTemp(tmp);

@@ -1,6 +1,6 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
-import { FRONTMATTER_RE, type OutcomeDef } from "./packet.js";
+import { extractFrontmatter, normalizeForFrontmatter, type OutcomeDef } from "./packet.js";
 import { FinalReviewVerdict } from "./review.js";
 
 // ---------------------------------------------------------------------------
@@ -250,22 +250,14 @@ export const parseSuperReview = (raw: string): SuperReview => {
 // Super-daddy replies with the packet markdown; it MAY precede it with tool
 // narration or wrap it in a code fence. Slice from the first frontmatter delimiter
 // and drop any trailing fence so parsePacketShape (anchored at ^---) can parse it.
+// extractAuthoredPacket — kept as a named view onto the shared tolerant
+// normaliser (packet.ts). A reply WITH a frontmatter block comes back as the
+// cleaned packet (narration/fences/CRLF/whitespace stripped) with a trailing
+// newline; a reply with no frontmatter comes back trimmed so the caller fails
+// closed downstream.
 export const extractAuthoredPacket = (text: string): string => {
-  const lines = text.split("\n");
-  const start = lines.findIndex((l) => l.trim() === "---");
-  if (start === -1) {
-    return text.trim();
-  }
-  const slice = lines.slice(start);
-  while (slice.length > 0) {
-    const last = slice[slice.length - 1];
-    if (last !== undefined && last.trim().startsWith("```")) {
-      slice.pop();
-    } else {
-      break;
-    }
-  }
-  return `${slice.join("\n").trim()}\n`;
+  const normalized = normalizeForFrontmatter(text);
+  return extractFrontmatter(text) ? `${normalized.trim()}\n` : normalized.trim();
 };
 
 export type FollowupLineage = {
@@ -285,15 +277,14 @@ export type FollowupLineage = {
 // the caller treats that as an authoring failure (re-ask, then escalate), never a
 // silent stall.
 export const stampFollowupLineage = (authoredRaw: string, lineage: FollowupLineage): string => {
-  const packet = extractAuthoredPacket(authoredRaw);
-  const match = packet.match(FRONTMATTER_RE);
-  if (!match || match[1] === undefined) {
+  const parts = extractFrontmatter(authoredRaw);
+  if (!parts) {
     throw new Error("stampFollowupLineage: authored reply has no YAML frontmatter block");
   }
 
   let parsed: unknown;
   try {
-    parsed = parseYaml(match[1]);
+    parsed = parseYaml(parts.yaml);
   } catch (err) {
     throw new Error(
       `stampFollowupLineage: authored frontmatter is not valid YAML: ${err instanceof Error ? err.message : String(err)}`,
@@ -329,7 +320,7 @@ export const stampFollowupLineage = (authoredRaw: string, lineage: FollowupLinea
     promoted: lineage.promoted === true,
   };
 
-  const body = (match[2] ?? "").trim();
+  const body = parts.body.trim();
   return `---\n${stringifyYaml(frontmatter).trimEnd()}\n---\n\n${body}\n`;
 };
 

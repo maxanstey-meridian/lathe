@@ -69,19 +69,82 @@ const RUNID_RE = /^\d{8}-\d{6}-[a-z0-9-]+$/;
 const INFRA_KEYS_RE = /^(repo|base|campaign_id|parent_run_id|pass|promoted):/;
 
 // ---------------------------------------------------------------------------
+// Tolerant frontmatter extraction (CONTRACT §4 K3) — the ONE place every caller
+// goes through to split a packet into (yaml, body).
+//
+// A model authoring a packet (super-daddy's repair pass, whose reply is several
+// assistant messages joined) or a hand-written packet wraps or dirties the
+// frontmatter in predictable ways the strict FRONTMATTER_RE rejects even though
+// the packet inside is well-formed: narration before the first `---`, a code fence
+// around the whole document, CRLF endings, a BOM, or trailing whitespace on the
+// `---` delimiter lines. normalizeForFrontmatter cleans exactly those and nothing
+// else, so an already-clean packet is returned byte-for-byte unchanged and parses
+// identically. It never invents frontmatter: a reply with no `---` line comes back
+// (CRLF/BOM aside) untouched, and the caller fails closed.
+
+export const normalizeForFrontmatter = (raw: string): string => {
+  const text = raw.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  const lines = text.split("\n");
+
+  // Skip any preamble before the first `---` line (narration, a leading ```fence).
+  const open = lines.findIndex((l) => l.trim() === "---");
+  if (open === -1) {
+    return text;
+  }
+  const sliced = lines.slice(open);
+
+  // Drop a trailing code fence wrapping the packet (its opening fence, if any, was
+  // preamble and is already gone with the slice above). The fence may be followed
+  // by blank lines (a model often emits "```\n"), so look past trailing blanks to
+  // find it — but only TRUNCATE if a fence is actually there, so a fence-less
+  // packet keeps its trailing blank lines untouched (the no-op guarantee).
+  let end = sliced.length;
+  while (end > 0 && sliced[end - 1]?.trim() === "") {
+    end--;
+  }
+  if (end > 0 && sliced[end - 1]?.trim().startsWith("```")) {
+    sliced.length = end - 1;
+  }
+
+  // Clean the two frontmatter delimiters so `^---\n…\n---` matches even when they
+  // carried trailing whitespace. The opening delimiter is sliced[0] by
+  // construction; the closing one is the next bare `---`. Body `---` is left alone.
+  sliced[0] = "---";
+  for (let i = 1; i < sliced.length; i++) {
+    if (sliced[i]?.trim() === "---") {
+      sliced[i] = "---";
+      break;
+    }
+  }
+  return sliced.join("\n");
+};
+
+export type FrontmatterParts = { yaml: string; body: string };
+
+// Extract the frontmatter YAML and body from a (possibly dirty) packet string.
+// Returns undefined when there is no `--- … ---` block — callers fail closed.
+export const extractFrontmatter = (raw: string): FrontmatterParts | undefined => {
+  const match = normalizeForFrontmatter(raw).match(FRONTMATTER_RE);
+  if (!match || match[1] === undefined) {
+    return undefined;
+  }
+  return { yaml: match[1], body: match[2] ?? "" };
+};
+
+// ---------------------------------------------------------------------------
 // parsePacketShape — pure parse, no fs, no child_process (CONTRACT K3, D5)
 
 export const parsePacketShape = (raw: string, runId?: string): AdmissionResult => {
   const problems: string[] = [];
 
-  const match = raw.match(FRONTMATTER_RE);
-  if (!match || match[1] === undefined) {
+  const parts = extractFrontmatter(raw);
+  if (!parts) {
     return { ok: false, problems: ["no YAML frontmatter block (--- ... ---) at top of packet"] };
   }
 
   let yamlValue: unknown;
   try {
-    yamlValue = parseYaml(match[1]);
+    yamlValue = parseYaml(parts.yaml);
   } catch (err) {
     return {
       ok: false,
@@ -116,7 +179,7 @@ export const parsePacketShape = (raw: string, runId?: string): AdmissionResult =
 
   return {
     ok: true,
-    packet: { runId: runId ?? "", frontmatter: fm.data, body: match[2] ?? "", raw },
+    packet: { runId: runId ?? "", frontmatter: fm.data, body: parts.body, raw },
   };
 };
 
@@ -124,29 +187,29 @@ export const parsePacketShape = (raw: string, runId?: string): AdmissionResult =
 // redactPacketInfra — strip infra keys from what models see (CONTRACT K4)
 
 export const redactPacketInfra = (raw: string): string => {
-  const match = FRONTMATTER_RE.exec(raw);
-  if (!match || match[1] === undefined || match[2] === undefined) {
+  const parts = extractFrontmatter(raw);
+  if (!parts) {
     return raw;
   }
-  const kept = match[1]
+  const kept = parts.yaml
     .split("\n")
     .filter((line) => !INFRA_KEYS_RE.test(line))
     .join("\n");
-  return `---\n${kept}\n---\n${match[2]}`;
+  return `---\n${kept}\n---\n${parts.body}`;
 };
 
 // ---------------------------------------------------------------------------
 // stampBase — pure half of base stamping given head branch (CONTRACT K1)
 
 export const stampBase = (raw: string, headBranch: string): string => {
-  const match = FRONTMATTER_RE.exec(raw);
-  if (!match || match[1] === undefined) {
+  const parts = extractFrontmatter(raw);
+  if (!parts) {
     return raw;
   }
 
   let parsed: unknown;
   try {
-    parsed = parseYaml(match[1]);
+    parsed = parseYaml(parts.yaml);
   } catch {
     return raw;
   }
@@ -165,7 +228,7 @@ export const stampBase = (raw: string, headBranch: string): string => {
     return raw;
   } // detached / no branch
 
-  return `---\nbase: ${headBranch}\n${match[1]}\n---\n${match[2] ?? ""}`;
+  return `---\nbase: ${headBranch}\n${parts.yaml}\n---\n${parts.body}`;
 };
 
 // ---------------------------------------------------------------------------
@@ -174,11 +237,11 @@ export const stampBase = (raw: string, headBranch: string): string => {
 // ---------------------------------------------------------------------------
 
 export const extractRepoFromYaml = (raw: string): string | undefined => {
-  const match = raw.match(/^---\n([\s\S]*?)\n---/);
-  if (!match || !match[1]) {
+  const parts = extractFrontmatter(raw);
+  if (!parts) {
     return undefined;
   }
-  const repoLine = match[1].split("\n").find((line) => /^repo:\s/.test(line));
+  const repoLine = parts.yaml.split("\n").find((line) => /^repo:\s/.test(line));
   if (!repoLine) {
     return undefined;
   }
@@ -191,11 +254,11 @@ export const extractRepoFromYaml = (raw: string): string | undefined => {
 };
 
 export const extractBaseFromYaml = (raw: string): string | undefined => {
-  const match = raw.match(/^---\n([\s\S]*?)\n---/);
-  if (!match || !match[1]) {
+  const parts = extractFrontmatter(raw);
+  if (!parts) {
     return undefined;
   }
-  const baseLine = match[1].split("\n").find((line) => /^base:\s/.test(line));
+  const baseLine = parts.yaml.split("\n").find((line) => /^base:\s/.test(line));
   if (!baseLine) {
     return undefined;
   }

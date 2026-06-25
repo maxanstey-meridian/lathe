@@ -34,7 +34,7 @@ export const startDaemon = async (userPort?: number): Promise<void> => {
 
   // 4. Start HTTP server.
   const { serve } = await import("@hono/node-server");
-  const server = serve({ fetch: app.fetch, port });
+  const server = serve({ fetch: app.fetch, port, hostname: host });
 
   console.log(`lathe daemon listening on http://${host}:${port}`);
 

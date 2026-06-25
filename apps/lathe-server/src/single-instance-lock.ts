@@ -97,14 +97,6 @@ export const acquireSingleInstanceLock = async (
   };
 
   process.once("exit", release);
-  process.once("SIGINT", () => {
-    release();
-    process.exit(130);
-  });
-  process.once("SIGTERM", () => {
-    release();
-    process.exit(143);
-  });
 
   return release;
 };

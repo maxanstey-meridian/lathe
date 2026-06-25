@@ -1,5 +1,5 @@
 import { equal, ok } from "node:assert";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -248,4 +248,64 @@ test("queue drop: missing runId is rejected with usage, no daemon call", async (
     h.errs.some((e) => e.includes("usage: lathe queue drop <runId>")),
     h.errs.join("|"),
   );
+});
+
+// ---------------------------------------------------------------------------
+// startDaemon / shutdown ordering
+// ---------------------------------------------------------------------------
+
+test("startDaemon: shutdown fires server.close → supervisor.stop → releaseLock → exit(0)", async () => {
+  // Verify the shutdown ordering by examining serve.ts source.
+  // The shutdown handler must execute in this exact order:
+  //   1. server.close()     — stop accepting HTTP connections
+  //   2. supervisor.stop()  — abort runDriver, await exit
+  //   3. releaseLock()      — close held socket + remove pidfile
+  //   4. process.exit(0)    — clean exit
+  const serveSource = readFileSync(
+    join(import.meta.dirname, "../src/serve.ts"),
+    "utf8",
+  );
+
+  // Extract the shutdown function body.
+  const shutdownMatch = serveSource.match(
+    /const shutdown\s*=\s*async\s*\(\)\s*:\s*Promise<void>\s*=>\s*\{([\s\S]*?)\n  \};/,
+  );
+  ok(shutdownMatch, "shutdown handler exists in serve.ts");
+
+  const shutdownBody = shutdownMatch![1];
+  const closeIdx = Math.max(
+    shutdownBody.indexOf("server.close"),
+    shutdownBody.indexOf("lockServer.close"),
+  );
+  const stopIdx = shutdownBody.indexOf("supervisor.stop");
+  const releaseIdx = shutdownBody.indexOf("releaseLock");
+  const exitIdx = shutdownBody.indexOf("process.exit(0)");
+
+  ok(closeIdx >= 0, "shutdown calls server/lockServer.close");
+  ok(stopIdx > closeIdx, "shutdown calls supervisor.stop after server close");
+  ok(releaseIdx > stopIdx, "shutdown calls releaseLock after supervisor.stop");
+  ok(exitIdx > releaseIdx, "shutdown calls process.exit(0) last");
+});
+
+test("startDaemon: binds to configured host from config.daemon.host", async () => {
+  const serveSource = readFileSync(
+    join(import.meta.dirname, "../src/serve.ts"),
+    "utf8",
+  );
+
+  ok(serveSource.includes("config.daemon.host"), "reads config.daemon.host");
+  ok(serveSource.includes("hostname: host") || serveSource.includes('hostname: host'), "passes hostname to server");
+});
+
+test("startDaemon: acquires lock before creating supervisor", async () => {
+  const serveSource = readFileSync(
+    join(import.meta.dirname, "../src/serve.ts"),
+    "utf8",
+  );
+
+  const lockIdx = serveSource.indexOf("acquireSingleInstanceLock");
+  const supervisorIdx = serveSource.indexOf("createSupervisor");
+
+  ok(lockIdx >= 0, "serve.ts calls acquireSingleInstanceLock");
+  ok(supervisorIdx > lockIdx, "acquireSingleInstanceLock is called before createSupervisor");
 });

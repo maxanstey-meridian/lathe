@@ -1,25 +1,6 @@
 import { createServer, type Server } from "node:net";
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 
-/**
- * Try to bind to a port to check if it is available. Binds, then immediately
- * unbinds — does not keep the port open. Returns `false` when the port is
- * already in use by another process.
- */
-const tryBindPort = (port: number, host: string): Promise<boolean> =>
-  new Promise<boolean>((resolve) => {
-    const server: Server = createServer();
-    server.once("error", () => {
-      server.close();
-      resolve(false);
-    });
-    server.once("listening", () => {
-      server.close();
-      resolve(true);
-    });
-    server.listen(port, host);
-  });
-
 export class DaemonAlreadyRunningError extends Error {
   constructor(
     public readonly pid: number,
@@ -45,25 +26,38 @@ const isAlive = (pid: number): boolean => {
 
 /**
  * Acquire the single-instance lock. Throws DaemonAlreadyRunningError if a live
- * daemon holds it. Returns a release fn.
+ * daemon holds it. Returns { server, release } — the server is the bound socket
+ * that is held for the daemon lifetime (the stricter exclusivity primitive);
+ * release cleans it up (and the supplementary pidfile).
  *
- * When `port` and `host` are provided, performs a socket bind check (stricter
- * than pidfile — a bound port cannot go stale). Falls back to pidfile +
- * liveness probe for stale-lock detection and reclamation.
+ * When `port` and `host` are provided, creates and binds a server on that
+ * port/host as the live lock. No probe — just bind or fail (EADDRINUSE).
+ * Falls back to pidfile-only for non-daemon use.
  */
 export const acquireSingleInstanceLock = async (
   lockPath: string,
   port?: number,
   host?: string,
-): Promise<() => void> => {
+): Promise<{ server: Server; release: () => void }> => {
   const bindHost = port !== undefined && !host ? "127.0.0.1" : host;
 
-  // Socket bind gate (when port is provided). A bound port cannot go stale.
+  let server: Server;
+  let heldPort = false;
+
+  // Create and bind the held server (port cannot go stale).
   if (port !== undefined && bindHost) {
-    const available = await tryBindPort(port, bindHost);
-    if (!available) {
-      throw new DaemonAlreadyRunningError(-1, String(port));
-    }
+    server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", (err) => {
+        server.close();
+        reject(new DaemonAlreadyRunningError(-1, String(port)));
+      });
+      server.listen(port, bindHost, () => resolve());
+    });
+    heldPort = true;
+  } else {
+    // No port — create a no-op server for callers that expect one.
+    server = createServer();
   }
 
   // Pidfile gate — reclaim stale locks from crashed daemons.
@@ -94,9 +88,13 @@ export const acquireSingleInstanceLock = async (
     } catch {
       /* best-effort */
     }
+    // Close the held socket if it's still listening.
+    if (heldPort) {
+      server.close();
+    }
   };
 
   process.once("exit", release);
 
-  return release;
+  return { server, release };
 };

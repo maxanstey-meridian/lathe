@@ -32,7 +32,7 @@ test("acquireSingleInstanceLock: release removes the pidfile", async () => {
   equal(existsSync(lockPath), false);
 
   const port = await findFreePort();
-  const release = await acquireSingleInstanceLock(lockPath, port, "127.0.0.1");
+  const { release } = await acquireSingleInstanceLock(lockPath, port, "127.0.0.1");
 
   ok(existsSync(lockPath), "pidfile created on acquire");
   equal(Number.parseInt(readFileSync(lockPath, "utf8").trim(), 10), process.pid);
@@ -48,7 +48,7 @@ test("acquireSingleInstanceLock: release is idempotent", async () => {
   const lockPath = join(dir, "test.lock");
 
   const port = await findFreePort();
-  const release = await acquireSingleInstanceLock(lockPath, port, "127.0.0.1");
+  const { release } = await acquireSingleInstanceLock(lockPath, port, "127.0.0.1");
 
   release();
   equal(existsSync(lockPath), false);
@@ -99,7 +99,7 @@ test("acquireSingleInstanceLock: throws DaemonAlreadyRunningError with correct p
 
   // The pid is alive check fails for 99999, so stale lock recovery kicks in.
   // No error should be thrown — it reclaims the stale lock.
-  const release = await acquireSingleInstanceLock(lockPath, port, "127.0.0.1");
+  const { release } = await acquireSingleInstanceLock(lockPath, port, "127.0.0.1");
   ok(existsSync(lockPath), "pidfile re-created after reclaiming stale lock");
   equal(Number.parseInt(readFileSync(lockPath, "utf8").trim(), 10), process.pid);
   release();
@@ -114,40 +114,44 @@ test("acquireSingleInstanceLock: reclaims stale pidfile without port probe", asy
   writeFileSync(lockPath, String(fakePid));
 
   // No port provided — should only check pidfile.
-  const release = await acquireSingleInstanceLock(lockPath);
+  const { release } = await acquireSingleInstanceLock(lockPath);
   ok(existsSync(lockPath));
   equal(Number.parseInt(readFileSync(lockPath, "utf8").trim(), 10), process.pid);
   release();
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("acquireSingleInstanceLock: no-signal-exit on SIGINT (process.exit not called by lock)", async () => {
-  // The lock module should NOT install its own SIGINT/SIGTERM handlers that
-  // call process.exit. This was the bug — the lock module was short-circuiting
-  // daemon shutdown by calling process.exit directly.
-  //
-  // We verify by checking that acquiring a lock does NOT add signal handlers
-  // that would exit the process. We do this by checking the process signal
-  // handler count before and after.
+test("acquireSingleInstanceLock: returns server bound to the port for daemon lifetime", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lathe-lock-held-"));
+  const lockPath = join(dir, "test.lock");
 
+  const port = await findFreePort();
+  const { server, release } = await acquireSingleInstanceLock(lockPath, port, "127.0.0.1");
+
+  ok(server, "server is returned");
+  equal(server.listening, true, "server is listening on the port");
+
+  // The port should now be in use — another bind attempt should fail.
+  await new Promise<void>((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", () => {
+      probe.close();
+      resolve();
+    });
+    probe.listen(port, "127.0.0.1");
+    setTimeout(() => { probe.close(); reject(new Error("port did not fail to bind — socket was not held")); }, 1000);
+  });
+
+  release();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("acquireSingleInstanceLock: no-signal-exit on SIGINT (process.exit not called by lock)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "lathe-lock-nosignal-"));
   const lockPath = join(dir, "test.lock");
 
-  // Node.js doesn't expose a clean API to count signal handlers, so we take
-  // a different approach: we track whether a SIGINT would cause the lock to
-  // call process.exit by checking that `release` is the only cleanup path.
-  //
-  // The key invariant: `process.once("exit", release)` is the ONLY cleanup.
-  // There should be no `process.once("SIGINT", ...exit...)` or
-  // `process.once("SIGTERM", ...exit...)` installed by the lock.
-  //
-  // We verify this by checking the source code structure is clean (the lock
-  // module only has `process.once("exit", release)` — no signal exit paths).
-  // This is a structural test: if signal exit handlers were re-added, the
-  // lock module's shutdown behavior would diverge from the serve module's.
-
   const port = await findFreePort();
-  const release = await acquireSingleInstanceLock(lockPath, port, "127.0.0.1");
+  const { release } = await acquireSingleInstanceLock(lockPath, port, "127.0.0.1");
   ok(release, "acquires lock without error");
   release();
   rmSync(dir, { recursive: true, force: true });

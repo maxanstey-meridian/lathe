@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { upsertPass } from "../src/domain/campaign.js";
-import { parseStaged, convergedTip, decidePromotion } from "../src/domain/chain.js";
+import {
+  parseStaged,
+  convergedTip,
+  decidePromotion,
+  childBaseFromTip,
+} from "../src/domain/chain.js";
 import {
   decideConvergence,
   parseSuperReview,
@@ -580,4 +585,40 @@ test("decidePromotion: parent converged → promote-with-base off the accepted t
 
 test("decidePromotion: converged but no accepted pass → hold (incoherent)", () => {
   assert.equal(decidePromotion("20260618-010000-head", campaign("converged", [])).action, "hold");
+});
+
+// --- childBaseFromTip ---
+
+const tipMeta = (overrides) => ({
+  runId: "20260618-010500-head-fix2",
+  status: "ready_for_review",
+  attempt: 1,
+  repo: "/tmp/repo",
+  base: "meridian/20260618-010000-head",
+  branch: "meridian/20260618-010500-head-fix2",
+  worktree: "/tmp/clone-fix2",
+  stallRetries: 0,
+  reorientRetries: 0,
+  reviewerUnreachable: 0,
+  promoted: false,
+  updatedAt: "2026-06-18T00:00:00.000Z",
+  ...overrides,
+});
+
+test("childBaseFromTip: tip not yet accepted → fetch the tip branch from its clone", () => {
+  const cb = childBaseFromTip(tipMeta());
+  assert.equal(cb.base, "meridian/20260618-010500-head-fix2");
+  assert.equal(cb.fetchFromClone, "/tmp/clone-fix2");
+});
+
+test("childBaseFromTip: tip accepted → base off acceptedInto, no fetch", () => {
+  const cb = childBaseFromTip(tipMeta({ status: "accepted", acceptedInto: "main" }));
+  assert.equal(cb.base, "main");
+  assert.equal(cb.fetchFromClone, undefined);
+});
+
+test("childBaseFromTip: accepted tip predating acceptedInto → fall back to its base", () => {
+  const cb = childBaseFromTip(tipMeta({ status: "accepted", acceptedInto: undefined }));
+  assert.equal(cb.base, "meridian/20260618-010000-head");
+  assert.equal(cb.fetchFromClone, undefined);
 });

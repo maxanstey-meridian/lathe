@@ -75,8 +75,9 @@ export const acceptRun = (
     repo.removeSandbox(meta.worktree, runsDir);
   }
 
-  // 8. Mark accepted.
-  store.writeMeta({ ...meta, status: "accepted", updatedAt: clock.nowIso() });
+  // 8. Mark accepted, recording the branch the work was merged into so a staged
+  // child of this tip can base off it (the sandbox + run branch are now gone).
+  store.writeMeta({ ...meta, status: "accepted", acceptedInto: target, updatedAt: clock.nowIso() });
   console.log(`accepted ${runId} — merged ${meta.branch} into ${target}, worktree tidied`);
   console.log(`run records kept at ${meta.repo}`);
   return 0;

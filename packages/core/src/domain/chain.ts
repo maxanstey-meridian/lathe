@@ -3,6 +3,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { type Campaign } from "./campaign.js";
 import { PacketFrontmatter, FRONTMATTER_RE } from "./packet.js";
+import { type RunMeta } from "./run.js";
 
 // ---------------------------------------------------------------------------
 // Inter-campaign chaining (CONTRACT §19). Pure helpers — no I/O.
@@ -103,3 +104,26 @@ export const decidePromotion = (
   }
   return { action: "promote-with-base", tipRunId: tip, base: branchOf(tip) };
 };
+
+// How a staged child actually bases off its converged tip, given the tip's LIVE
+// run meta. decidePromotion is pure over the campaign and so can only name the
+// tip's nominal branch (meridian/<tip>); whether that branch still exists depends
+// on the tip's status, which is I/O. This refines the decision with that fact:
+//
+//   - tip NOT yet accepted: the campaign converged but `lathe accept` hasn't run,
+//     so the tip's work lives only in its self-rooted clone sandbox. Base off the
+//     tip branch and fetch it from the clone first (fetchFromClone = clone path).
+//   - tip ALREADY accepted: accept merged it into `acceptedInto` and destroyed the
+//     clone + the meridian/<tip> branch. The canonical repo already has the work
+//     on that branch, so base off it and do NOT fetch (fetchFromClone undefined).
+//     Fall back to the run's own base for metas predating the acceptedInto field.
+//
+// This is the fix for the strand: without it, an accepted tip still routes through
+// the fetch path, the fetch throws every sweep (branch + clone gone), and the
+// child stays staged forever.
+export type ChildBase = { base: string; fetchFromClone: string | undefined };
+
+export const childBaseFromTip = (tip: RunMeta): ChildBase =>
+  tip.status === "accepted"
+    ? { base: tip.acceptedInto ?? tip.base, fetchFromClone: undefined }
+    : { base: branchOf(tip.runId), fetchFromClone: tip.worktree };

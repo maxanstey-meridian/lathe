@@ -37,6 +37,13 @@ export const RunMeta = z.object({
   base: z.string(),
   branch: z.string(),
   worktree: z.string(),
+  // The branch this run's work was merged INTO when `lathe accept` ran (CONTRACT
+  // X1). Written by acceptRun alongside status: "accepted". The clone sandbox and
+  // the run's own `meridian/<runId>` branch are destroyed by accept, so this is
+  // the only record of where the converged work now lives — a staged child of an
+  // accepted tip must base off this branch (the canonical repo already has it),
+  // never the deleted sandbox branch. Absent until accepted.
+  acceptedInto: z.string().optional(),
   // Copied from the packet at run start so `meridian tail` can show it without
   // re-parsing the packet (the run slug is the fallback when absent).
   summary: z.string().optional(),

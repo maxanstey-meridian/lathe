@@ -90,10 +90,24 @@ verification:
 body
 `;
 
+// Tip whose campaign converged but `lathe accept` has NOT run yet: its branch
+// still lives only in the clone sandbox, so promotion must fetch it.
 const tipRunMeta = makeMeta({
   runId: "20260101-000000-tip",
-  status: "accepted" as const,
+  status: "ready_for_review" as const,
   worktree: "/tmp/worktree-tip",
+});
+
+// Tip already accepted: accept merged it into `acceptedInto` (here, "main") and
+// destroyed the clone + the meridian/<tip> branch. Promotion must base off
+// `acceptedInto` and skip the fetch — the canonical repo already has the work.
+const tipRunMetaAccepted = makeMeta({
+  runId: "20260101-000000-tip",
+  status: "accepted" as const,
+  base: "meridian/20260101-000000-tip-prev",
+  branch: "meridian/20260101-000000-tip",
+  worktree: "/tmp/worktree-tip",
+  acceptedInto: "main",
 });
 
 const parentCampaignConverged = (tipRunId: string): Campaign => ({
@@ -201,6 +215,62 @@ body
     equal(queue[0].runId, "20260101-000000-child");
     strictEqual(store.readStaged("20260101-000000-child"), undefined);
     ok(fetchOpts.fetchBranchFromCloneCalled, "fetchBranchFromClone should be called");
+    // Base off the tip branch — its work lives only in the clone until accept.
+    ok(
+      store.readQueuePacket("20260101-000000-child")?.includes("base: meridian/20260101-000000-tip"),
+      "child should be based on the tip branch",
+    );
+    await cleanTemp(tmp);
+  })();
+});
+
+// ---------------------------------------------------------------------------
+// promoteStaged — accepted tip: base off acceptedInto, no fetch (regression for
+// the strand where an accepted tip's deleted sandbox branch failed every sweep).
+
+test("promoteStaged: tip already accepted → base off acceptedInto, no fetch", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "chain-promo-accepted-"));
+    const clock = fixedClock();
+    const fetchOpts = { fetchBranchFromCloneCalled: false };
+    const repo = fakeRepo(fetchOpts);
+    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+
+    const childPacket = `---
+repo: /tmp/repo
+parent_run_id: 20260101-000000-parent
+outcomes:
+  - id: o1
+    description: outcome 1
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+
+body
+`;
+
+    store.writeStaged("20260101-000000-child", childPacket);
+    store.writeCampaign(parentCampaignConverged("20260101-000000-tip"));
+    store.writeMeta(tipRunMetaAccepted);
+
+    promoteStaged(store, repo);
+
+    const queue = store.listQueue();
+    equal(queue.length, 1);
+    equal(queue[0].runId, "20260101-000000-child");
+    strictEqual(store.readStaged("20260101-000000-child"), undefined);
+    // The work is already in the canonical repo on `acceptedInto` — never fetch
+    // the destroyed sandbox branch.
+    ok(
+      !fetchOpts.fetchBranchFromCloneCalled,
+      "fetchBranchFromClone must NOT be called for an accepted tip",
+    );
+    ok(
+      store.readQueuePacket("20260101-000000-child")?.includes("base: main"),
+      "child should be based on the branch the tip was accepted into",
+    );
     await cleanTemp(tmp);
   })();
 });

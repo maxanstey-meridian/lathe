@@ -2,7 +2,7 @@
 
 Lathe is my local harness for running packet-designed implementation work through opencode overnight, with a planner, executor, reviewer, queue, journal, and live tail UI.
 
-It is not another opencode wrapper that pipes a prompt to a model and commits whatever comes back. Lathe splits the job: a small, fast local model, currently Qwen3.6-A3B, does the typing; a more powerful model, currently GLM 5.1, does the judgment. The planner scopes the work up front, the reviewer audits the approach during the run, and super-daddy forces convergence before anything lands.
+It is not another opencode wrapper that pipes a prompt to a model and commits whatever comes back. Lathe splits the job: a small, fast local model, currently Qwen3.6-A3B, does the typing; a more powerful model, currently GLM 5.1, does the judgment. The planner scopes the work up front, the reviewer audits the approach during the run, and another model (GPT, Claude, I still use GLM) forces convergence before anything lands.
 
 That reviewer loop is where the value is. It says the things a 3B-active model will not reliably say about its own output: this test encodes the wrong behaviour, this seam is not earned, this extraction is a pattern that appeared exactly once. The model writes the code; Lathe supplies the taste.
 

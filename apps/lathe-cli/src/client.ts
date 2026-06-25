@@ -5,18 +5,22 @@
 // contract. Commands import this and call the client directly — no hand-rolled
 // fetch, no `any`, no casting responses to DTOs.
 //
-// The default baseUrl is http://127.0.0.1:4198 (the daemon's loopback). For
-// testing or non-default daemon ports, call createClient(baseUrl) instead of
-// the default export.
+// The default baseUrl comes from config.daemon (host/port). For testing or
+// non-default daemon ports, call createDaemonClient(baseUrl) instead of the
+// default export.
 // ---------------------------------------------------------------------------
 
 import createClient from "openapi-fetch";
 import type { paths } from "@lathe/contract";
+import { loadConfig } from "@lathe/core";
 
-const DEFAULT_BASE_URL = "http://127.0.0.1:4198";
+export const createDaemonClient = (baseUrl?: string) => {
+  if (!baseUrl) {
+    const { config } = loadConfig();
+    baseUrl = `http://${config.daemon.host}:${config.daemon.port}`;
+  }
+  return createClient<paths>({ baseUrl });
+};
 
-export const createDaemonClient = (baseUrl: string = DEFAULT_BASE_URL) =>
-  createClient<paths>({ baseUrl });
-
-/** Default client instance — uses the standard daemon port. */
+/** Default client instance — uses config.daemon host/port. */
 export const lathe = createDaemonClient();

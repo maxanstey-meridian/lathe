@@ -35,15 +35,15 @@ import {
 import { createDaemonClient } from "./client.js";
 import type { paths } from "@lathe/contract";
 
-const DAEMON_URL = "http://127.0.0.1:4198";
-
 // ---------------------------------------------------------------------------
 // Daemon reachability check
 // ---------------------------------------------------------------------------
 
 const checkDaemon = async (): Promise<boolean> => {
   try {
-    const res = await fetch(`${DAEMON_URL}/config`);
+    const { config } = loadConfig();
+    const url = `http://${config.daemon.host}:${config.daemon.port}/config`;
+    const res = await fetch(url);
     return res.ok;
   } catch {
     return false;
@@ -74,7 +74,9 @@ const withDaemon = async <T>(
     return 1;
   }
 
-  const client = createDaemonClient(DAEMON_URL);
+  const { config } = loadConfig();
+  const baseUrl = `http://${config.daemon.host}:${config.daemon.port}`;
+  const client = createDaemonClient(baseUrl);
   const result = await fn(client);
 
   if (result.data !== undefined) {

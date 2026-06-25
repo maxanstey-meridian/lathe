@@ -169,6 +169,12 @@ export const Config = z.object({
   // idleTimeoutMs of silence (no data chunks). Matches the headerTimeoutMs
   // pattern at line 60 (z.union with false to disable for diagnosis).
   idleTimeoutMs: z.union([z.number().int(), z.literal(false)]).default(120_000),
+  daemon: z
+    .object({
+      host: z.string().default("127.0.0.1"),
+      port: z.number().int().default(4198),
+    })
+    .default({}),
   mutationCommandPatterns: z
     .array(z.string())
     .default(["\\b(pnpm|npm|yarn)\\b.*\\bgenerate\\b", "task contracts", "dotnet-rivet"]),

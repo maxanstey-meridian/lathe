@@ -65,6 +65,7 @@ export const acquireSingleInstanceLock = async (
   const release = (): void => {
     if (released) return;
     released = true;
+    process.off("exit", release);
     try {
       if (server.listening) {
         server.close();

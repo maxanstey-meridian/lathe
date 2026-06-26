@@ -15,19 +15,33 @@
 // ---------------------------------------------------------------------------
 
 import { loadConfig, type Config, type Paths } from "@lathe/core";
-import { createApp, createSupervisor, acquireSingleInstanceLock } from "@lathe/server";
+import {
+  createApp,
+  createSupervisor,
+  acquireSingleInstanceLock,
+  type AppDeps,
+  type CreateAppOptions,
+  type Supervisor,
+} from "@lathe/server";
 import { getRequestListener } from "@hono/node-server";
 import type { Server } from "node:http";
 import { join } from "node:path";
 
+type SignalName = "SIGINT" | "SIGTERM";
+type LockHandle = { server: Server; release: () => void };
+type DaemonApp = { fetch: (req: Request) => Response | Promise<Response> };
+
+const closeServer = (server: Server): Promise<void> =>
+  new Promise<void>((resolve) => server.close(() => resolve()));
+
 export type DaemonDeps = {
   loadConfig: () => { config: Config; paths: Paths };
-  acquireSingleInstanceLock: (lockPath: string, port: number, host?: string) => Promise<{ server: Server; release: () => void }>;
-  createSupervisor: (config: Config, paths: Paths) => {
-    appDeps: unknown;
-    stop: () => Promise<void>;
-  };
-  createApp: (appDeps: unknown, supervisor: unknown, options?: { logger?: boolean }) => { fetch: (req: Request) => Promise<Response> };
+  acquireSingleInstanceLock: (lockPath: string, port: number, host?: string) => Promise<LockHandle>;
+  createSupervisor: (config: Config, paths: Paths) => Supervisor;
+  createApp: (appDeps: AppDeps, supervisor: Supervisor, options?: CreateAppOptions) => DaemonApp;
+  closeServer: (server: Server) => Promise<void>;
+  onSignal: (signal: SignalName, handler: () => Promise<void>) => void;
+  exit: (code: number) => never;
 };
 
 export const startDaemon = async (deps?: DaemonDeps, userPort?: number): Promise<void> => {
@@ -47,9 +61,8 @@ export const startDaemon = async (deps?: DaemonDeps, userPort?: number): Promise
   const sup = supervisor(config, paths);
 
   // 3. Build the Hono app: use supervisor's own bus (journal tail publishes here) + readEventsSince.
-  const app = deps?.createApp
-    ? deps.createApp(sup.appDeps as unknown, sup as unknown, { logger: true })
-    : createApp(sup.appDeps as any, sup as any, { logger: true });
+  const appFactory = deps?.createApp ?? createApp;
+  const app = appFactory(sup.appDeps, sup, { logger: true });
 
   // 4. Attach the request listener to the already-bound held server.
   server.on("request", getRequestListener(app.fetch, { hostname: host }));
@@ -57,18 +70,23 @@ export const startDaemon = async (deps?: DaemonDeps, userPort?: number): Promise
   console.log(`lathe daemon listening on http://${host}:${port}`);
 
   // 5. Graceful shutdown.
+  let shuttingDown = false;
   const shutdown = async (): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
     console.log("shutting down…");
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await (deps?.closeServer ?? closeServer)(server);
     try {
       await sup.stop();
     } catch {
       /* supervisor stop timeout — proceed anyway */
     }
     releaseLock();
-    process.exit(0);
+    (deps?.exit ?? process.exit)(0);
   };
 
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  const onSignal = deps?.onSignal ?? ((signal, handler) => process.on(signal, handler));
+  onSignal("SIGINT", shutdown);
+  onSignal("SIGTERM", shutdown);
 };

@@ -187,6 +187,7 @@ export const createApp = (
 
       const queue: { seq: number; event: LatheEvent }[] = [];
       let notify: (() => void) | null = null;
+      stream.onAbort(() => notify?.());
       const unsub = deps.bus.subscribe((seq, event) => {
         queue.push({ seq, event });
         notify?.();
@@ -195,8 +196,11 @@ export const createApp = (
       try {
         while (!stream.aborted) {
           if (queue.length === 0) {
-            await new Promise<void>((r) => { notify = r; setTimeout(r, 15_000); });
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            await new Promise<void>((r) => { notify = r; timer = setTimeout(r, 15_000); });
+            if (timer) clearTimeout(timer);
             notify = null;
+            if (stream.aborted) break;
             if (queue.length === 0) { await stream.writeSSE({ event: "ping", data: "" }); continue; }
           }
           const { seq, event } = queue.shift()!;

@@ -119,7 +119,7 @@ const Pane = ({
   const visible: PaneLine[] = [
     ...pane.lines,
     ...(pane.current.trim() ? [{ text: pane.current, style: pane.currentStyle }] : []),
-  ].slice(-(height - 2));
+  ].slice(-(height - 3));
   return (
     <Box
       flexDirection="column"

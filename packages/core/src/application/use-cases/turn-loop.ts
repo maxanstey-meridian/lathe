@@ -21,6 +21,7 @@ import {
   volumeCheckpointReason,
   checkpointNudgeDue,
   clearedGateState,
+  relatchGate,
   priorReconciliationAccepted,
 } from "../../domain/gate-decisions.js";
 import { checkReorientBound } from "../../domain/liveness.js";
@@ -764,7 +765,7 @@ export const turnLoop = async (
         climb();
         const g = store.readGateState(runId);
         if (!g.latched) {
-          store.writeGateState(runId, { ...g, latched: true, latchReason: decision.reason });
+          store.writeGateState(runId, relatchGate(g, decision.reason));
           journal(ports, runId, turn, { event: "gate_latched", reason: decision.reason });
         }
         next = {

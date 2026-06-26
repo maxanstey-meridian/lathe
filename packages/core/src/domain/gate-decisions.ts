@@ -92,6 +92,14 @@ export const rotationGateState = (
   };
 };
 
+// Re-latch an unlatched gate mid-run (checkpoint demand). Preserves
+// firstEditApproved and reconciliationRequired — only forces latched.
+export const relatchGate = (state: GateState, reason: string): GateState => ({
+  ...state,
+  latched: true,
+  latchReason: reason,
+});
+
 // O6 skip: if the most recent decision was a Daddy-accepted reconciliation,
 // the state was already validated — don't force the successor session to
 // re-reconcile. Scoped to the LAST decision only: a recon from turn 1 must

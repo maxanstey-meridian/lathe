@@ -14,7 +14,7 @@
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { priorReconciliationAccepted } from "../../domain/gate-decisions.js";
+import { priorReconciliationAccepted, rotationGateState } from "../../domain/gate-decisions.js";
 import { initialGateState } from "../../domain/gate.js";
 import { parsePacketShape } from "../../domain/packet.js";
 import type { Packet } from "../../domain/packet.js";
@@ -168,18 +168,10 @@ export const makeExecuteRun =
           ),
         };
       } else if (priorReconciliationAccepted(decisions)) {
-        // Prior reconciliation was accepted — demote the stale gate from
-        // reconciliation to first-edit only. The gate re-latches
-        // (firstEditApproved: false) so the fresh session still clears
-        // its plan with one consult, but reconciliationRequired is lifted.
-        const gate = store.readGateState(runId);
-        store.writeGateState(runId, {
-          ...gate,
-          latched: true,
-          firstEditApproved: false,
-          reconciliationRequired: false,
-          latchReason: "first edit of the run requires an accepted planner decision",
-        });
+        // Prior reconciliation was accepted — skip redundant reconciliation.
+        // Gate re-latches for first-edit only (not reconciliation).
+        const { next } = rotationGateState(store.readGateState(runId), false);
+        store.writeGateState(runId, next);
         seed = {
           name: "Q8b",
           text: q8ResumeSeed(
@@ -190,13 +182,8 @@ export const makeExecuteRun =
           ),
         };
       } else {
-        const gate = store.readGateState(runId);
-        store.writeGateState(runId, {
-          ...gate,
-          latched: true,
-          reconciliationRequired: true,
-          latchReason: "reconciliation required: no valid checkpoint from the previous session",
-        });
+        const { next } = rotationGateState(store.readGateState(runId), true);
+        store.writeGateState(runId, next);
         seed = {
           name: "Q8",
           text: q8ReconciliationSeed(

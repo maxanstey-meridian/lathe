@@ -1,5 +1,5 @@
-import { createServer, type Server } from "node:net";
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { createServer, type Server } from "node:http";
 
 export class DaemonAlreadyRunningError extends Error {
   constructor(
@@ -26,40 +26,18 @@ const isAlive = (pid: number): boolean => {
 
 /**
  * Acquire the single-instance lock. Throws DaemonAlreadyRunningError if a live
- * daemon holds it. Returns { server, release } — the server is the bound socket
- * that is held for the daemon lifetime (the stricter exclusivity primitive);
- * release cleans it up (and the supplementary pidfile).
+ * daemon holds it. Returns { server, release } — the bound server is the live
+ * exclusivity primitive; release() cleans up the supplementary pidfile and
+ * closes the held socket when needed.
  *
- * When `port` and `host` are provided, creates and binds a server on that
- * port/host as the live lock. No probe — just bind or fail (EADDRINUSE).
- * Falls back to pidfile-only for non-daemon use.
+ * Port exclusivity is provided by the bound server returned here. This module
+ * handles stale-crash recovery via pidfile gate, then binds the live socket.
  */
 export const acquireSingleInstanceLock = async (
   lockPath: string,
-  port?: number,
-  host?: string,
+  port: number,
+  host = "127.0.0.1",
 ): Promise<{ server: Server; release: () => void }> => {
-  const bindHost = port !== undefined && !host ? "127.0.0.1" : host;
-
-  let server: Server;
-  let heldPort = false;
-
-  // Create and bind the held server (port cannot go stale).
-  if (port !== undefined && bindHost) {
-    server = createServer();
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", (err) => {
-        server.close();
-        reject(new DaemonAlreadyRunningError(-1, String(port)));
-      });
-      server.listen(port, bindHost, () => resolve());
-    });
-    heldPort = true;
-  } else {
-    // No port — create a no-op server for callers that expect one.
-    server = createServer();
-  }
-
   // Pidfile gate — reclaim stale locks from crashed daemons.
   if (existsSync(lockPath)) {
     const existing = Number.parseInt(
@@ -72,12 +50,28 @@ export const acquireSingleInstanceLock = async (
     unlinkSync(lockPath);
   }
 
-  writeFileSync(lockPath, String(process.pid), { flag: "wx" });
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", () => {
+      server.close();
+      reject(new DaemonAlreadyRunningError(-1, `${host}:${port}`));
+    });
+    server.listen(port, host, resolve);
+  });
+
+  writeFileSync(lockPath, String(process.pid));
 
   let released = false;
   const release = (): void => {
     if (released) return;
     released = true;
+    try {
+      if (server.listening) {
+        server.close();
+      }
+    } catch {
+      /* best-effort */
+    }
     try {
       if (
         existsSync(lockPath) &&
@@ -87,10 +81,6 @@ export const acquireSingleInstanceLock = async (
       }
     } catch {
       /* best-effort */
-    }
-    // Close the held socket if it's still listening.
-    if (heldPort) {
-      server.close();
     }
   };
 

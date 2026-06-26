@@ -1,8 +1,11 @@
 import { equal, ok } from "node:assert";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { createServer } from "node:net";
+import { acquireSingleInstanceLock, createSupervisor } from "@lathe/server";
+import { Config as ConfigSchema } from "@lathe/core";
 import { createDaemonClient } from "../src/client.js";
 import {
   checkDaemon,
@@ -13,6 +16,20 @@ import {
   runCommand,
   type CliEnv,
 } from "../src/commands.js";
+
+// ---------------------------------------------------------------------------
+// Helper: find a random free port by binding and immediately closing.
+// ---------------------------------------------------------------------------
+
+const findFreePort = (host = "127.0.0.1"): Promise<number> =>
+  new Promise<number>((resolve, reject) => {
+    const s = createServer();
+    s.once("error", reject);
+    s.listen(0, host, () => {
+      const { port } = s.address() as import("node:net").AddressInfo;
+      s.close(() => resolve(port));
+    });
+  });
 
 // ---------------------------------------------------------------------------
 // Stub daemon — routes openapi-fetch calls to a canned responder, no network.
@@ -251,61 +268,187 @@ test("queue drop: missing runId is rejected with usage, no daemon call", async (
 });
 
 // ---------------------------------------------------------------------------
-// startDaemon / shutdown ordering
+// startDaemon — runtime shutdown lifecycle
 // ---------------------------------------------------------------------------
 
 test("startDaemon: shutdown fires server.close → supervisor.stop → releaseLock → exit(0)", async () => {
-  // Verify the shutdown ordering by examining serve.ts source.
-  // The shutdown handler must execute in this exact order:
-  //   1. server.close()     — stop accepting HTTP connections
-  //   2. supervisor.stop()  — abort runDriver, await exit
-  //   3. releaseLock()      — close held socket + remove pidfile
-  //   4. process.exit(0)    — clean exit
-  const serveSource = readFileSync(
-    join(import.meta.dirname, "../src/serve.ts"),
-    "utf8",
-  );
+  const port = await findFreePort();
+  const dir = mkdtempSync(join(tmpdir(), "lathe-serve-"));
+  const lockPath = join(dir, "lathe.lock");
 
-  // Extract the shutdown function body.
-  const shutdownMatch = serveSource.match(
-    /const shutdown\s*=\s*async\s*\(\)\s*:\s*Promise<void>\s*=>\s*\{([\s\S]*?)\n  \};/,
-  );
-  ok(shutdownMatch, "shutdown handler exists in serve.ts");
+  const order: string[] = [];
+  const signalHandlers: Partial<Record<"SIGINT" | "SIGTERM", () => Promise<void> | void>> = {};
+  let lockArgs: { lockPath: string; port: number; host?: string } | undefined;
 
-  const shutdownBody = shutdownMatch![1];
-  const closeIdx = Math.max(
-    shutdownBody.indexOf("server.close"),
-    shutdownBody.indexOf("lockServer.close"),
-  );
-  const stopIdx = shutdownBody.indexOf("supervisor.stop");
-  const releaseIdx = shutdownBody.indexOf("releaseLock");
-  const exitIdx = shutdownBody.indexOf("process.exit(0)");
+  const originalOn = process.on.bind(process);
+  const originalExit = process.exit.bind(process);
+  let exited = false;
+  process.on = ((event: string, cb: unknown): NodeJS.Process => {
+    if (event === "SIGINT" || event === "SIGTERM") {
+      signalHandlers[event] = cb as () => Promise<void> | void;
+    }
+    return process;
+  }) as typeof process.on;
+  process.exit = ((code?: number | string): never => {
+    order.push(`exit(${code ?? 0})`);
+    exited = true;
+    throw new Error("__EXIT__");
+  }) as never;
 
-  ok(closeIdx >= 0, "shutdown calls server/lockServer.close");
-  ok(stopIdx > closeIdx, "shutdown calls supervisor.stop after server close");
-  ok(releaseIdx > stopIdx, "shutdown calls releaseLock after supervisor.stop");
-  ok(exitIdx > releaseIdx, "shutdown calls process.exit(0) last");
+  try {
+    const { startDaemon } = await import("../src/serve.js");
+    await startDaemon({
+      loadConfig: () => ({
+        config: { ...ConfigSchema.parse({}), daemon: { port, host: "127.0.0.1" } },
+        paths: { root: dir },
+      }),
+      acquireSingleInstanceLock: async (path, daemonPort, host) => {
+        lockArgs = { lockPath: path, port: daemonPort, host };
+        const acquired = await acquireSingleInstanceLock(path, daemonPort, host);
+        const originalRelease = acquired.release;
+        return {
+          server: acquired.server,
+          release: () => {
+            order.push("releaseLock");
+            originalRelease();
+          },
+        };
+      },
+      createSupervisor: (config, paths) => {
+        const sup = createSupervisor(config, paths, { startDriver: false });
+        const originalStop = sup.stop.bind(sup);
+        sup.stop = async () => {
+          order.push("supervisor.stop");
+          await originalStop();
+        };
+        return sup;
+      },
+    });
+
+    equal(lockArgs?.lockPath, lockPath);
+    equal(lockArgs?.port, port);
+    equal(lockArgs?.host, "127.0.0.1");
+
+    const probeBefore = createServer();
+    await new Promise<void>((resolve) => {
+      probeBefore.once("error", () => resolve());
+      probeBefore.listen(port, "127.0.0.1", () => {
+        probeBefore.close(() => resolve());
+        throw new Error("expected daemon port to be in use before shutdown");
+      });
+    });
+
+    try {
+      await Promise.resolve(signalHandlers.SIGINT?.());
+    } catch (err) {
+      if ((err as Error).message !== "__EXIT__") throw err;
+    }
+  } finally {
+    process.on = originalOn;
+    process.exit = originalExit;
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  equal(order[0], "supervisor.stop", "1. supervisor.stop first observable effect");
+  equal(order[1], "releaseLock", "2. releaseLock second");
+  equal(order[2], "exit(0)", "3. process.exit(0) last");
+  ok(exited, "process.exit was called");
+
+  const probeAfter = createServer();
+  await new Promise<void>((resolve, reject) => {
+    probeAfter.once("error", reject);
+    probeAfter.listen(port, "127.0.0.1", () => {
+      probeAfter.close(() => resolve());
+    });
+  });
 });
 
-test("startDaemon: binds to configured host from config.daemon.host", async () => {
-  const serveSource = readFileSync(
-    join(import.meta.dirname, "../src/serve.ts"),
-    "utf8",
-  );
+test("startDaemon: threads configured host into the held lock and shuts down on SIGTERM", async () => {
+  const port = await findFreePort();
+  const dir = mkdtempSync(join(tmpdir(), "lathe-serve-host-"));
 
-  ok(serveSource.includes("config.daemon.host"), "reads config.daemon.host");
-  ok(serveSource.includes("hostname: host") || serveSource.includes('hostname: host'), "passes hostname to server");
-});
+  const order: string[] = [];
+  const signalHandlers: Partial<Record<"SIGINT" | "SIGTERM", () => Promise<void> | void>> = {};
+  let lockArgs: { lockPath: string; port: number; host?: string } | undefined;
 
-test("startDaemon: acquires lock before creating supervisor", async () => {
-  const serveSource = readFileSync(
-    join(import.meta.dirname, "../src/serve.ts"),
-    "utf8",
-  );
+  const originalOn = process.on.bind(process);
+  const originalExit = process.exit.bind(process);
+  let exited = false;
+  process.on = ((event: string, cb: unknown): NodeJS.Process => {
+    if (event === "SIGINT" || event === "SIGTERM") {
+      signalHandlers[event] = cb as () => Promise<void> | void;
+    }
+    return process;
+  }) as typeof process.on;
+  process.exit = ((code?: number | string): never => {
+    order.push(`exit(${code ?? 0})`);
+    exited = true;
+    throw new Error("__EXIT__");
+  }) as never;
 
-  const lockIdx = serveSource.indexOf("acquireSingleInstanceLock");
-  const supervisorIdx = serveSource.indexOf("createSupervisor");
+  try {
+    const { startDaemon } = await import("../src/serve.js");
+    await startDaemon({
+      loadConfig: () => ({
+        config: { ...ConfigSchema.parse({}), daemon: { port, host: "0.0.0.0" } },
+        paths: { root: dir },
+      }),
+      acquireSingleInstanceLock: async (path, daemonPort, host) => {
+        lockArgs = { lockPath: path, port: daemonPort, host };
+        const acquired = await acquireSingleInstanceLock(path, daemonPort, host);
+        const originalRelease = acquired.release;
+        return {
+          server: acquired.server,
+          release: () => {
+            order.push("releaseLock");
+            originalRelease();
+          },
+        };
+      },
+      createSupervisor: (config, paths) => {
+        const sup = createSupervisor(config, paths, { startDriver: false });
+        const originalStop = sup.stop.bind(sup);
+        sup.stop = async () => {
+          order.push("supervisor.stop");
+          await originalStop();
+        };
+        return sup;
+      },
+    });
 
-  ok(lockIdx >= 0, "serve.ts calls acquireSingleInstanceLock");
-  ok(supervisorIdx > lockIdx, "acquireSingleInstanceLock is called before createSupervisor");
+    equal(lockArgs?.port, port);
+    equal(lockArgs?.host, "0.0.0.0");
+
+    const probeBefore = createServer();
+    await new Promise<void>((resolve) => {
+      probeBefore.once("error", () => resolve());
+      probeBefore.listen(port, "127.0.0.1", () => {
+        probeBefore.close(() => resolve());
+        throw new Error("expected daemon port to be in use before shutdown");
+      });
+    });
+
+    try {
+      await Promise.resolve(signalHandlers.SIGTERM?.());
+    } catch (err) {
+      if ((err as Error).message !== "__EXIT__") throw err;
+    }
+  } finally {
+    process.on = originalOn;
+    process.exit = originalExit;
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  equal(order[0], "supervisor.stop", "shutdown stops supervisor");
+  equal(order[1], "releaseLock", "shutdown releases lock");
+  equal(order[2], "exit(0)", "shutdown exits cleanly");
+  ok(exited, "process.exit was called");
+
+  const probeAfter = createServer();
+  await new Promise<void>((resolve, reject) => {
+    probeAfter.once("error", reject);
+    probeAfter.listen(port, "127.0.0.1", () => {
+      probeAfter.close(() => resolve());
+    });
+  });
 });

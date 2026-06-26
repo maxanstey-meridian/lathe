@@ -592,6 +592,7 @@ export class SqliteStoreAdapter implements Store {
       branch: `meridian/${runId}`,
       worktree: join(this.paths.runDir(runId), "worktree"),
       stallRetries: 0,
+      crashRetries: 0,
       reorientRetries: 0,
       reviewerUnreachable: 0,
       promoted: false,

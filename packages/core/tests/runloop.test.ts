@@ -15,6 +15,7 @@ import {
   type ConvergeCallback,
   type WaitForWorkCallback,
 } from "../src/application/use-cases/run-loop.js";
+import { decideCrashRecovery } from "../src/domain/liveness.js";
 import { makePaths } from "../src/config/paths.js";
 import { Config } from "../src/config/schemas.js";
 import type { RunMeta } from "../src/domain/run.js";
@@ -645,6 +646,194 @@ test("runLoop: wedged run → recoverStalledRun → requeued", () => {
     const finalMeta = store.readMeta("20260101-000000-w");
     equal(finalMeta.status, "accepted");
     equal(finalMeta.stallRetries, 1);
+    await cleanTemp(tmp);
+  })();
+});
+
+// ---------------------------------------------------------------------------
+// decideCrashRecovery usage in run-loop crash branch
+
+test("runLoop crash branch: decideCrashRecovery requeue under cap → queued", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "runloop-crash-retry-"));
+    const clock = fixedClock();
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+    store.writeMeta(
+      makeMeta({ runId: "20260101-000000-c", status: "blocked" as const, blockedReason: "crashed" as const, crashRetries: 0 }),
+    );
+
+    const decision = decideCrashRecovery(
+      { status: "blocked", blockedReason: "crashed", crashRetries: 0 },
+      2,
+    );
+
+    equal(decision.action, "requeue");
+    equal(decision.crashRetries, 1);
+
+    const read = store.readMeta("20260101-000000-c");
+    equal(read.status, "blocked"); // run-loop would change this to queued
+    equal(read.blockedReason, "crashed");
+
+    await cleanTemp(tmp);
+  })();
+});
+
+test("runLoop crash branch: decideCrashRecovery escalate at cap", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "runloop-crash-escalate-"));
+    const clock = fixedClock();
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+    const decision = decideCrashRecovery(
+      { status: "blocked", blockedReason: "crashed", crashRetries: 2 },
+      2,
+    );
+
+    equal(decision.action, "escalate");
+    equal(decision.crashRetries, 2);
+
+    await cleanTemp(tmp);
+  })();
+});
+
+test("runLoop crash branch: decideCrashRecovery ignores non-crashed reasons", () => {
+  return (async () => {
+    for (const reason of ["wedged", "human_decision"] as const) {
+      const decision = decideCrashRecovery(
+        { status: "blocked", blockedReason: reason, crashRetries: 0 },
+        2,
+      );
+      equal(decision.action, "none", `${reason} should not be handled by crash recovery`);
+    }
+  })();
+});
+
+test("runLoop crash branch: thrown executeRun requeues crashed run under cap", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "runloop-crash-queue-"));
+    const clock = fixedClock();
+    const stopController = new AbortController();
+    let wipCommitCalls = 0;
+    const repo: Repo = {
+      createSandbox: () => undefined,
+      wipCommit: () => {
+        wipCommitCalls++;
+        stopController.abort();
+        return "sha-crash";
+      },
+      amendCommit: () => "sha-amend",
+      worktreeIsDirty: () => false,
+      diffStat: () => "",
+      readDiffStats: () => ({}),
+      reviewableDiff: () => "",
+      reviewableDiffAgainst: () => "",
+      fetchBranchFromClone: () => undefined,
+      removeSandbox: () => undefined,
+      headBranch: () => "main",
+      branchExists: () => true,
+      repoValid: () => true,
+      mergeAccept: () => undefined,
+    };
+    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const runId = "20260101-000000-crash-queue";
+    store.writeMeta(
+      makeMeta({
+        runId,
+        status: "queued" as const,
+        crashRetries: 0,
+        worktree: join(tmp, "runs", runId, "worktree"),
+      }),
+    );
+
+    let executeRunCalls = 0;
+    const executeRun: ExecuteRunCallback = async () => {
+      executeRunCalls++;
+      throw new Error("boom");
+    };
+
+    await runLoop(
+      Config.parse({}),
+      store,
+      repo,
+      { holdPowerAssertion: async () => {} },
+      clock,
+      { bind: () => Promise.resolve({ current: undefined }), clearActive: () => undefined, close: () => undefined },
+      executeRun,
+      async () => {},
+      async () => {},
+      { stopSignal: stopController.signal },
+    );
+
+    const meta = store.readMeta(runId);
+    equal(executeRunCalls, 1);
+    equal(meta.status, "queued");
+    equal(meta.crashRetries, 1);
+    equal(meta.blockedReason, undefined);
+    equal(wipCommitCalls, 1);
+    await cleanTemp(tmp);
+  })();
+});
+
+test("runLoop crash branch: thrown executeRun escalates crashed run at cap", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "runloop-crash-block-"));
+    const clock = fixedClock();
+    const stopController = new AbortController();
+    let wipCommitCalls = 0;
+    const repo: Repo = {
+      createSandbox: () => undefined,
+      wipCommit: () => {
+        wipCommitCalls++;
+        stopController.abort();
+        return "sha-crash";
+      },
+      amendCommit: () => "sha-amend",
+      worktreeIsDirty: () => false,
+      diffStat: () => "",
+      readDiffStats: () => ({}),
+      reviewableDiff: () => "",
+      reviewableDiffAgainst: () => "",
+      fetchBranchFromClone: () => undefined,
+      removeSandbox: () => undefined,
+      headBranch: () => "main",
+      branchExists: () => true,
+      repoValid: () => true,
+      mergeAccept: () => undefined,
+    };
+    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const runId = "20260101-000000-crash-block";
+    store.writeMeta(
+      makeMeta({
+        runId,
+        status: "queued" as const,
+        crashRetries: 2,
+        worktree: join(tmp, "runs", runId, "worktree"),
+      }),
+    );
+
+    const executeRun: ExecuteRunCallback = async () => {
+      throw new Error("boom");
+    };
+
+    await runLoop(
+      Config.parse({}),
+      store,
+      repo,
+      { holdPowerAssertion: async () => {} },
+      clock,
+      { bind: () => Promise.resolve({ current: undefined }), clearActive: () => undefined, close: () => undefined },
+      executeRun,
+      async () => {},
+      async () => {},
+      { stopSignal: stopController.signal },
+    );
+
+    const meta = store.readMeta(runId);
+    equal(meta.status, "blocked");
+    equal(meta.blockedReason, "crashed");
+    equal(meta.crashRetries, 2);
+    equal(wipCommitCalls, 1);
     await cleanTemp(tmp);
   })();
 });

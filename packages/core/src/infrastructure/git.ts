@@ -39,11 +39,10 @@ export const createSandbox = (
   base: string,
 ): void => {
   const dotGit = join(sandboxPath, ".git");
-  // Crash recovery: reuse only a REAL sandbox (a .git directory). A bare/half-made
-  // dir is not reused — `git clone` below fails loudly on an occupied path rather
-  // than us silently deleting something during setup.
-  if (existsSync(dotGit) && statSync(dotGit).isDirectory()) {
-    return;
+  // Fresh restart: if a prior sandbox exists, discard it and recreate a clean clone.
+  // A dirty or half-made sandbox must not be reused on a fresh attempt.
+  if (existsSync(sandboxPath)) {
+    rmSync(sandboxPath, { recursive: true, force: true });
   }
   git(dirname(sandboxPath), ["clone", "--local", "--branch", base, repo, sandboxPath]);
   git(sandboxPath, ["checkout", "-b", branch]);

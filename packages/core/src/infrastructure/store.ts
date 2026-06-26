@@ -625,7 +625,7 @@ export class StoreAdapter implements Store {
     if (!repo || !base) {
       return undefined;
     }
-    return {
+   return {
       runId,
       status: "queued",
       attempt: 1,
@@ -634,6 +634,7 @@ export class StoreAdapter implements Store {
       branch: `meridian/${runId}`,
       worktree: join(this.paths.runDir(runId), "worktree"),
       stallRetries: 0,
+      crashRetries: 0,
       reorientRetries: 0,
       reviewerUnreachable: 0,
       promoted: false,
@@ -642,6 +643,7 @@ export class StoreAdapter implements Store {
   }
 
   // ---------------------------------------------------------------------------
+
   // Internal helpers
 
   private archiveAndFail(runId: string, raw: string, problems: string[]): void {

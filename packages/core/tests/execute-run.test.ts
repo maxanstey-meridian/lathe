@@ -10,6 +10,7 @@ import type { Planner } from "../src/application/ports/planner.js";
 import type { Repo } from "../src/application/ports/repo.js";
 import type { Store } from "../src/application/ports/store.js";
 import { makeExecuteRun, type BridgeBinding } from "../src/application/use-cases/execute-run.js";
+import { decideRunStart } from "../src/domain/run.js";
 import { rotateSession } from "../src/application/use-cases/rotation.js";
 import type { RunPorts, RunChannel } from "../src/application/use-cases/run-runtime.js";
 import { makePaths } from "../src/config/paths.js";
@@ -134,6 +135,54 @@ const cleanTemp = async (dir: string) => {
     /* ignore */
   }
 };
+
+// ---------------------------------------------------------------------------
+// decideRunStart (run lifecycle: fresh vs resume)
+// ---------------------------------------------------------------------------
+
+test("decideRunStart: no prior meta → fresh", () => {
+  equal(decideRunStart(undefined, "", undefined).mode, "fresh");
+  equal(decideRunStart(undefined, "packet", "queue").mode, "fresh");
+});
+
+test("decideRunStart: prior meta but no babySessionId → fresh", () => {
+  const meta = { babySessionId: undefined, daddySessionId: "daddy-old", attempt: 1 };
+  equal(decideRunStart(meta, "frozen", "queue").mode, "fresh");
+});
+
+test("decideRunStart: prior meta with babySessionId + no frozen + queue → fresh", () => {
+  const meta = { babySessionId: "baby-old", daddySessionId: "daddy-old", attempt: 1 };
+  const result = decideRunStart(meta, "", "queue");
+  equal(result.mode, "fresh");
+  equal(result.reason, "no frozen snapshot, using queue packet");
+});
+
+test("decideRunStart: prior meta with babySessionId + frozen + no queue → resume", () => {
+  const meta = { babySessionId: "baby-old", daddySessionId: "daddy-old", attempt: 1 };
+  const result = decideRunStart(meta, "frozen-content", undefined);
+  equal(result.mode, "resume");
+});
+
+test("decideRunStart: prior meta with babySessionId + identical frozen and queue → resume", () => {
+  const meta = { babySessionId: "baby-old", daddySessionId: "daddy-old", attempt: 1 };
+  const content = "---\nrepo: x\nbase: main\n---\nbody";
+  const result = decideRunStart(meta, content, content);
+  equal(result.mode, "resume");
+});
+
+test("decideRunStart: prior meta with babySessionId + queue differs from frozen → fresh", () => {
+  const meta = { babySessionId: "baby-old", daddySessionId: "daddy-old", attempt: 1 };
+  const result = decideRunStart(meta, "frozen-old", "queue-new");
+  equal(result.mode, "fresh");
+  equal(result.reason, "queue packet differs from frozen snapshot");
+});
+
+test("decideRunStart: identical frozen and queue packets → resume", () => {
+  const meta = { babySessionId: "baby-old", daddySessionId: "daddy-old", attempt: 1 };
+  const same = "---\nrepo: x\nbase: main\n---\nbody";
+  const result = decideRunStart(meta, same, same);
+  equal(result.mode, "resume");
+});
 
 // ---------------------------------------------------------------------------
 // rotation (O5/O6)
@@ -521,6 +570,205 @@ test("makeExecuteRun: invalid frozen packet → meta failed, no throw", () => {
     );
 
     equal(store.readMeta(RUN_ID).status, "failed");
+    await cleanTemp(tmp);
+  })();
+});
+
+test("makeExecuteRun: resumed run with changed queue packet → fresh (Q1 seed, new sessions)", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "exec-fresh-different-queue-"));
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+
+    // Frozen packet from a prior run attempt.
+    const oldPacketRaw = `---
+repo: /tmp/test-repo
+base: main
+summary: OLD packet
+outcomes:
+  - id: test-outcome
+    description: A test outcome
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+
+old body
+`;
+    store.freezePacket(RUN_ID, oldPacketRaw);
+
+    // Queue packet has been EDITED since the prior run.
+    const newPacketRaw = `---
+repo: /tmp/test-repo
+base: main
+summary: NEW packet
+outcomes:
+  - id: test-outcome
+    description: A test outcome
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+
+new body
+`;
+    mkdirSync(join(tmp, "queue"), { recursive: true });
+    writeFileSync(join(tmp, "queue", `${RUN_ID}.md`), newPacketRaw);
+
+    // Prior meta from the previous run session.
+    store.writeMeta({
+      runId: RUN_ID,
+      status: "queued",
+      attempt: 1,
+      repo: "/tmp/test-repo",
+      base: "main",
+      branch: `meridian/${RUN_ID}`,
+      worktree: join(tmp, "runs", RUN_ID, "worktree"),
+      babySessionId: "baby-old",
+      daddySessionId: "daddy-prior",
+      stallRetries: 0,
+      crashRetries: 1,
+      reorientRetries: 0,
+      reviewerUnreachable: 0,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    let handshakeCalled = false;
+    const resumePlanner: Planner = {
+      handshake: async () => {
+        handshakeCalled = true;
+        return "daddy-new";
+      },
+      resumeSession: async (sid: string) => {
+        // Should NOT be called — this is a fresh start, not a resume.
+        throw new Error("resumeSession should NOT be called on fresh start");
+      },
+      consult: async () => ({
+        status: "proceed",
+        answer: "go",
+        constraints: [],
+        evidence_used: [],
+        safe_next_action: "x",
+        human_decision_needed: null,
+      }),
+      finalReview: async () => ({
+        verdict: "accept",
+        findings: [],
+        notes: "ok",
+        human_decision_needed: null,
+      }),
+    };
+
+    const channel = emptyChannel();
+    const executor = scriptedExecutor(channel, [
+      {
+        intents: [
+          {
+            kind: "report-accepted",
+            status: "blocked",
+            blockedReason: "stop_condition",
+            blockedQuestion: "done",
+            summary: "fresh after packet change",
+          },
+        ],
+      },
+    ]);
+    const ports = makePorts(store, fakeRepo(), executor, resumePlanner);
+    const bridge: BridgeBinding<unknown> = { beginRun: () => channel, endRun: () => {} };
+
+    const executeRun = makeExecuteRun(ports, bridge);
+    await executeRun(
+      RUN_ID,
+      {
+        repo: "/tmp/test-repo",
+        worktree: join(tmp, "runs", RUN_ID, "worktree"),
+        base: "main",
+        branch: `meridian/${RUN_ID}`,
+      },
+      {},
+      ports.clock,
+    );
+
+    const meta = store.readMeta(RUN_ID);
+    equal(meta.status, "blocked");
+    equal(meta.attempt, 2, "attempt incremented");
+    equal(meta.babySessionId, "baby-1", "new Baby session created");
+    equal(meta.daddySessionId, "daddy-new", "new Daddy session via handshake");
+    equal(handshakeCalled, true, "handshake called (not resumeSession) because packet changed");
+    // The frozen packet was updated from the queue (new) packet.
+    ok(
+      store.readFrozenPacket(RUN_ID).includes("NEW packet"),
+      "frozen packet re-written from queue on fresh",
+    );
+    // The first seed was Q1 (fresh), not Q2 (resume).
+    const journal = store.readJournal(RUN_ID);
+    ok(journal.some((e) => e.event === "prompt_sent" && e.promptName === "Q1"));
+    await cleanTemp(tmp);
+  })();
+});
+
+test("makeExecuteRun: run with prior meta but no baby session → fresh", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "exec-fresh-no-baby-"));
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    store.freezePacket(RUN_ID, PACKET_RAW);
+
+    // Prior meta WITHOUT a babySessionId (e.g. a crashed run where baby session was lost).
+    store.writeMeta({
+      runId: RUN_ID,
+      status: "queued",
+      attempt: 1,
+      repo: "/tmp/test-repo",
+      base: "main",
+      branch: `meridian/${RUN_ID}`,
+      worktree: join(tmp, "runs", RUN_ID, "worktree"),
+      daddySessionId: "daddy-prior",
+      stallRetries: 0,
+      crashRetries: 0,
+      reorientRetries: 0,
+      reviewerUnreachable: 0,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const channel = emptyChannel();
+    const executor = scriptedExecutor(channel, [
+      {
+        intents: [
+          {
+            kind: "report-accepted",
+            status: "blocked",
+            blockedReason: "stop_condition",
+            blockedQuestion: "done",
+            summary: "fresh",
+          },
+        ],
+      },
+    ]);
+    const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
+    const bridge: BridgeBinding<unknown> = { beginRun: () => channel, endRun: () => {} };
+
+    const executeRun = makeExecuteRun(ports, bridge);
+    await executeRun(
+      RUN_ID,
+      {
+        repo: "/tmp/test-repo",
+        worktree: join(tmp, "runs", RUN_ID, "worktree"),
+        base: "main",
+        branch: `meridian/${RUN_ID}`,
+      },
+      {},
+      ports.clock,
+    );
+
+    const meta = store.readMeta(RUN_ID);
+    equal(meta.status, "blocked");
+    equal(meta.attempt, 2);
+    // The ledger + gate were initialised (fresh state).
+    equal(store.readLedger(RUN_ID).outcomes.length, 1);
+    // The first seed was Q1 (fresh).
+    const journal = store.readJournal(RUN_ID);
+    ok(journal.some((e) => e.event === "prompt_sent" && e.promptName === "Q1"));
     await cleanTemp(tmp);
   })();
 });

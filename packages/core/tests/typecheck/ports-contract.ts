@@ -55,6 +55,7 @@ const _storeContract: Store = {
     worktree: "",
     updatedAt: "00000000-00:00:00.000Z",
     stallRetries: 0,
+    crashRetries: 0,
     reorientRetries: 0,
     reviewerUnreachable: 0,
     promoted: false,

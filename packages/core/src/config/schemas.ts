@@ -151,6 +151,12 @@ export const Config = z.object({
       // per-turn ladder can't catch (productive-looking turns that never
       // converge). Default 6h.
       maxStallRetries: z.number().int().min(0).default(2),
+      // Bounded crash retry: auto-requeue a `blocked/crashed` run up to
+      // maxCrashRetries (front of the line) before escalating to Max. A
+      // transient crash (cold proxy, momentary IO blip) retriers; a
+      // deterministic crash parks for Max after the cap. Mirrors
+      // maxStallRetries for wedged stalls.
+      maxCrashRetries: z.number().int().min(0).default(2),
       // P6 sibling for hallucination recovery: max consecutive reorients before
       // the driver stops rotating and parks for Max. 0 disables reorient.
       maxReorientRetries: z.number().int().min(0).default(2),

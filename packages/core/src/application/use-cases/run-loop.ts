@@ -14,8 +14,8 @@
 // ---------------------------------------------------------------------------
 
 import type { Config } from "../../config/schemas.js";
-import { decideStallRecovery } from "../../domain/liveness.js";
-import type { StallRecoveryDecision } from "../../domain/liveness.js";
+import { decideStallRecovery, decideCrashRecovery } from "../../domain/liveness.js";
+import type { StallRecoveryDecision, CrashRecoveryDecision } from "../../domain/liveness.js";
 import type { BridgePort } from "../ports/bridge.js";
 import type { Caffeinate } from "../ports/caffeinate.js";
 import type { Clock } from "../ports/clock.js";
@@ -167,16 +167,43 @@ export const runLoop = async <Ref>(
               break;
             }
 
-            // A real crash: park as blocked/crashed — NOT wedged, so the R10
-            // recovery does NOT auto-retry it (a systemic driver fault would
-            // hot-loop on the same packet) — and move on.
+            // A real crash: consult the bounded crash-recovery decision.
+            // Requeue under the cap (front of the line), escalate at the cap.
             const message = err instanceof Error ? err.message : String(err);
             const crashMeta = store.readMeta(runId);
-            store.writeMeta({
+            const crashedMeta = {
               ...crashMeta,
               status: "blocked" as const,
               blockedReason: "crashed" as const,
               blockedQuestion: `Driver-level failure: ${message}. See journal and opencode-serve.log.`,
+              updatedAt: clock.nowIso(),
+            };
+            store.writeMeta(crashedMeta);
+            const crashDecision = decideCrashRecovery(crashedMeta, config.thresholds.maxCrashRetries);
+            if (crashDecision.action === "requeue") {
+              if (crashMeta.worktree) {
+                repo.wipCommit(crashMeta.worktree, `meridian: WIP ${runId} [crashed]`);
+              }
+              store.writeMeta({
+                ...crashedMeta,
+                status: "queued" as const,
+                crashRetries: crashDecision.crashRetries,
+                blockedReason: undefined,
+                blockedQuestion: undefined,
+                updatedAt: clock.nowIso(),
+              });
+              continue;
+            }
+
+            // Cap reached (or none — meta no longer crashed, fall through) — escalate to Max.
+            const crashCount = crashDecision.action === "none"
+              ? crashedMeta.crashRetries ?? 0
+              : crashDecision.crashRetries;
+            store.writeMeta({
+              ...crashedMeta,
+              status: "blocked" as const,
+              blockedReason: "crashed" as const,
+              blockedQuestion: `Driver-level failure: ${message}. Crash retry cap hit (${crashCount}). See journal and opencode-serve.log.`,
               updatedAt: clock.nowIso(),
             });
             if (crashMeta.worktree) {

@@ -93,7 +93,7 @@ test("createSandbox: a self-rooted clone — .git is a real dir (no worktree lin
   }
 });
 
-test("createSandbox: crash recovery — reuses an existing real sandbox (.git dir present)", () => {
+test("createSandbox: fresh restart — recreates an existing real sandbox cleanly", () => {
   const tmp = mkdtempSync(join(tmpdir(), "meridian-sandbox-reuse-"));
   try {
     const { repo, baseSha } = initSourceRepo(tmp);
@@ -106,10 +106,14 @@ test("createSandbox: crash recovery — reuses an existing real sandbox (.git di
     const firstSha = execSync("git rev-parse HEAD", { cwd: sandbox }).toString().trim();
     assert.equal(firstSha, baseSha);
 
-    // Calling again should be a no-op (reuse).
+    // Leave behind abandoned state that a fresh restart must not inherit.
+    writeFileSync(join(sandbox, "scratch.txt"), "dirty\n");
+
+    // Calling again should recreate a clean clone at base.
     createSandbox(repo, sandbox, "meridian/y", "main");
     const secondSha = execSync("git rev-parse HEAD", { cwd: sandbox }).toString().trim();
     assert.equal(secondSha, baseSha, "reused sandbox HEAD should be unchanged");
+    assert.ok(!existsSync(join(sandbox, "scratch.txt")), "dirty files must be discarded");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

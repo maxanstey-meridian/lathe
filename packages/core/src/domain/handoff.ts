@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { jsonCandidates } from "./structured-extraction.js";
 
 // ---------------------------------------------------------------------------
 // Handoff artifact — baby writes progress to disk between turns / rotations
@@ -48,74 +49,13 @@ export type VerifyVerdict = z.infer<typeof VerifyVerdict>;
 
 // ---------------------------------------------------------------------------
 // Fail-closed parser (CONTRACT §18 S11)
-// Extract balanced top-level JSON objects from daddy's prose response,
-// then validate against the VerifyVerdict schema.
+// Extract balanced top-level JSON objects from daddy's prose response (via the
+// single shared scanner), then validate against the VerifyVerdict schema.
 // ---------------------------------------------------------------------------
-
-// Balanced top-level objects, ignoring braces inside JSON strings.
-// Mirrors extractBalancedObjects from domain/review.ts.
-const extractBalancedObjects = (text: string): string[] => {
-  const objects: string[] = [];
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escape = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      if (escape) {
-        escape = false;
-      } else if (ch === "\\") {
-        escape = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-    } else if (ch === "{") {
-      if (depth === 0) {
-        start = i;
-      }
-      depth += 1;
-    } else if (ch === "}" && depth > 0) {
-      depth -= 1;
-      if (depth === 0 && start !== -1) {
-        objects.push(text.slice(start, i + 1));
-        start = -1;
-      }
-    }
-  }
-  return objects;
-};
-
-// Candidate JSON substrings to try, best-first: fenced blocks then every
-// balanced object (last-first, since reasoning models trail the real verdict).
-const verifyVerdictCandidates = (raw: string): string[] => {
-  const cleaned = raw.trim();
-  const candidates: string[] = [];
-
-  const fences = [...cleaned.matchAll(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/g)]
-    .map((m) => m[1]?.trim())
-    .filter((s): s is string => Boolean(s));
-  candidates.push(...fences.reverse());
-
-  candidates.push(...extractBalancedObjects(cleaned).reverse());
-
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start !== -1 && end > start) {
-    candidates.push(cleaned.slice(start, end + 1));
-  }
-  candidates.push(cleaned);
-
-  return candidates;
-};
 
 // Parse a verify verdict, or null if nothing validates.
 export const tryParseVerifyVerdict = (raw: string): VerifyVerdict | null => {
-  for (const candidate of verifyVerdictCandidates(raw)) {
+  for (const candidate of jsonCandidates(raw)) {
     try {
       const parsed = VerifyVerdict.safeParse(JSON.parse(candidate));
       if (parsed.success) {

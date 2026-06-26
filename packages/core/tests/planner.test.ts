@@ -9,6 +9,17 @@ const mockResponse = (text: string) => ({
   parts: [{ type: "text", text }],
 });
 
+// An assistant turn with no text parts — the empty final message of a multi-step turn.
+const emptyAssistant = { info: { id: "final", sessionID: "s", role: "assistant" }, parts: [] };
+
+const minConsult = () => ({
+  questionType: "reconciliation" as const,
+  currentSlice: "slice",
+  question: "is this right?",
+  approach: "an approach",
+  evidence: [],
+});
+
 const minPacket = (): Packet => ({
   runId: "20260618-070000-test",
   frontmatter: {
@@ -169,5 +180,67 @@ describe("createPlanner.finalReview", () => {
       "sendMessage called three times: handshake + finalReview + retry nudge",
     );
     assert.equal(result.verdict, "request_changes");
+  });
+});
+
+// The fix2 scar: a multi-step mini-model turn leaves its FINAL message empty with the
+// verdict in an EARLIER assistant message. Single-turn extractText dropped it and
+// parked a healthy run; the all-message harvest recovers it without a re-ask. Covers
+// BOTH consult and finalReview, and confirms each still fails closed on a real empty.
+describe("createPlanner all-message harvest (fix2)", () => {
+  const verdictInEarlierMessage = (verdict: string): Executor =>
+    ({
+      createSession: async () => "test-session",
+      sendMessage: (() => {
+        let n = 0;
+        return async () => {
+          n++;
+          return n === 1 ? mockResponse("PLANNER_OK") : emptyAssistant;
+        };
+      })(),
+      listMessages: async () => [
+        { info: { id: "u", sessionID: "s", role: "user" }, parts: [] },
+        {
+          info: { id: "a1", sessionID: "s", role: "assistant" },
+          parts: [{ type: "text", text: verdict }],
+        },
+        emptyAssistant,
+      ],
+      deleteSession: async () => {},
+    }) as unknown as Executor;
+
+  it("consult recovers a verdict that lives only in a non-final message", async () => {
+    const verdict = JSON.stringify({ status: "proceed", answer: "go", safe_next_action: "do it" });
+    const planner = createPlanner(verdictInEarlierMessage(verdict), modelConfig, 30000);
+    await planner.handshake("seed", "test-dir");
+    const result = await planner.consult(minConsult());
+    assert.equal(result.status, "proceed", "the buried verdict was harvested, not dropped");
+  });
+
+  it("finalReview recovers a verdict that lives only in a non-final message", async () => {
+    const verdict = JSON.stringify({ verdict: "accept", findings: [], notes: "green" });
+    const planner = createPlanner(verdictInEarlierMessage(verdict), modelConfig, 30000);
+    await planner.handshake("seed", "test-dir");
+    const result = await planner.finalReview(minPacket(), minLedger(), minReport());
+    assert.equal(result.verdict, "accept");
+  });
+
+  it("consult still fails closed to stop when the reply is genuinely empty", async () => {
+    const executor = {
+      createSession: async () => "test-session",
+      sendMessage: (() => {
+        let n = 0;
+        return async () => {
+          n++;
+          return n === 1 ? mockResponse("PLANNER_OK") : emptyAssistant;
+        };
+      })(),
+      listMessages: async () => [emptyAssistant],
+      deleteSession: async () => {},
+    } as unknown as Executor;
+    const planner = createPlanner(executor, modelConfig, 30000);
+    await planner.handshake("seed", "test-dir");
+    const result = await planner.consult(minConsult());
+    assert.equal(result.status, "stop");
   });
 });

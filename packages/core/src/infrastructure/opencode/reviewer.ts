@@ -1,6 +1,6 @@
 // Reviewer adapter: super-daddy convergence reviewer (CONTRACT §18 S2, S11).
-// harvestReview gathers text from EVERY assistant message (the 0-char-final-message scar).
-// superReview separates a real REVIEW from an UNREACHABLE transport failure:
+// Reads replies through the shared all-message harvest (the 0-char-final-message
+// scar). superReview separates a real REVIEW from an UNREACHABLE transport failure:
 // transient drops are retried, then resolve to an `unreachable` outcome (never a
 // forged escalate verdict). The use case decides what unreachable means for run
 // state. A parse failure stays a reviewed escalate (parseSuperReview fails closed).
@@ -11,49 +11,14 @@ import type {
   Reviewer,
   SuperReviewOutcome,
 } from "../../application/ports/reviewer.js";
-import type { TurnResponse } from "../../domain/agent-response.js";
-import { extractText, messageError } from "../../domain/agent-response.js";
 import { parseSuperReview } from "../../domain/convergence.js";
 import type { AuthorFollowupInput, SuperReviewInput } from "../../domain/prompts.js";
 import { renderFollowupAuthoring, renderSuperReview } from "../../domain/prompts.js";
 import { classifyReviewerError, describeUnreachable } from "../../domain/reviewer-transport.js";
+import { harvestReply } from "./harvest.js";
 
 // ---------------------------------------------------------------------------
 // Reviewer adapter implementation
-
-// ReviewHarvest — adapter-local shape from the harvest. The raw text is the only
-// thing that makes a parse failure debuggable; the error is distinct from
-// "unparseable" (a provider error returns HTTP 200 with empty parts, so without
-// surfacing it an infra failure is indistinguishable from a silent model).
-type ReviewHarvest = { text: string; error: string | null };
-
-// harvestReview — adapter-local. Calls executor.listMessages(sessionId), filters
-// assistant messages, extracts text from ALL of them (not just the final one —
-// super-daddy runs bash across several steps and the verdict often appears in an
-// earlier step, leaving the final message empty). Falls back to the sendMessage
-// response text if listing fails. Checks for provider errors across all turns.
-const harvestReview = async (
-  executor: Executor,
-  sessionId: string,
-  response: TurnResponse,
-): Promise<ReviewHarvest> => {
-  try {
-    const allMessages = await executor.listMessages(sessionId);
-    const assistants = allMessages.filter((m) => m.info.role === "assistant");
-    const text = assistants
-      .flatMap((m) => m.parts)
-      .filter((p) => p.type === "text" && p.text)
-      .map((p) => p.text)
-      .join("\n");
-    const error =
-      messageError(response.info) ??
-      assistants.map((m) => messageError(m.info)).find((e): e is string => e !== null) ??
-      null;
-    return { text: text.trim().length > 0 ? text : extractText(response), error };
-  } catch {
-    return { text: extractText(response), error: messageError(response.info) };
-  }
-};
 
 // Small backoff between transport retries — a fresh connection after a dropped
 // socket usually lands; the delay just avoids hammering a flapping backend.
@@ -104,7 +69,7 @@ export const createReviewer = (
       let detail: string;
       try {
         const response = await executor.sendMessage(sessionId, prompt, superdaddyModel, timeoutMs);
-        const { text: raw, error } = await harvestReview(executor, sessionId, response);
+        const { text: raw, error } = await harvestReply(executor, sessionId, response);
 
         // A provider/transport failure returns HTTP 200 with the failure on the
         // turn's `error` and no text — not the model returning a bad reply.

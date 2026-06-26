@@ -9,6 +9,7 @@ import type { OutcomeLedger, Checkpoint } from "./outcomes.js";
 import { redactPacketInfra } from "./packet.js";
 import type { OutcomeDef, Packet } from "./packet.js";
 import type { SubmitReport } from "./report.js";
+import { frontmatterReaskNudge } from "./review.js";
 import type { PlannerResponse, QuestionType } from "./review.js";
 import type { ReviewState, Decision } from "./run.js";
 
@@ -810,10 +811,8 @@ RECEIVED
     input.priorProblems && input.priorProblems.length > 0
       ? `## Your previous attempt was REJECTED at admission
 
-${input.priorProblems.map((p) => `- ${p}`).join("\n")}
+${frontmatterReaskNudge(input.priorProblems.join("; "))}
 ${receivedBlock}
-Fix exactly these and re-emit the FULL packet (frontmatter + body). Do not apologise or explain — just the corrected packet.
-
 `
       : "";
 

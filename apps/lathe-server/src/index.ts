@@ -7,6 +7,7 @@
 // ---------------------------------------------------------------------------
 
 export { createApp, createEventBus } from "./app.js";
+export { createSupervisor } from "./supervisor.js";
 export type { Supervisor, NonChainTipError, TerminalRunError, RunNotFoundError } from "./supervisor.js";
 export type { AppDeps, CreateAppOptions, EventBus } from "./app.js";
 export { acquireSingleInstanceLock, DaemonAlreadyRunningError } from "./single-instance-lock.js";

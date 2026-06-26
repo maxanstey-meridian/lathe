@@ -7,6 +7,7 @@
 // ---------------------------------------------------------------------------
 
 export { JournalEvent, renderJournalEvent } from "./domain/journal.js";
+export { loadConfig } from "./config/config.js";
 export { Config } from "./config/schemas.js";
 export { makePaths, expandHome } from "./config/paths.js";
 export type { Paths } from "./config/paths.js";

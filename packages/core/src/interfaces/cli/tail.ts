@@ -33,6 +33,12 @@ export const openTail = (
     runId,
     daddyDirectory: paths.root,
     autoAdvance,
+    models: {
+      baby: config.baby.modelId,
+      promoted: config.baby.promoteTo?.modelId ?? config.daddy.modelId,
+      daddy: config.daddy.modelId,
+      super: config.superdaddy.modelId,
+    },
   });
   return -1;
 };

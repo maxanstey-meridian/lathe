@@ -176,14 +176,14 @@ test("rotateSession: replaces the session, updates meta, latches first-edit (wit
     const executor = scriptedExecutor(emptyChannel(), [], ["baby-1"]);
     const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
 
-    const newId = await rotateSession(ports, packet, "/tmp/wt", "baby-0", 4, true);
+    const newId = await rotateSession(ports, packet, "/tmp/wt", "baby-0", 4, false);
 
     equal(newId, "baby-1");
     equal(store.readMeta(RUN_ID).babySessionId, "baby-1");
     const gate = store.readGateState(RUN_ID);
     equal(gate.latched, true);
     equal(gate.firstEditApproved, false);
-    equal(gate.reconciliationRequired, false); // has checkpoint → no reconciliation
+    equal(gate.reconciliationRequired, false); // no reconciliation needed
     await cleanTemp(tmp);
   })();
 });
@@ -229,7 +229,7 @@ test("rotateSession: no checkpoint stacks reconciliation (O6)", () => {
       scriptedExecutor(emptyChannel(), [], ["baby-1"]),
       fakePlanner(),
     );
-    await rotateSession(ports, packet, "/tmp/wt", "baby-0", 2, false);
+    await rotateSession(ports, packet, "/tmp/wt", "baby-0", 2, true);
 
     const gate = store.readGateState(RUN_ID);
     equal(gate.reconciliationRequired, true);
@@ -482,6 +482,132 @@ test("makeExecuteRun: resume → reuses prior Daddy session ID, refreshes gate",
     ]);
     // Prior stallRetries preserved (resume doesn't reset counters).
     equal(meta.stallRetries, 0);
+    await cleanTemp(tmp);
+  })();
+});
+
+test("makeExecuteRun: resume without checkpoint but prior accepted reconciliation → Q8b, gate re-latched for first-edit only", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "exec-recon-"));
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+
+    store.freezePacket(RUN_ID, PACKET_RAW);
+
+    store.writeMeta({
+      runId: RUN_ID,
+      status: "queued",
+      attempt: 1,
+      repo: "/tmp/test-repo",
+      base: "main",
+      branch: `meridian/${RUN_ID}`,
+      worktree: join(tmp, "runs", RUN_ID, "worktree"),
+      babySessionId: "baby-old",
+      daddySessionId: "daddy-prior",
+      stallRetries: 0,
+      reorientRetries: 0,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    // Simulate the real gate state after reconciliation was accepted:
+    // clearedGateState set latched=false, firstEditApproved=true.
+    store.writeGateState(
+      RUN_ID,
+      {
+        ...initialGateState(
+          RUN_ID,
+          ["src/index.ts"],
+          [],
+          {
+            checkpointNudgeMs: 1_000_000,
+            checkpointToolCalls: 50,
+            checkpointFiles: 6,
+            checkpointLoc: 80,
+            mutationCommandPatterns: [],
+          },
+          "2026-01-01T00:00:00.000Z",
+        ),
+        latched: false,
+        firstEditApproved: true,
+      },
+    );
+    const shape = parsePacketShape(PACKET_RAW, RUN_ID);
+    ok(shape.ok);
+    store.writeLedger(store.initialLedger(shape.packet));
+    store.replaceObligations(RUN_ID, []);
+
+    // Prior accepted reconciliation — the last decision.
+    store.appendDecision(RUN_ID, {
+      timestamp: "2026-01-01T00:00:01.000Z",
+      source: "daddy",
+      questionType: "reconciliation",
+      question: "reconstructed state",
+      approach: "continue from outcome 2",
+      evidence: [],
+      status: "proceed",
+      answer: "looks good",
+      constraints: [],
+    });
+
+    let firstSeed = "";
+    const capturingPlanner: Planner = {
+      handshake: async () => "daddy-new",
+      resumeSession: async (sid: string) => sid,
+      consult: async () => ({
+        status: "proceed",
+        answer: "go",
+        constraints: [],
+        evidence_used: [],
+        safe_next_action: "x",
+        human_decision_needed: null,
+      }),
+      finalReview: async () => ({
+        verdict: "accept",
+        findings: [],
+        notes: "ok",
+        human_decision_needed: null,
+      }),
+    };
+    const channel = emptyChannel();
+    let sendCount = 0;
+    const capturingExecutor: Executor = {
+      createSession: async () => "baby-1",
+      sendMessage: async (_sid, text) => {
+        if (sendCount === 0) {
+          firstSeed = text;
+        }
+        sendCount++;
+        return { info: { id: "m1", sessionID: "s", tokens: {} }, parts: [] };
+      },
+      listMessages: async () => [],
+      deleteSession: async () => {},
+    };
+    const ports = makePorts(store, fakeRepo(), capturingExecutor, capturingPlanner);
+    const bridge: BridgeBinding<unknown> = { beginRun: () => channel, endRun: () => {} };
+
+    const executeRun = makeExecuteRun(ports, bridge);
+    await executeRun(
+      RUN_ID,
+      {
+        repo: "/tmp/test-repo",
+        worktree: join(tmp, "runs", RUN_ID, "worktree"),
+        base: "main",
+        branch: `meridian/${RUN_ID}`,
+      },
+      {},
+      ports.clock,
+    );
+
+    // Gate must NOT have reconciliationRequired, but MUST re-latch first-edit.
+    const gate = store.readGateState(RUN_ID);
+    equal(gate.reconciliationRequired, false, "prior accepted recon → no reconciliation gate");
+    equal(gate.latched, true, "gate re-latched for first-edit consult");
+    equal(gate.firstEditApproved, false, "first edit not pre-approved — new session must earn it");
+    // Seed must be Q8b (resume, not reconcile).
+    ok(firstSeed.includes("resuming a run after a session rotation"), "Q8b resume seed");
+    ok(!firstSeed.includes("RECONCILIATION"), "not the Q8 reconciliation seed");
+    // Seed must include the full prior reconciliation outcome.
+    ok(firstSeed.includes("reconstructed state"), "Q8b seed includes recon question");
+    ok(firstSeed.includes("continue from outcome 2"), "Q8b seed includes recon approach");
+    ok(firstSeed.includes("looks good"), "Q8b seed includes Daddy's verdict");
     await cleanTemp(tmp);
   })();
 });

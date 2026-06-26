@@ -11,6 +11,7 @@ import {
 import {
   gateTriggerReason,
   rotationGateState,
+  priorReconciliationAccepted,
   mutationDenyReason,
   checkpointNudgeDue,
   checkpointNudgeNotice,
@@ -364,9 +365,9 @@ test("gateTriggerReason: reconciliation required → always latched regardless o
 // O5: rotationGateState
 // ===========================================================================
 
-test("rotationGateState: clean rotation (hasCheckpoint) re-latches first-edit, no reconciliation", () => {
+test("rotationGateState: clean rotation (no reconciliation) re-latches first-edit", () => {
   const base = makeState({ latched: false, firstEditApproved: true });
-  const result = rotationGateState(base, true);
+  const result = rotationGateState(base, false);
 
   assert.strictEqual(
     result.next.firstEditApproved,
@@ -374,23 +375,111 @@ test("rotationGateState: clean rotation (hasCheckpoint) re-latches first-edit, n
     "replaced session must re-earn first-edit",
   );
   assert.strictEqual(result.next.latched, true);
-  assert.strictEqual(
-    result.next.reconciliationRequired,
-    false,
-    "valid checkpoint needs no reconciliation",
-  );
+  assert.strictEqual(result.next.reconciliationRequired, false, "no reconciliation needed");
   assert.ok(result.reason.includes("first edit"));
 });
 
-test("rotationGateState: crash rotation (no checkpoint) stacks reconciliation", () => {
+test("rotationGateState: crash rotation stacks reconciliation", () => {
   const base = makeState({ latched: false, firstEditApproved: true });
-  const result = rotationGateState(base, false);
+  const result = rotationGateState(base, true);
 
   assert.strictEqual(result.next.firstEditApproved, false);
   assert.strictEqual(result.next.latched, true);
   assert.strictEqual(result.next.reconciliationRequired, true, "no checkpoint → reconciliation");
   assert.ok(result.reason.includes("reconciliation"));
   assert.ok(result.reason.includes("checkpoint"));
+});
+
+// ===========================================================================
+// O6 skip: priorReconciliationAccepted
+// ===========================================================================
+
+test("priorReconciliationAccepted: last decision is accepted reconciliation → true", () => {
+  const decisions = [
+    {
+      questionType: "other",
+      status: "proceed",
+      question: "",
+      answer: "",
+      timestamp: "",
+      source: "daddy",
+      evidence: [],
+      constraints: [],
+    },
+    {
+      questionType: "reconciliation",
+      status: "proceed",
+      question: "recon",
+      answer: "yes",
+      timestamp: "",
+      source: "daddy",
+      evidence: [],
+      constraints: [],
+    },
+  ];
+  assert.strictEqual(priorReconciliationAccepted(decisions as any), true);
+});
+
+test("priorReconciliationAccepted: last decision is accepted recon (proceed_with_constraints) → true", () => {
+  const decisions = [
+    {
+      questionType: "reconciliation",
+      status: "proceed_with_constraints",
+      question: "",
+      answer: "",
+      timestamp: "",
+      source: "daddy",
+      evidence: [],
+      constraints: [],
+    },
+  ];
+  assert.strictEqual(priorReconciliationAccepted(decisions as any), true);
+});
+
+test("priorReconciliationAccepted: last decision is non-reconciliation → false", () => {
+  const decisions = [
+    {
+      questionType: "reconciliation",
+      status: "proceed",
+      question: "",
+      answer: "",
+      timestamp: "",
+      source: "daddy",
+      evidence: [],
+      constraints: [],
+    },
+    {
+      questionType: "architecture_discoverable",
+      status: "proceed",
+      question: "",
+      answer: "",
+      timestamp: "",
+      source: "daddy",
+      evidence: [],
+      constraints: [],
+    },
+  ];
+  assert.strictEqual(priorReconciliationAccepted(decisions as any), false);
+});
+
+test("priorReconciliationAccepted: last decision is rejected reconciliation → false", () => {
+  const decisions = [
+    {
+      questionType: "reconciliation",
+      status: "stop",
+      question: "",
+      answer: "",
+      timestamp: "",
+      source: "daddy",
+      evidence: [],
+      constraints: [],
+    },
+  ];
+  assert.strictEqual(priorReconciliationAccepted(decisions as any), false);
+});
+
+test("priorReconciliationAccepted: empty decisions → false", () => {
+  assert.strictEqual(priorReconciliationAccepted([]), false);
 });
 
 // ===========================================================================

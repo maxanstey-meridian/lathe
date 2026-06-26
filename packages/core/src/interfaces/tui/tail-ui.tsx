@@ -36,6 +36,14 @@ export type TailUiDeps = {
   subscribe: Subscribe;
   runId: string;
   daddyDirectory: string;
+  // Model IDs shown in each pane header so the viewer can tell at a glance
+  // which model each session runs — and whether baby has been promoted.
+  models: {
+    baby: string;
+    promoted: string;
+    daddy: string;
+    super: string;
+  };
   // No runId was named on the CLI → follow the chain: when the tailed run finishes,
   // hop to the next run the daemon makes active. False when the user named a runId.
   autoAdvance?: boolean;
@@ -93,12 +101,14 @@ const runLabel = (runId: string, summary: string | undefined): string => {
 
 const Pane = ({
   title,
+  model,
   pane,
   height,
   width,
   accent,
 }: {
   title: string;
+  model: string;
   pane: PaneState;
   height: number;
   width: number;
@@ -122,9 +132,15 @@ const Pane = ({
       overflow="hidden"
       paddingX={1}
     >
-      <Text color={active ? accent : "gray"} bold>
-        {active ? "●" : "○"} {title}
-        {active ? "" : " — waiting…"}
+      <Text wrap="truncate-end">
+        <Text color={active ? accent : "gray"} bold>
+          {active ? "●" : "○"} {title}
+        </Text>
+        <Text color={active ? accent : "gray"} dimColor>
+          {" · "}
+          {model}
+        </Text>
+        {!active && <Text color="gray">{" — waiting…"}</Text>}
       </Text>
       {visible.map((line, i) => (
         <Text
@@ -140,7 +156,7 @@ const Pane = ({
   );
 };
 
-const TailApp = ({ store, budget, subscribe, runId, daddyDirectory }: TailUiDeps) => {
+const TailApp = ({ store, budget, subscribe, runId, daddyDirectory, models }: TailUiDeps) => {
   const { exit } = useApp();
   const [baby, setBaby] = useState<PaneState>(emptyPane());
   const [daddy, setDaddy] = useState<PaneState>(emptyPane());
@@ -163,6 +179,7 @@ const TailApp = ({ store, budget, subscribe, runId, daddyDirectory }: TailUiDeps
   const meta = store.readMetaIfExists(runId);
   const startedAt = meta?.startedAt ? Date.parse(meta.startedAt) : Date.now();
   const label = runLabel(runId, meta?.summary);
+  const babyModel = meta?.promoted ? `⬆ ${models.promoted}` : models.baby;
 
   useInput((input, key) => {
     if (input === "q" || (key.ctrl && input === "c")) {
@@ -358,10 +375,25 @@ const TailApp = ({ store, budget, subscribe, runId, daddyDirectory }: TailUiDeps
   return (
     <Box flexDirection="column" width={frameWidth} overflow="hidden">
       <Box width={frameWidth} overflow="hidden">
-        <Pane title="baby" pane={baby} height={paneHeight} width={babyWidth} accent="green" />
-        <Pane title="daddy" pane={daddy} height={paneHeight} width={daddyWidth} accent="magenta" />
+        <Pane
+          title="baby"
+          model={babyModel}
+          pane={baby}
+          height={paneHeight}
+          width={babyWidth}
+          accent="green"
+        />
+        <Pane
+          title="daddy"
+          model={models.daddy}
+          pane={daddy}
+          height={paneHeight}
+          width={daddyWidth}
+          accent="magenta"
+        />
         <Pane
           title="super-daddy"
+          model={models.super}
           pane={superPane}
           height={paneHeight}
           width={superWidth}

@@ -14,6 +14,7 @@
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { priorReconciliationAccepted } from "../../domain/gate-decisions.js";
 import { initialGateState } from "../../domain/gate.js";
 import { parsePacketShape } from "../../domain/packet.js";
 import type { Packet } from "../../domain/packet.js";
@@ -21,6 +22,7 @@ import {
   q1InitialSeed,
   q2RotationSeed,
   q8ReconciliationSeed,
+  q8ResumeSeed,
   renderDaddySeed,
 } from "../../domain/prompts.js";
 import { renderReportMarkdown } from "../../domain/report.js";
@@ -145,13 +147,15 @@ export const makeExecuteRun =
     });
     journal(ports, runId, 0, { event: "run_started", runId, attempt });
 
-    // Seed choice: fresh → Q1; resume with a checkpoint → Q2; resume without →
-    // Q8 reconciliation, with the gate latched (O6).
+    // Seed choice: fresh → Q1; resume with a checkpoint → Q2; resume without
+    // but prior reconciliation was accepted → Q8b (skip redundant recon);
+    // resume without and no prior accepted recon → Q8 with gate latched (O6).
     let seed: Seed;
     if (!isResume) {
       seed = { name: "Q1", text: q1InitialSeed(packet, store.readLedger(runId)) };
     } else {
       const checkpoint = store.latestCheckpoint(runId);
+      const decisions = store.readDecisions(runId);
       if (checkpoint) {
         seed = {
           name: "Q2",
@@ -160,7 +164,29 @@ export const makeExecuteRun =
             store.readLedger(runId),
             checkpoint,
             store.readReviewState(runId),
-            store.readDecisions(runId),
+            decisions,
+          ),
+        };
+      } else if (priorReconciliationAccepted(decisions)) {
+        // Prior reconciliation was accepted — demote the stale gate from
+        // reconciliation to first-edit only. The gate re-latches
+        // (firstEditApproved: false) so the fresh session still clears
+        // its plan with one consult, but reconciliationRequired is lifted.
+        const gate = store.readGateState(runId);
+        store.writeGateState(runId, {
+          ...gate,
+          latched: true,
+          firstEditApproved: false,
+          reconciliationRequired: false,
+          latchReason: "first edit of the run requires an accepted planner decision",
+        });
+        seed = {
+          name: "Q8b",
+          text: q8ResumeSeed(
+            packet,
+            store.readLedger(runId),
+            store.readReviewState(runId),
+            decisions,
           ),
         };
       } else {
@@ -177,7 +203,7 @@ export const makeExecuteRun =
             packet,
             store.readLedger(runId),
             store.readReviewState(runId),
-            store.readDecisions(runId),
+            decisions,
           ),
         };
       }

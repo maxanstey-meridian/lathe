@@ -21,6 +21,7 @@ import {
   volumeCheckpointReason,
   checkpointNudgeDue,
   clearedGateState,
+  priorReconciliationAccepted,
 } from "../../domain/gate-decisions.js";
 import { checkReorientBound } from "../../domain/liveness.js";
 import type { Packet } from "../../domain/packet.js";
@@ -32,6 +33,7 @@ import {
   q6ReportProperly,
   q7ReportRejected,
   q8ReconciliationSeed,
+  q8ResumeSeed,
   qReorientSeed,
   ladderNudge,
   softCheckpointNudge,
@@ -169,27 +171,32 @@ const looksLikeProseFinish = (text: string): boolean =>
   );
 
 // Pick the rotation/resume seed from durable state: latest checkpoint → Q2
-// (gate clears on the new session's first accepted decision), none → Q8
-// reconciliation (the gate stacks reconciliation). If a handoff artifact
-// exists on disk, prepend an inject message to the seed and set awaitingVerification.
-// Returns whether a checkpoint was found so the caller re-latches the matching gate (O5/O6).
+// (gate clears on the new session's first accepted decision); no checkpoint but
+// the last decision was an accepted reconciliation → Q8b (skip redundant recon);
+// otherwise → Q8 reconciliation (the gate stacks reconciliation). If a handoff
+// artifact exists on disk, prepend an inject message to the seed and set awaitingVerification.
+// Returns whether reconciliation is needed so the caller can set the matching gate (O5/O6).
 
 const reseedFromCheckpoint = (
   ports: RunPorts,
   packet: Packet,
   worktree: string,
-): { seed: Seed; hasCheckpoint: boolean; handoffInjected: boolean } => {
+): { seed: Seed; needsReconciliation: boolean; handoffInjected: boolean } => {
   const runId = packet.runId;
   const ledger = ports.store.readLedger(runId);
   const review = ports.store.readReviewState(runId);
   const decisions = ports.store.readDecisions(runId);
   const checkpoint = ports.store.latestCheckpoint(runId);
 
+  const reconAccepted = priorReconciliationAccepted(decisions);
   let seedText: string;
   let seedName: string;
   if (checkpoint) {
     seedName = "Q2";
     seedText = q2RotationSeed(packet, ledger, checkpoint, review, decisions);
+  } else if (reconAccepted) {
+    seedName = "Q8b";
+    seedText = q8ResumeSeed(packet, ledger, review, decisions);
   } else {
     seedName = "Q8";
     seedText = q8ReconciliationSeed(packet, ledger, review, decisions);
@@ -213,7 +220,7 @@ const reseedFromCheckpoint = (
 
   return {
     seed: { name: seedName, text: seedText },
-    hasCheckpoint: checkpoint !== undefined,
+    needsReconciliation: !checkpoint && !reconAccepted,
     handoffInjected: injectText.length > 0,
   };
 };
@@ -355,8 +362,19 @@ export const turnLoop = async (
             "Two consecutive executor turns failed to complete (model/session failure). See journal.",
         });
       }
-      sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, false);
-      const { seed: reseed, handoffInjected } = reseedFromCheckpoint(ports, packet, worktree);
+      const {
+        seed: reseed,
+        needsReconciliation,
+        handoffInjected,
+      } = reseedFromCheckpoint(ports, packet, worktree);
+      sessionId = await rotateSession(
+        ports,
+        packet,
+        worktree,
+        sessionId,
+        turn,
+        needsReconciliation,
+      );
       next = reseed;
       if (handoffInjected) {
         channel.awaitingVerification = true;
@@ -528,7 +546,7 @@ export const turnLoop = async (
             attempt: used + 1,
             fix: plannerResponse.safe_next_action,
           });
-          sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, false);
+          sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, true);
           const ledger = store.readLedger(runId);
           const review = store.readReviewState(runId);
           const decisions = store.readDecisions(runId);
@@ -626,7 +644,7 @@ export const turnLoop = async (
               });
               const {
                 seed: reseed,
-                hasCheckpoint,
+                needsReconciliation,
                 handoffInjected,
               } = reseedFromCheckpoint(ports, packet, worktree);
               sessionId = await rotateSession(
@@ -635,7 +653,7 @@ export const turnLoop = async (
                 worktree,
                 sessionId,
                 turn,
-                hasCheckpoint,
+                needsReconciliation,
               );
               next = reseed;
               if (handoffInjected) {
@@ -675,10 +693,17 @@ export const turnLoop = async (
         }
         const {
           seed: reseed,
-          hasCheckpoint,
+          needsReconciliation,
           handoffInjected,
         } = reseedFromCheckpoint(ports, packet, worktree);
-        sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, hasCheckpoint);
+        sessionId = await rotateSession(
+          ports,
+          packet,
+          worktree,
+          sessionId,
+          turn,
+          needsReconciliation,
+        );
         next = reseed;
         if (handoffInjected) {
           channel.awaitingVerification = true;
@@ -702,10 +727,17 @@ export const turnLoop = async (
         });
         const {
           seed: reseed,
-          hasCheckpoint,
+          needsReconciliation,
           handoffInjected,
         } = reseedFromCheckpoint(ports, packet, worktree);
-        sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, hasCheckpoint);
+        sessionId = await rotateSession(
+          ports,
+          packet,
+          worktree,
+          sessionId,
+          turn,
+          needsReconciliation,
+        );
         next = reseed;
         if (handoffInjected) {
           channel.awaitingVerification = true;

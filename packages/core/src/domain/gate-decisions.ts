@@ -6,6 +6,8 @@
 import type { DiffStats } from "./gate-classification.js";
 import { editTargetOutOfSurface } from "./gate-tools.js";
 import type { GateState } from "./gate.js";
+import { ACCEPTED_STATUSES, type PlannerStatus } from "./review.js";
+import type { Decision } from "./run.js";
 
 type DeltaInput = { files: string[]; loc: number };
 
@@ -65,28 +67,41 @@ export const volumeCheckpointReason = (
 
 // O5: the gate state a replaced session inherits.
 // First-edit is re-latched on EVERY rotation.
-// Crash path (no checkpoint) stacks reconciliation on top.
+// needsReconciliation stacks reconciliation on top (crash path: no checkpoint
+// AND no prior accepted reconciliation).
 // The driver writes the result; this function is pure.
 export const rotationGateState = (
   state: GateState,
-  hasCheckpoint: boolean,
+  needsReconciliation: boolean,
 ): {
   next: GateState;
   reason: string;
 } => {
-  const reason = hasCheckpoint
-    ? "first edit of the new session requires an accepted planner decision"
-    : "reconciliation required: no valid checkpoint from the previous session";
+  const reason = needsReconciliation
+    ? "reconciliation required: no valid checkpoint from the previous session"
+    : "first edit of the new session requires an accepted planner decision";
   return {
     next: {
       ...state,
       latched: true,
       firstEditApproved: false,
-      reconciliationRequired: !hasCheckpoint,
+      reconciliationRequired: needsReconciliation,
       latchReason: reason,
     },
     reason,
   };
+};
+
+// O6 skip: if the most recent decision was a Daddy-accepted reconciliation,
+// the state was already validated — don't force the successor session to
+// re-reconcile. Scoped to the LAST decision only: a recon from turn 1 must
+// not suppress a legitimately needed recon at turn 9.
+export const priorReconciliationAccepted = (decisions: Decision[]): boolean => {
+  const last = decisions.at(-1);
+  return (
+    last?.questionType === "reconciliation" &&
+    ACCEPTED_STATUSES.some((s) => s === (last.status as PlannerStatus))
+  );
 };
 
 // G5 (deny): mutation deny reason, first match wins.

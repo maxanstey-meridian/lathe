@@ -94,6 +94,27 @@ const renderRecentDecisions = (decisions: Decision[], n: number): string => {
     .join("\n");
 };
 
+const renderLastReconciliation = (decisions: Decision[]): string => {
+  const recon = [...decisions].reverse().find((d) => d.questionType === "reconciliation");
+  if (!recon) {
+    return "- No prior reconciliation found";
+  }
+  const constraints =
+    recon.constraints.length > 0
+      ? `\n\n**Constraints from Daddy:**\n${recon.constraints.map((c) => `- ${c}`).join("\n")}`
+      : "";
+  return `**Slice:** ${recon.currentSlice ?? "unknown"}
+
+**What Baby asked Daddy:**
+${recon.question}
+
+**Baby's reconstruction:**
+${recon.approach ?? "(not provided)"}
+
+**Daddy's verdict [${recon.status}]:**
+${recon.answer}${constraints}`;
+};
+
 // ---------------------------------------------------------------------------
 // Q-table functions
 // ---------------------------------------------------------------------------
@@ -250,6 +271,41 @@ Your first task is RECONCILIATION, not implementation:
 4. Call meridian-bridge_ask_planner with questionType "reconciliation", your reconstruction as the question, and the worktree/ledger facts as evidence.
 
 Edits are blocked until Daddy accepts your reconstruction. Reads are available.
+
+${BRIDGE_CONTRACT}
+
+## Outcome ledger (last known)
+
+${renderOutcomes(ledger)}
+
+## Live review obligations from Daddy
+
+${renderObligations(review)}
+
+## Recent planner decisions
+
+${renderRecentDecisions(decisions, 6)}
+
+## The handoff packet
+
+${redactPacketInfra(packet.raw)}`;
+
+// Q8b — resume without checkpoint, prior reconciliation already accepted (O6 skip).
+// Same durable-state payload as Q8, minus the reconciliation burden: Daddy already
+// validated the state, so Baby continues from where the ledger says it is. The gate
+// re-latches for first-edit approval only (not reconciliation).
+// The full last reconciliation decision is included so Baby knows exactly what Daddy
+// validated and what constraints remain — without it Baby is flying blind.
+export const q8ResumeSeed = (
+  packet: Packet,
+  ledger: OutcomeLedger,
+  review: ReviewState,
+  decisions: Decision[],
+): string => `You are Baby: the Meridian executor, resuming a run after a session rotation. Your previous session's reconciliation was accepted by Daddy — the durable state below is validated. No checkpoint narrative exists, but the outcome ledger and decision history are ground truth. Resume implementation from where the ledger says you are.
+
+## Last accepted reconciliation (your starting point)
+
+${renderLastReconciliation(decisions)}
 
 ${BRIDGE_CONTRACT}
 

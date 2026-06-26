@@ -22,7 +22,6 @@ import {
   type RunLoopSeams,
 } from "../../application/use-cases/run-loop.js";
 import type { RunPorts } from "../../application/use-cases/run-runtime.js";
-import { babyContextBudget } from "../../config/config.js";
 import { expandHome, type Paths } from "../../config/paths.js";
 import type { Config } from "../../config/schemas.js";
 import { campaignIdForRun } from "../../domain/campaign.js";
@@ -59,7 +58,6 @@ import {
   waitForServer,
   pluginPath,
 } from "../../infrastructure/opencode/config.js";
-import { createEvents } from "../../infrastructure/opencode/events.js";
 import { createOpencodeClient } from "../../infrastructure/opencode/executor.js";
 import { createPlanner } from "../../infrastructure/opencode/planner.js";
 import { createReviewer } from "../../infrastructure/opencode/reviewer.js";

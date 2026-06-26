@@ -594,6 +594,7 @@ test("SSE: /events returns 200 with text/event-stream", async () => {
   const res = await app.request("http://localhost/events");
   equal(res.status, 200);
   ok(res.headers.get("content-type")?.includes("text/event-stream"));
+  await res.body?.cancel();
 });
 
 test("SSE: reconnect-mid-stream replay from Last-Event-ID", async () => {
@@ -622,42 +623,14 @@ test("SSE: reconnect-mid-stream replay from Last-Event-ID", async () => {
   });
   equal(res.status, 200);
 
-  // Read the replayed events from the stream using a reader, then abort
-  const body = await new Promise<string>((resolve, reject) => {
-    const reader = res.body!.getReader();
-    const chunks: Uint8Array[] = [];
-    let totalLen = 0;
-    function read() {
-      reader.read().then(({ done, value }) => {
-        if (done || !value) { clearTimer(); resolve(new TextDecoder().decode(concat(chunks))); return; }
-        totalLen += value.length;
-        chunks.push(value);
-        const text = new TextDecoder().decode(value);
-        if (text.includes("id: 3")) {
-          // We've seen the last expected replayed event — abort the stream
-          clearTimer();
-          reader.cancel();
-          resolve(new TextDecoder().decode(concat(chunks)));
-        } else {
-          read();
-        }
-      }).catch(reject);
-    }
-    function clearTimer() { clearTimeout(timer); }
-    read();
-  });
+  const reader = res.body!.getReader();
+  const body = await readUntilId(reader, "3");
+  clearTimeout(timer);
+  await reader.cancel();
   ok(body.includes("id: 2"), "replays seq 2");
   ok(body.includes("id: 3"), "replays seq 3");
   ok(!body.includes("id: 1"), "does not replay seq 1 (exclusive)");
 });
-
-function concat(chunks: Uint8Array[]): Uint8Array {
-  const totalLen = chunks.reduce((sum, c) => sum + c.length, 0);
-  const result = new Uint8Array(totalLen);
-  let offset = 0;
-  for (const c of chunks) { result.set(c, offset); offset += c.length; }
-  return result;
-}
 
 test("SSE: reconnect with Last-Event-ID = 3 gets only live events", async () => {
   const bus = createEventBus();
@@ -697,7 +670,7 @@ test("SSE: reconnect with Last-Event-ID = 3 gets only live events", async () => 
   const reader = res.body!.getReader();
   const bodyChunk = await reader.read();
   clearTimeout(timer);
-  reader.cancel();
+  await reader.cancel();
   if (bodyChunk.value) {
     const body = new TextDecoder().decode(bodyChunk.value);
     ok(!body.includes("id: 1"), "no replay of seq 1");
@@ -736,6 +709,7 @@ test("SSE: sequential reconnects are gap-free and dup-free", async () => {
   const readerA = resA.body!.getReader();
   const bodyA = await readUntilId(readerA, "5");
   clearTimeout(timerA);
+  await readerA.cancel();
 
   ok(bodyA.includes("id: 3"), "Client A replays seq 3");
   ok(bodyA.includes("id: 4"), "Client A replays seq 4");
@@ -755,6 +729,7 @@ test("SSE: sequential reconnects are gap-free and dup-free", async () => {
   const readerB = resB.body!.getReader();
   const bodyB = await readUntilId(readerB, "5");
   clearTimeout(timerB);
+  await readerB.cancel();
 
   ok(bodyB.includes("id: 5"), "Client B replays seq 5");
   ok(!bodyB.includes("id: 3"), "Client B no replay of seq 3 (exclusive at 4)");

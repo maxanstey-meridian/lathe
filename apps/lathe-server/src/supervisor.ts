@@ -73,6 +73,8 @@ export class RunNotFoundError extends Error {
 export type SupervisorOptions = {
   /** Journal tail poll cadence in ms. Default: 1000. */
   pollIntervalMs?: number;
+  /** Unit tests can exercise supervisor methods without starting the driver. */
+  startDriver?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -226,7 +228,7 @@ export const createSupervisor = (
   // --- Start runDriver ---
 
   // runDriver is a background promise; the supervisor holds its handle.
-  const driverPromise = runDriver(config, paths, seams);
+  const driverPromise = options.startDriver === false ? Promise.resolve() : runDriver(config, paths, seams);
 
   // --- Lifecycle method implementations ---
 
@@ -305,15 +307,20 @@ export const createSupervisor = (
       journalTail.stop();
 
       // Await the driver to exit (with a timeout to avoid hanging forever).
-      await Promise.race([
-        driverPromise,
-        new Promise<void>((_, reject) => {
-          setTimeout(
-            () => reject(new Error("runDriver shutdown timeout")),
-            10_000,
-          );
-        }),
-      ]);
+      let shutdownTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          driverPromise,
+          new Promise<void>((_, reject) => {
+            shutdownTimer = setTimeout(
+              () => reject(new Error("runDriver shutdown timeout")),
+              10_000,
+            );
+          }),
+        ]);
+      } finally {
+        if (shutdownTimer) clearTimeout(shutdownTimer);
+      }
     },
 
     get appDeps(): AppDeps {

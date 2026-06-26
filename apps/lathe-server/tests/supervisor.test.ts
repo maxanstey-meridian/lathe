@@ -83,10 +83,6 @@ test body
 `;
 };
 
-/**
- * Factory: creates a supervisor (which starts runDriver) and returns a
- * teardown that calls stop(). The 10s timeout in stop() prevents hanging.
- */
 const withSupervisor = async (
   fn: (supervisor: Supervisor, paths: Paths & { teardown: () => Promise<void> }) => Promise<void>,
   base?: string,
@@ -95,15 +91,11 @@ const withSupervisor = async (
   let supervisor: Supervisor | undefined;
   try {
     const config = ConfigSchema.parse({}) as Config;
-    supervisor = createSupervisor(config, paths);
+    supervisor = createSupervisor(config, paths, { startDriver: false });
     await fn(supervisor, paths);
   } finally {
     if (supervisor) {
-      try {
-        await supervisor.stop();
-      } catch {
-        // stop() has a 10s timeout — we don't need to handle it.
-      }
+      await supervisor.stop();
     }
     await paths.teardown();
   }

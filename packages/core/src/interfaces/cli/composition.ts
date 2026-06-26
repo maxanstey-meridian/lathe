@@ -16,7 +16,11 @@ import type { ModelConfig } from "../../application/ports/executor.js";
 import type { Repo } from "../../application/ports/repo.js";
 import { convergeRun } from "../../application/use-cases/converge-run.js";
 import { makeExecuteRun, type BridgeBinding } from "../../application/use-cases/execute-run.js";
-import { runLoop, type WaitForWorkCallback, type RunLoopSeams } from "../../application/use-cases/run-loop.js";
+import {
+  runLoop,
+  type WaitForWorkCallback,
+  type RunLoopSeams,
+} from "../../application/use-cases/run-loop.js";
 import type { RunPorts } from "../../application/use-cases/run-runtime.js";
 import { babyContextBudget } from "../../config/config.js";
 import { expandHome, type Paths } from "../../config/paths.js";
@@ -61,7 +65,6 @@ import { createPlanner } from "../../infrastructure/opencode/planner.js";
 import { createReviewer } from "../../infrastructure/opencode/reviewer.js";
 import { StoreAdapter } from "../../infrastructure/store.js";
 import { createVerify } from "../../infrastructure/verify.js";
-
 
 // ---------------------------------------------------------------------------
 // Adapter assembly
@@ -125,7 +128,11 @@ const stopServe = (serve: Serve): void => {
 // loop, and hands it the bridge lock (which doubles as the serve-substrate
 // lifecycle) plus the executeRun / convergeStep / waitForWork callbacks.
 
-export const runDriver = async (config: Config, paths: Paths, seams?: RunLoopSeams): Promise<void> => {
+export const runDriver = async (
+  config: Config,
+  paths: Paths,
+  seams?: RunLoopSeams,
+): Promise<void> => {
   mkdirSync(paths.queueDir, { recursive: true });
   mkdirSync(paths.runsDir, { recursive: true });
 

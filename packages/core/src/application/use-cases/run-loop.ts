@@ -97,9 +97,13 @@ export const runLoop = async <Ref>(
   // our own SIGINT handler — the supervisor owns process-signal handling.
   // Normalise both paths to stopRequested as the single loop-exit flag.
   if (seams?.stopSignal) {
-    seams.stopSignal.addEventListener("abort", () => {
-      stopRequested = true;
-    }, { once: true });
+    seams.stopSignal.addEventListener(
+      "abort",
+      () => {
+        stopRequested = true;
+      },
+      { once: true },
+    );
   } else {
     onSigint = () => {
       if (stopRequested) {

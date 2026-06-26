@@ -7,9 +7,9 @@
 //
 // Extracted from composition.ts to keep it free of .tsx transitive dependencies.
 
-import type { Config } from "../../config/schemas.js";
 import { babyContextBudget } from "../../config/config.js";
 import type { Paths } from "../../config/paths.js";
+import type { Config } from "../../config/schemas.js";
 import { systemClock } from "../../infrastructure/clock.js";
 import { createEvents } from "../../infrastructure/opencode/events.js";
 import { StoreAdapter } from "../../infrastructure/store.js";

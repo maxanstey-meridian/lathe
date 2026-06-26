@@ -47,8 +47,17 @@ export { buildRepo, runDriver } from "./interfaces/cli/composition.js";
 export { admitPacket } from "./application/use-cases/admit-packet.js";
 export { acceptRun } from "./application/use-cases/accept-run.js";
 export { promoteStaged } from "./application/use-cases/chain-promotion.js";
-export { runLoop, recoverOrphanedRuns, recoverStalledRunsAtStartup } from "./application/use-cases/run-loop.js";
-export type { ExecuteRunCallback, ConvergeCallback, WaitForWorkCallback, RunLoopSeams } from "./application/use-cases/run-loop.js";
+export {
+  runLoop,
+  recoverOrphanedRuns,
+  recoverStalledRunsAtStartup,
+} from "./application/use-cases/run-loop.js";
+export type {
+  ExecuteRunCallback,
+  ConvergeCallback,
+  WaitForWorkCallback,
+  RunLoopSeams,
+} from "./application/use-cases/run-loop.js";
 
 // ---------------------------------------------------------------------------
 // Domain (pure helpers consumed by lifecycle methods)

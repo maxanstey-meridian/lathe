@@ -9,9 +9,9 @@
 // ---------------------------------------------------------------------------
 
 import type { Executor, ModelConfig } from "../../application/ports/executor.js";
-import { extractText } from "../../domain/agent-response.js";
 import type { HandoffArtifact, VerifyVerdict } from "../../domain/handoff.js";
 import { parseVerifyVerdict } from "../../domain/handoff.js";
+import { harvestReply } from "./harvest.js";
 
 // ---------------------------------------------------------------------------
 // buildVerifyPrompt — pure function, no I/O
@@ -121,7 +121,9 @@ export const runVerify = async (
   try {
     sessionId = await executor.createSession("meridian-verify", worktree);
     const response = await executor.sendMessage(sessionId, prompt, verifyModel, verifyTimeoutMs);
-    const raw = extractText(response);
+    // All-message harvest: daddy reads files (multi-step) before emitting the
+    // verdict, which can land in an earlier step leaving the final message empty.
+    const { text: raw } = await harvestReply(executor, sessionId, response);
     return parseVerifyVerdict(raw);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);

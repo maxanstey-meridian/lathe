@@ -309,6 +309,21 @@ test("extractAuthoredPacket: no frontmatter → trimmed text (parse fails downst
   assert.equal(extractAuthoredPacket("  no packet here  "), "no packet here");
 });
 
+test("extractAuthoredPacket: unwraps a LEADING code fence around the whole packet", () => {
+  const reply = "```markdown\n---\nrepo: x\n---\n\n# body\n```";
+  const out = extractAuthoredPacket(reply);
+  assert.ok(out.startsWith("---\n"));
+  assert.ok(out.includes("# body"));
+  assert.ok(!out.includes("```"));
+});
+
+test("extractAuthoredPacket: tolerates CRLF line endings", () => {
+  const reply = "---\r\nrepo: x\r\n---\r\n\r\n# body\r\n";
+  const out = extractAuthoredPacket(reply);
+  assert.ok(out.startsWith("---\n"));
+  assert.ok(!out.includes("\r"));
+});
+
 // --- stampFollowupLineage: authored intent + engine-stamped lineage ---
 
 const AUTHORED = `---
@@ -401,6 +416,70 @@ test("stampFollowupLineage: a repaired outcome is never also a regression guard"
 
 test("stampFollowupLineage: a reply with no frontmatter throws (authoring failure)", () => {
   assert.throws(() => stampFollowupLineage("I could not write a packet.", LINEAGE));
+});
+
+// The cli-cutover scar: super-daddy markdown-escaped a backtick inside a double-quoted
+// summary (`\`lathe serve\``), which is an invalid YAML escape. The JSON paths salvage
+// candidate substrings; the YAML path had none, so one bad scalar parked the run. The
+// deterministic escape repair now recovers it into an admittable packet.
+test("stampFollowupLineage: salvages an invalid YAML escape into an admittable packet", () => {
+  const escaped = `---
+summary: "run \\\`lathe serve\\\` then re-verify"
+outcomes:
+  - id: fix-serve
+    description: "serve works again"
+expected_surface:
+  - "src/serve.ts"
+verification:
+  - command: "pnpm check"
+---
+
+# fix serve
+
+Repair it.
+`;
+  const parsed = parsePacketShape(stampFollowupLineage(escaped, LINEAGE), "20260614-180000-fix2");
+  assert.ok(parsed.ok, parsed.ok ? "" : parsed.problems.join("; "));
+  if (parsed.ok) {
+    // The backticks survive as literal characters — a salvage, not a meaning rewrite.
+    assert.equal(parsed.packet.frontmatter.summary, "run `lathe serve` then re-verify");
+    assert.equal(parsed.packet.frontmatter.base, "meridian/parent");
+  }
+});
+
+// An escape the repair cannot fix still throws — with a concrete, actionable reason
+// (so the re-ask is specific, not generic).
+test("stampFollowupLineage: an unsalvageable YAML error throws a concrete reason", () => {
+  const broken = `---
+summary: "ok"
+outcomes: [unclosed
+---
+body
+`;
+  assert.throws(() => stampFollowupLineage(broken, LINEAGE), /not valid YAML|double-quoted/);
+});
+
+test("stampFollowupLineage: a fence-wrapped authored reply still admits (the live park bug)", () => {
+  const wrapped = "```markdown\n" + AUTHORED + "```\n";
+  const parsed = parsePacketShape(
+    stampFollowupLineage(wrapped, LINEAGE),
+    "20260614-180000-feature-fix2",
+  );
+  assert.ok(parsed.ok, parsed.ok ? "" : parsed.problems.join("; "));
+  if (parsed.ok) {
+    assert.equal(parsed.packet.frontmatter.summary, "fix the typecheck");
+    assert.equal(parsed.packet.frontmatter.base, "meridian/parent");
+    assert.ok(parsed.packet.body.includes("Repair it."));
+  }
+});
+
+test("stampFollowupLineage: narration before the frontmatter still admits", () => {
+  const narrated = "Here is the follow-up packet you asked for:\n\n" + AUTHORED;
+  const parsed = parsePacketShape(
+    stampFollowupLineage(narrated, LINEAGE),
+    "20260614-180000-feature-fix2",
+  );
+  assert.ok(parsed.ok, parsed.ok ? "" : parsed.problems.join("; "));
 });
 
 // --- upsertPass: first pass, append, replace ---

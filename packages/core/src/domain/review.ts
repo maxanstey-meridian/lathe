@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { balancedObjects, jsonCandidates } from "./structured-extraction.js";
 
 // ---------------------------------------------------------------------------
 // Planner (CONTRACT §9) — ask_repo_first is deleted in v2 (M3)
@@ -71,73 +72,13 @@ export type FinalReview = z.infer<typeof FinalReview>;
 
 // ---------------------------------------------------------------------------
 // Fail-closed parsers (CONTRACT §18 S11, §9 M9)
-// Each parser's candidate-extraction strategy is unique — they guard different scars.
-
-// Balanced top-level objects, ignoring braces inside JSON strings.
-const extractBalancedObjects = (text: string): string[] => {
-  const objects: string[] = [];
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escape = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      if (escape) {
-        escape = false;
-      } else if (ch === "\\") {
-        escape = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-    } else if (ch === "{") {
-      if (depth === 0) {
-        start = i;
-      }
-      depth += 1;
-    } else if (ch === "}" && depth > 0) {
-      depth -= 1;
-      if (depth === 0 && start !== -1) {
-        objects.push(text.slice(start, i + 1));
-        start = -1;
-      }
-    }
-  }
-  return objects;
-};
-
-// Candidate JSON substrings to try, best-first: fenced blocks then every
-// balanced object (last-first, since reasoning models trail the real verdict),
-// then the legacy whole-string fallbacks.
-const plannerResponseCandidates = (raw: string): string[] => {
-  const cleaned = raw.trim();
-  const candidates: string[] = [];
-
-  const fences = [...cleaned.matchAll(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/g)]
-    .map((m) => m[1]?.trim())
-    .filter((s): s is string => Boolean(s));
-  candidates.push(...fences.reverse());
-
-  candidates.push(...extractBalancedObjects(cleaned).reverse());
-
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start !== -1 && end > start) {
-    candidates.push(cleaned.slice(start, end + 1));
-  }
-  candidates.push(cleaned);
-
-  return candidates;
-};
+// The candidate scanner is single-sourced in structured-extraction.ts; each parser
+// picks the builder its scar needs (full jsonCandidates vs balanced-only).
 
 // Parse a planner response, or null if nothing validates. Robust to verbose
 // reasoning models that bury the verdict in prose or fenced blocks.
 export const tryParsePlannerResponse = (raw: string): PlannerResponse | null => {
-  for (const candidate of plannerResponseCandidates(raw)) {
+  for (const candidate of jsonCandidates(raw)) {
     try {
       const parsed = PlannerResponse.safeParse(JSON.parse(candidate));
       if (parsed.success) {
@@ -166,7 +107,7 @@ export const parsePlannerResponse = (raw: string): PlannerResponse =>
 // (usually a truncated or prose-wrapped reply). Fed verbatim into the re-ask.
 export const diagnosePlannerParse = (raw: string): string => {
   let syntaxError: string | null = null;
-  for (const candidate of plannerResponseCandidates(raw)) {
+  for (const candidate of jsonCandidates(raw)) {
     let value: unknown;
     try {
       value = JSON.parse(candidate);
@@ -191,11 +132,18 @@ export const diagnosePlannerParse = (raw: string): string => {
 export const jsonReaskNudge = (reason: string): string =>
   `Your previous reply could not be accepted: ${reason}. Reply again with ONLY the JSON verdict object in the response shape above — no reasoning, no markdown fences, nothing before the opening { or after the closing }.`;
 
+// The frontmatter sibling of jsonReaskNudge — one re-ask family, two formats. Same
+// discipline (concrete reason + "emit ONLY the block, nothing around it"), specialised
+// for the super-daddy authoring path, where a too-generic re-ask let an invalid YAML
+// escape survive both attempts (the cli-cutover park).
+export const frontmatterReaskNudge = (reason: string): string =>
+  `Your previous reply could not be accepted: ${reason}. Reply again with ONLY the corrected packet — its YAML frontmatter block (starting at the opening \`---\`) then the markdown body — with no prose, narration, or code fences around it. Do not apologise or explain.`;
+
 // Parse a final-review response, or null if nothing validates. Mirrors
 // parseSuperReview's scan: every balanced {...} object, LAST first (the real
 // verdict trails any prose example), return the FIRST candidate that validates.
 export const tryParseFinalReview = (raw: string): FinalReview | null => {
-  for (const candidate of extractBalancedObjects(raw).reverse()) {
+  for (const candidate of balancedObjects(raw).reverse()) {
     try {
       const parsed = FinalReview.safeParse(JSON.parse(candidate));
       if (parsed.success) {

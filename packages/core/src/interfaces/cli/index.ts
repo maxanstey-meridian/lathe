@@ -11,15 +11,9 @@
 import { loadConfig } from "../../config/config.js";
 import { systemClock } from "../../infrastructure/clock.js";
 import { StoreAdapter } from "../../infrastructure/store.js";
-import {
-  buildRepo,
-  runDriver,
-  convergeOnce,
-  superReviewOnce,
-  openPlanner,
-} from "./composition.js";
-import { openTail } from "./tail.js";
+import { buildRepo, runDriver, convergeOnce, superReviewOnce, openPlanner } from "./composition.js";
 import { dispatch, type CliDeps } from "./dispatch.js";
+import { openTail } from "./tail.js";
 
 const { config, paths } = loadConfig();
 const clock = systemClock;

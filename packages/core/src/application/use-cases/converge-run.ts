@@ -395,6 +395,7 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
               "utf-8",
             );
             let problems: string[] | null = null;
+            let priorRawSnippet: string | undefined;
             for (let attempt = 0; attempt < 2; attempt++) {
               const authored = await reviewer.authorFollowup(
                 {
@@ -405,6 +406,7 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
                   pass: pass + 1,
                   campaignId,
                   priorProblems: problems ?? undefined,
+                  priorRawSnippet,
                 },
                 recordReviewerSession,
               );
@@ -416,21 +418,39 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
                 throw new Error(`authorFollowup unreachable: ${authored.detail}`);
               }
 
-              let stamped: string;
+              // Stamp + admission-check this attempt, collecting any problems.
+              let stamped: string | null = null;
+              let attemptProblems: string[] | null = null;
               try {
                 stamped = stampFollowupLineage(authored.content, lineage);
+                const shape = parsePacketShape(stamped, followupRunId);
+                if (!shape.ok) {
+                  attemptProblems = shape.problems;
+                }
               } catch (err) {
-                problems = [err instanceof Error ? err.message : String(err)];
-                continue;
+                attemptProblems = [err instanceof Error ? err.message : String(err)];
               }
 
-              const shape = parsePacketShape(stamped, followupRunId);
-              if (shape.ok) {
+              // Persist the raw reply for EVERY attempt (success or failure) so an
+              // authoring failure is diagnosable post-hoc — the raw is otherwise lost.
+              store.appendJournal(runId, {
+                at: atIso,
+                event: "authoring_attempt",
+                attempt: attempt + 1,
+                ok: attemptProblems === null,
+                problems: attemptProblems ?? [],
+                authoredRaw: authored.content,
+              });
+
+              if (attemptProblems === null && stamped !== null) {
                 store.admitQueue(followupRunId, stamped);
                 problems = null;
                 break;
               }
-              problems = shape.problems;
+              // Feed the problems AND a snippet of what was emitted into the retry,
+              // so the model can see and fix its own malformed output.
+              problems = attemptProblems;
+              priorRawSnippet = authored.content.slice(0, 800);
             }
 
             if (problems) {

@@ -16,6 +16,7 @@ import {
   parseFinalReview,
   tryParseFinalReview,
 } from "../../domain/review.js";
+import { harvestReply } from "./harvest.js";
 
 // ---------------------------------------------------------------------------
 // Planner adapter implementation
@@ -62,7 +63,9 @@ export const createPlanner = (
     );
 
     const response = await executor.sendMessage(daddySessionId, prompt, daddyModel, daddyTimeoutMs);
-    const text = extractText(response);
+    // All-message harvest, not just the final turn — a multi-step turn can leave the
+    // final message empty with the verdict in an earlier step (the fix2 scar).
+    const { text } = await harvestReply(executor, daddySessionId, response);
     let parsed = tryParsePlannerResponse(text);
     if (parsed) {
       return parsed;
@@ -72,7 +75,7 @@ export const createPlanner = (
     const reason = diagnosePlannerParse(text);
     const nudge = jsonReaskNudge(reason);
     const retry = await executor.sendMessage(daddySessionId, nudge, daddyModel, daddyTimeoutMs);
-    const retryText = extractText(retry);
+    const { text: retryText } = await harvestReply(executor, daddySessionId, retry);
     parsed = tryParsePlannerResponse(retryText);
     if (parsed) {
       return parsed;
@@ -101,7 +104,7 @@ export const createPlanner = (
         daddyModel,
         daddyTimeoutMs,
       );
-      const raw = extractText(response);
+      const { text: raw } = await harvestReply(executor, daddySessionId, response);
       const parsed = tryParseFinalReview(raw);
       if (parsed) {
         return parsed;
@@ -111,7 +114,7 @@ export const createPlanner = (
       const reason = diagnosePlannerParse(raw);
       const nudge = jsonReaskNudge(reason);
       const retry = await executor.sendMessage(daddySessionId, nudge, daddyModel, daddyTimeoutMs);
-      const retryText = extractText(retry);
+      const { text: retryText } = await harvestReply(executor, daddySessionId, retry);
       const retryParsed = tryParseFinalReview(retryText);
       if (retryParsed) {
         return retryParsed;

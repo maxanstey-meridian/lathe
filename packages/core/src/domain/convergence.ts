@@ -1,7 +1,8 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
-import { FRONTMATTER_RE, type OutcomeDef } from "./packet.js";
+import { extractFrontmatter, normalizeForFrontmatter, type OutcomeDef } from "./packet.js";
 import { FinalReviewVerdict } from "./review.js";
+import { balancedObjects, repairYamlEscapes } from "./structured-extraction.js";
 
 // ---------------------------------------------------------------------------
 // Super-daddy convergence supervisor (SUPER-DADDY.md). A stronger, doctrine-anchored
@@ -164,46 +165,9 @@ export const decideConvergence = (
 };
 
 // ---------------------------------------------------------------------------
-// Fail-closed parse (CONTRACT §18 S11)
-
-// Every top-level {...} object in the text, brace-matched with string/escape
-// awareness so a brace inside a JSON string value (or a `}` in prose) can't
-// throw off the depth counter.
-const balancedObjects = (text: string): string[] => {
-  const objects: string[] = [];
-  let depth = 0;
-  let startIdx = -1;
-  let inString = false;
-  let escaped = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (ch === "\\") {
-        escaped = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-    } else if (ch === "{") {
-      if (depth === 0) {
-        startIdx = i;
-      }
-      depth++;
-    } else if (ch === "}" && depth > 0) {
-      depth--;
-      if (depth === 0 && startIdx !== -1) {
-        objects.push(text.slice(startIdx, i + 1));
-        startIdx = -1;
-      }
-    }
-  }
-  return objects;
-};
+// Fail-closed parse (CONTRACT §18 S11). The balanced-object scanner is
+// single-sourced in structured-extraction.ts; this fence-agnostic parser reverses
+// it (the verdict trails any reasoning/code-fence prose).
 
 // A super-review that cannot produce valid JSON fails closed to ESCALATE — the
 // safest verdict (stop would converge on garbage, request_changes would author
@@ -250,22 +214,14 @@ export const parseSuperReview = (raw: string): SuperReview => {
 // Super-daddy replies with the packet markdown; it MAY precede it with tool
 // narration or wrap it in a code fence. Slice from the first frontmatter delimiter
 // and drop any trailing fence so parsePacketShape (anchored at ^---) can parse it.
+// extractAuthoredPacket — kept as a named view onto the shared tolerant
+// normaliser (packet.ts). A reply WITH a frontmatter block comes back as the
+// cleaned packet (narration/fences/CRLF/whitespace stripped) with a trailing
+// newline; a reply with no frontmatter comes back trimmed so the caller fails
+// closed downstream.
 export const extractAuthoredPacket = (text: string): string => {
-  const lines = text.split("\n");
-  const start = lines.findIndex((l) => l.trim() === "---");
-  if (start === -1) {
-    return text.trim();
-  }
-  const slice = lines.slice(start);
-  while (slice.length > 0) {
-    const last = slice[slice.length - 1];
-    if (last !== undefined && last.trim().startsWith("```")) {
-      slice.pop();
-    } else {
-      break;
-    }
-  }
-  return `${slice.join("\n").trim()}\n`;
+  const normalized = normalizeForFrontmatter(text);
+  return extractFrontmatter(text) ? `${normalized.trim()}\n` : normalized.trim();
 };
 
 export type FollowupLineage = {
@@ -285,19 +241,38 @@ export type FollowupLineage = {
 // the caller treats that as an authoring failure (re-ask, then escalate), never a
 // silent stall.
 export const stampFollowupLineage = (authoredRaw: string, lineage: FollowupLineage): string => {
-  const packet = extractAuthoredPacket(authoredRaw);
-  const match = packet.match(FRONTMATTER_RE);
-  if (!match || match[1] === undefined) {
+  const parts = extractFrontmatter(authoredRaw);
+  if (!parts) {
     throw new Error("stampFollowupLineage: authored reply has no YAML frontmatter block");
   }
 
+  // Salvage mirrors the JSON candidate approach: on a parse failure, repair the known
+  // corruption class (invalid backslash escapes inside double-quoted scalars — a model
+  // markdown-escaping a backtick, the cli-cutover scar) and try the repaired candidate
+  // before declaring the frontmatter invalid. Repair only runs on failure, so a
+  // well-formed scalar's meaning is never touched.
   let parsed: unknown;
   try {
-    parsed = parseYaml(match[1]);
-  } catch (err) {
-    throw new Error(
-      `stampFollowupLineage: authored frontmatter is not valid YAML: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    parsed = parseYaml(parts.yaml);
+  } catch (firstErr) {
+    const repaired = repairYamlEscapes(parts.yaml);
+    let salvaged = false;
+    if (repaired !== parts.yaml) {
+      try {
+        parsed = parseYaml(repaired);
+        salvaged = true;
+      } catch {
+        /* repair did not help — fall through to the concrete failure below */
+      }
+    }
+    if (!salvaged) {
+      const detail = firstErr instanceof Error ? firstErr.message : String(firstErr);
+      throw new Error(
+        `stampFollowupLineage: authored frontmatter is not valid YAML even after escape repair: ${detail}. ` +
+          "Most often this is a backslash before a backtick or other character inside a double-quoted value — " +
+          "do not escape backticks; use single quotes or a block scalar for values containing backticks or backslashes.",
+      );
+    }
   }
   const authored: Record<string, unknown> =
     parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
@@ -329,7 +304,7 @@ export const stampFollowupLineage = (authoredRaw: string, lineage: FollowupLinea
     promoted: lineage.promoted === true,
   };
 
-  const body = (match[2] ?? "").trim();
+  const body = parts.body.trim();
   return `---\n${stringifyYaml(frontmatter).trimEnd()}\n---\n\n${body}\n`;
 };
 

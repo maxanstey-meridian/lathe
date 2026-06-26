@@ -78,7 +78,10 @@ export const makeExecuteRun =
     const attempt = (priorMeta?.attempt ?? 0) + 1;
 
     if (!isResume) {
-      // Fresh: freeze the validated packet + seed durable state (R2).
+      // Fresh: clear stale resume artifacts from a prior session, then seed
+      // fresh durable state so a later unchanged-packet pickup cannot resume
+      // from pre-fresh checkpoint/decision/review state.
+      store.clearResumeArtifacts(runId);
       store.freezePacket(runId, packet.raw);
       store.writeLedger(store.initialLedger(packet));
       store.replaceObligations(runId, []);

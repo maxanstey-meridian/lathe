@@ -24,6 +24,7 @@ import {
   statSync,
   unlinkSync,
   renameSync,
+  rmSync,
 } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -707,6 +708,21 @@ export class SqliteStoreAdapter implements Store {
     if (existsSync(file)) {
       unlinkSync(file);
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Fresh-start resume-artifact cleanup
+
+  clearResumeArtifacts(runId: string): void {
+    // Checkpoints (file-backed numbered .json files)
+    const checkpointDir = this.paths.checkpointsDir(runId);
+    if (existsSync(checkpointDir)) {
+      rmSync(checkpointDir, { recursive: true, force: true });
+    }
+    // Decisions (SQLite row)
+    this.db.prepare("DELETE FROM decisions WHERE run_id = ?").run(runId);
+    // Review state (SQLite row)
+    this.db.prepare("DELETE FROM review_state WHERE run_id = ?").run(runId);
   }
 
   // ---------------------------------------------------------------------------

@@ -123,6 +123,7 @@ const _storeContract: Store = {
   appendJournal: () => {},
   readJournal: () => [],
   readJournalSince: () => [],
+  clearResumeArtifacts: () => {},
 };
 
 const _plannerContract: Planner = {

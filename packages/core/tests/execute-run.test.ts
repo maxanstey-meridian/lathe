@@ -1,4 +1,4 @@
-import { equal, ok, deepEqual } from "node:assert";
+import { equal, ok, deepEqual, strictEqual } from "node:assert";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp as mkdtempP, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -769,6 +769,286 @@ test("makeExecuteRun: run with prior meta but no baby session → fresh", () => 
     // The first seed was Q1 (fresh).
     const journal = store.readJournal(RUN_ID);
     ok(journal.some((e) => e.event === "prompt_sent" && e.promptName === "Q1"));
+    await cleanTemp(tmp);
+  })();
+});
+
+test("makeExecuteRun: fresh start clears stale checkpoint/decision/review state", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "exec-fresh-clears-stale-"));
+    const clock = fixedClock();
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+    // Seed a frozen packet so decideRunStart returns "resume" with babySessionId present.
+    store.freezePacket(RUN_ID, PACKET_RAW);
+
+    // Seed stale checkpoint.
+    const c1 = {
+      number: 1,
+      reason: "checkpoint",
+      summary: "stale checkpoint",
+      outcomes: [{ id: "test-outcome", status: "done" as const, evidence: [] }],
+      writtenAt: clock.nowIso(),
+    };
+    store.writeCheckpoint(RUN_ID, c1);
+    equal(store.latestCheckpoint(RUN_ID)?.number, 1, "checkpoint seeded");
+
+    // Seed stale decisions.
+    store.appendDecision(RUN_ID, {
+      timestamp: "2026-01-01T00:00:00.000Z",
+      source: "daddy" as const,
+      questionType: "other",
+      question: "q1",
+      status: "proceed",
+      answer: "a1",
+      constraints: [],
+    });
+    strictEqual(store.readDecisions(RUN_ID).length, 1, "decisions seeded");
+
+    // Seed stale review state.
+    store.replaceObligations(RUN_ID, ["fix x"]);
+    equal(store.readReviewState(RUN_ID).obligations.length, 1, "review state seeded");
+
+    // Prior meta with babySessionId (simulates a resumed run whose packet was edited,
+    // triggering a fresh start via decideRunStart).
+    const newPacketRaw = `---
+repo: /tmp/test-repo
+base: main
+summary: NEW packet
+outcomes:
+  - id: test-outcome
+    description: A test outcome
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+
+new body
+`;
+    mkdirSync(join(tmp, "queue"), { recursive: true });
+    writeFileSync(join(tmp, "queue", `${RUN_ID}.md`), newPacketRaw);
+
+    store.writeMeta({
+      runId: RUN_ID,
+      status: "queued",
+      attempt: 1,
+      repo: "/tmp/test-repo",
+      base: "main",
+      branch: `meridian/${RUN_ID}`,
+      worktree: join(tmp, "runs", RUN_ID, "worktree"),
+      babySessionId: "baby-old",
+      daddySessionId: "daddy-prior",
+      stallRetries: 0,
+      crashRetries: 0,
+      reorientRetries: 0,
+      reviewerUnreachable: 0,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const channel = emptyChannel();
+    const executor = scriptedExecutor(channel, [
+      {
+        intents: [
+          {
+            kind: "report-accepted",
+            status: "blocked",
+            blockedReason: "stop_condition",
+            blockedQuestion: "done",
+            summary: "fresh after packet change",
+          },
+        ],
+      },
+    ]);
+    const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
+    const bridge: BridgeBinding<unknown> = { beginRun: () => channel, endRun: () => {} };
+
+    const executeRun = makeExecuteRun(ports, bridge);
+    await executeRun(
+      RUN_ID,
+      {
+        repo: "/tmp/test-repo",
+        worktree: join(tmp, "runs", RUN_ID, "worktree"),
+        base: "main",
+        branch: `meridian/${RUN_ID}`,
+      },
+      {},
+      ports.clock,
+    );
+
+    // Verify stale artifacts are cleared.
+    equal(
+      store.latestCheckpoint(RUN_ID),
+      undefined,
+      "stale checkpoint cleared on fresh start",
+    );
+    strictEqual(
+      store.readDecisions(RUN_ID).length,
+      0,
+      "stale decisions cleared on fresh start",
+    );
+    strictEqual(
+      store.readReviewState(RUN_ID).obligations.length,
+      0,
+      "stale review state cleared on fresh start",
+    );
+    // The first seed was Q1 (fresh), not Q2 (resume with checkpoint).
+    const journal = store.readJournal(RUN_ID);
+    ok(journal.some((e) => e.event === "prompt_sent" && e.promptName === "Q1"));
+    await cleanTemp(tmp);
+  })();
+});
+
+test("makeExecuteRun: fresh start clears stale checkpoint so unchanged-packet resume does not hit Q2", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "exec-fresh-resume-q8-"));
+    const clock = fixedClock();
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+    // Phase 1: seed a prior session's checkpoint, decisions, review state.
+    store.freezePacket(RUN_ID, PACKET_RAW);
+    store.writeCheckpoint(RUN_ID, {
+      number: 1,
+      reason: "checkpoint",
+      summary: "stale",
+      outcomes: [{ id: "test-outcome", status: "not_started", evidence: [] }],
+      writtenAt: clock.nowIso(),
+    });
+
+    // Phase 2: simulate a fresh start (packet was edited, so decideRunStart → fresh).
+    const newPacketRaw = `---
+repo: /tmp/test-repo
+base: main
+summary: NEW packet
+outcomes:
+  - id: test-outcome
+    description: A test outcome
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+
+new body
+`;
+    mkdirSync(join(tmp, "queue"), { recursive: true });
+    writeFileSync(join(tmp, "queue", `${RUN_ID}.md`), newPacketRaw);
+
+    store.writeMeta({
+      runId: RUN_ID,
+      status: "queued",
+      attempt: 1,
+      repo: "/tmp/test-repo",
+      base: "main",
+      branch: `meridian/${RUN_ID}`,
+      worktree: join(tmp, "runs", RUN_ID, "worktree"),
+      babySessionId: "baby-old",
+      daddySessionId: "daddy-prior",
+      stallRetries: 0,
+      crashRetries: 0,
+      reorientRetries: 0,
+      reviewerUnreachable: 0,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const channel = emptyChannel();
+    const executor = scriptedExecutor(channel, [
+      {
+        intents: [
+          {
+            kind: "report-accepted",
+            status: "blocked",
+            blockedReason: "stop_condition",
+            blockedQuestion: "done",
+            summary: "fresh",
+          },
+        ],
+      },
+    ]);
+    const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
+    const bridge: BridgeBinding<unknown> = { beginRun: () => channel, endRun: () => {} };
+
+    const executeRun = makeExecuteRun(ports, bridge);
+    await executeRun(
+      RUN_ID,
+      {
+        repo: "/tmp/test-repo",
+        worktree: join(tmp, "runs", RUN_ID, "worktree"),
+        base: "main",
+        branch: `meridian/${RUN_ID}`,
+      },
+      {},
+      ports.clock,
+    );
+
+    // Verify checkpoint cleared.
+    equal(store.latestCheckpoint(RUN_ID), undefined);
+
+    // Phase 3: now simulate a second run with the SAME (unchanged) frozen packet
+    // and babySessionId still present — this is a resume. Since checkpoint was cleared,
+    // the resume seed should be Q8 (no checkpoint), not Q2.
+    const channel2 = emptyChannel();
+    const executor2 = scriptedExecutor(channel2, [
+      {
+        intents: [
+          {
+            kind: "report-accepted",
+            status: "blocked",
+            blockedReason: "stop_condition",
+            blockedQuestion: "done",
+            summary: "resumed after fresh",
+          },
+        ],
+      },
+    ]);
+    const resumePlanner: Planner = {
+      handshake: async () => "daddy-new",
+      resumeSession: async (sid: string) => sid,
+      consult: async () => ({
+        status: "proceed",
+        answer: "go",
+        constraints: [],
+        evidence_used: [],
+        safe_next_action: "x",
+        human_decision_needed: null,
+      }),
+      finalReview: async () => ({
+        verdict: "accept",
+        findings: [],
+        notes: "ok",
+        human_decision_needed: null,
+      }),
+    };
+    const ports2 = makePorts(store, fakeRepo(), executor2, resumePlanner);
+    const bridge2: BridgeBinding<unknown> = { beginRun: () => channel2, endRun: () => {} };
+
+    const executeRun2 = makeExecuteRun(ports2, bridge2);
+    await executeRun2(
+      RUN_ID,
+      {
+        repo: "/tmp/test-repo",
+        worktree: join(tmp, "runs", RUN_ID, "worktree"),
+        base: "main",
+        branch: `meridian/${RUN_ID}`,
+      },
+      {},
+      ports2.clock,
+    );
+
+    // The resumed run (Phase 3) should have used Q8 (reconciliation, no checkpoint), not Q2.
+    // Journal contains both Phase 2's fresh Q1 and Phase 3's resume Q8 — check the last seed.
+    const journal2 = store.readJournal(RUN_ID);
+    const prompts = journal2.filter((e) => e.event === "prompt_sent");
+    const seedPrompts = prompts.filter(
+      (e) => e.promptName === "Q1" || e.promptName === "Q2" || e.promptName === "Q8",
+    );
+    ok(seedPrompts.length >= 2, "expected at least 2 seed prompts across both phases");
+    const lastSeed = seedPrompts[seedPrompts.length - 1];
+    equal(
+      lastSeed!.promptName,
+      "Q8",
+      "Phase 3 resume after fresh with no checkpoint uses Q8, not Q2",
+    );
     await cleanTemp(tmp);
   })();
 });

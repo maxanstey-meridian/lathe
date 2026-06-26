@@ -16,6 +16,7 @@ import {
   readdirSync,
   statSync,
   unlinkSync,
+  rmSync,
 } from "node:fs";
 import { join, dirname, basename } from "node:path";
 // VerificationResult is an inline port type (not a Zod schema), so we build
@@ -544,6 +545,27 @@ export class StoreAdapter implements Store {
     const file = this.paths.stagedFile(runId);
     if (existsSync(file)) {
       unlinkSync(file);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Fresh-start resume-artifact cleanup
+
+  clearResumeArtifacts(runId: string): void {
+    // Checkpoints (file-backed numbered .json files)
+    const checkpointDir = this.paths.checkpointsDir(runId);
+    if (existsSync(checkpointDir)) {
+      rmSync(checkpointDir, { recursive: true, force: true });
+    }
+    // Decisions (jsonl)
+    const decisionsFile = this.paths.decisionsFile(runId);
+    if (existsSync(decisionsFile)) {
+      unlinkSync(decisionsFile);
+    }
+    // Review state
+    const reviewStateFile = this.paths.reviewStateFile(runId);
+    if (existsSync(reviewStateFile)) {
+      unlinkSync(reviewStateFile);
     }
   }
 

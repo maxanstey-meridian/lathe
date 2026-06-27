@@ -12,7 +12,7 @@ import { logger } from "hono/logger";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { registerRivetHonoRoutes, rivetHttpError } from "rivet-ts/hono";
-import type { AnswerRunRequest, LatheContract, LatheEvent, RejectRunRequest } from "@lathe/contract";
+import type { AnswerRunRequest, LatheContract, LatheEvent, RejectRunRequest, RunSummaryDto } from "@lathe/contract";
 export type { LatheEvent };
 import contract from "@lathe/contract/generated/api.contract.json" with { type: "json" };
 
@@ -124,7 +124,7 @@ export const createApp = (
         }
         const meta = supervisor.getRun(params.runId);
         if (!meta) {
-          throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+          return mutationSummary(params.runId, "aborted");
         }
         const ctx = buildDtoCtx(supervisor, meta);
         return runToSummary(meta, ctx);
@@ -152,8 +152,9 @@ export const createApp = (
       },
 
       AcceptRun: async ({ params }) => {
+        let result: number;
         try {
-          supervisor.acceptRun(params.runId);
+          result = supervisor.acceptRun(params.runId);
         } catch (err) {
           if (err instanceof NonChainTipError) {
             throw rivetHttpError(409, {
@@ -163,20 +164,33 @@ export const createApp = (
           }
           throw err;
         }
-        const meta = supervisor.getRun(params.runId);
-        if (!meta) {
-          throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+        if (result === 0) {
+          const meta = supervisor.getRun(params.runId);
+          if (!meta) {
+            throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+          }
+          const ctx = buildDtoCtx(supervisor, meta);
+          return runToSummary(meta, ctx);
         }
-        const ctx = buildDtoCtx(supervisor, meta);
-        return runToSummary(meta, ctx);
+        throw rivetHttpError(409, {
+          code: "accept_refused",
+          message: `accept ${params.runId} refused`,
+        });
       },
 
       RejectRun: async ({ params, body }) => {
         const reason = (body as RejectRunRequest).reason ?? "rejected";
-        supervisor.rejectRun(params.runId, reason);
+        try {
+          supervisor.rejectRun(params.runId, reason);
+        } catch (err) {
+          if (err instanceof RunNotFoundError) {
+            throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+          }
+          throw err;
+        }
         const meta = supervisor.getRun(params.runId);
         if (!meta) {
-          throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+          return mutationSummary(params.runId, "paused");
         }
         const ctx = buildDtoCtx(supervisor, meta);
         return runToSummary(meta, ctx);
@@ -200,9 +214,11 @@ export const createApp = (
   app.get("/events", (c) =>
     streamSSE(c, async (stream) => {
       const lastId = Number.parseInt(c.req.header("Last-Event-ID") ?? "0", 10);
-      const since = Number.isInteger(lastId) ? lastId : 0;
+      const since = Number.isInteger(lastId) ? lastId : -1;
+      let lastSeq = since;
 
       for (const { seq, event } of deps.readEventsSince(since)) {
+        lastSeq = seq;
         await stream.writeSSE({ id: String(seq), event: event.kind, data: JSON.stringify(event) });
       }
 
@@ -210,6 +226,9 @@ export const createApp = (
       let notify: (() => void) | null = null;
       stream.onAbort(() => notify?.());
       const unsub = deps.bus.subscribe((seq, event) => {
+        if (seq <= lastSeq) {
+          return;
+        }
         queue.push({ seq, event });
         notify?.();
       });
@@ -225,6 +244,7 @@ export const createApp = (
             if (queue.length === 0) { await stream.writeSSE({ event: "ping", data: "" }); continue; }
           }
           const { seq, event } = queue.shift()!;
+          lastSeq = seq;
           await stream.writeSSE({ id: String(seq), event: event.kind, data: JSON.stringify(event) });
         }
       } finally {
@@ -251,4 +271,18 @@ const buildDtoCtx = (sup: Supervisor, meta: RunMeta): RunDtoCtx => ({
   isChainTip: sup.isChainTip(meta.runId),
   contextWindow: sup.config.baby.contextWindow,
   lastVerdict: sup.lastVerdict(meta.runId),
+});
+
+const mutationSummary = (runId: string, status: "aborted" | "paused"): RunSummaryDto => ({
+  runId,
+  campaignId: "",
+  packet: runId,
+  status,
+  pass: 0,
+  turn: 0,
+  contextTokens: 0,
+  contextWindow: 0,
+  isChainTip: false,
+  startedAt: "",
+  updatedAt: new Date().toISOString(),
 });

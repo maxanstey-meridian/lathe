@@ -6,6 +6,7 @@
 // state. A parse failure stays a reviewed escalate (parseSuperReview fails closed).
 
 import type { Executor, ModelConfig } from "../../application/ports/executor.js";
+import type { TurnResponse } from "../../domain/agent-response.js";
 import type {
   AuthorFollowupOutcome,
   Reviewer,
@@ -15,7 +16,7 @@ import { parseSuperReview } from "../../domain/convergence.js";
 import type { AuthorFollowupInput, SuperReviewInput } from "../../domain/prompts.js";
 import { renderFollowupAuthoring, renderSuperReview } from "../../domain/prompts.js";
 import { classifyReviewerError, describeUnreachable } from "../../domain/reviewer-transport.js";
-import { harvestReply } from "./harvest.js";
+import { harvestLatestReply, harvestReply } from "./harvest.js";
 
 // ---------------------------------------------------------------------------
 // Reviewer adapter implementation
@@ -62,7 +63,9 @@ export const createReviewer = (
   // never recorded. Classify each failure: TRANSIENT (socket hang up, 5xx, reset) →
   // retry up to maxTransportRetries; FATAL (auth, 400) → stop immediately. Resolves
   // to the harvested text, or `unreachable` with the last detail; never throws.
-  type TurnOutcome = { kind: "text"; raw: string } | { kind: "unreachable"; detail: string };
+  type TurnOutcome =
+    | { kind: "text"; raw: string; response: TurnResponse }
+    | { kind: "unreachable"; detail: string };
   const runTurn = async (sessionId: string, prompt: string): Promise<TurnOutcome> => {
     let lastDetail = "unknown error";
     for (let attempt = 0; ; attempt++) {
@@ -77,7 +80,7 @@ export const createReviewer = (
         if (error) {
           detail = error;
         } else {
-          return { kind: "text", raw };
+          return { kind: "text", raw, response };
         }
       } catch (err) {
         // A timeout or dead socket rejects out of sendMessage to here.
@@ -137,7 +140,8 @@ export const createReviewer = (
         raw: `«author unreachable»: ${turn.detail}`,
       };
     }
-    return { kind: "authored", content: turn.raw, raw: turn.raw };
+    const { text } = await harvestLatestReply(executor, sessionId, turn.response);
+    return { kind: "authored", content: text, raw: turn.raw };
   };
 
   return { superReview, authorFollowup };

@@ -32,6 +32,7 @@ export type { Store } from "./application/ports/store.js";
 // ---------------------------------------------------------------------------
 
 export { StoreAdapter } from "./infrastructure/store.js";
+export { SqliteStoreAdapter } from "./infrastructure/sqlite-store.js";
 export { systemClock } from "./infrastructure/clock.js";
 
 // ---------------------------------------------------------------------------

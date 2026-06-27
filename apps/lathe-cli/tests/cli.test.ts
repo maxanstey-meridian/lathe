@@ -1,5 +1,5 @@
 import { deepEqual, equal, ok } from "node:assert";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -198,6 +198,21 @@ test("cmdAccept: a 409 names the chain tip to accept first", async () => {
   );
 });
 
+test("cmdAccept: a 409 with code accept_refused reports refusal", async () => {
+  const h = harness(() =>
+    jsonResponse(409, {
+      code: "accept_refused",
+      message: "accept parent refused",
+    }),
+  );
+  const code = await cmdAccept(h.env, "parent");
+  equal(code, 1);
+  ok(
+    h.errs.some((e) => e.includes("refused — do not accept")),
+    h.errs.join("|"),
+  );
+});
+
 test("cmdAccept: success reports the accepted run", async () => {
   const h = harness(() => jsonResponse(201, summary("tip", "accepted")));
   const code = await cmdAccept(h.env, "tip");
@@ -239,6 +254,104 @@ test("checkDaemon: true on 200, false on a non-2xx, false when fetch rejects", a
     Promise.reject(new Error("ECONNREFUSED")),
   );
   equal(await checkDaemon(refused), false);
+});
+
+test("runCommand: --help prints usage and exits 0", async () => {
+  const h = harness(() => jsonResponse(200, { models: {}, thresholds: {} }));
+  const code = await runCommand(h.env, "--help", []);
+  equal(code, 0);
+  ok(h.logs.some((line) => line.includes("lathe — sequential overnight executor")), h.logs.join("|"));
+});
+
+test("cmdTail: no-arg tail waits for the next active run", async () => {
+  const home = mkdtempSync(join(tmpdir(), "lathe-home-"));
+  const stateRoot = join(home, "state");
+  const configDir = join(home, ".meridian", "v3");
+  const configFile = join(configDir, "config.json");
+  mkdirSync(configDir, { recursive: true });
+  mkdirSync(stateRoot, { recursive: true });
+  writeFileSync(configFile, JSON.stringify({ stateRoot }));
+
+  const originalHome = process.env.HOME;
+  const originalExit = process.exit;
+  const originalOn = process.on.bind(process);
+  const originalSetInterval = globalThis.setInterval.bind(globalThis);
+  const originalClearInterval = globalThis.clearInterval.bind(globalThis);
+  const logs: string[] = [];
+  let sigintHandler: (() => void | Promise<void>) | undefined;
+
+  class TailExit extends Error {
+    constructor(readonly code: number) {
+      super(`exit(${code})`);
+      this.name = "TailExit";
+    }
+  }
+
+  try {
+    process.env.HOME = home;
+    process.exit = ((code = 0) => {
+      throw new TailExit(code);
+    }) as never;
+    process.on = ((event: string, listener: never) => {
+      if (event === "SIGINT") {
+        sigintHandler = listener as () => void | Promise<void>;
+        return process;
+      }
+      return originalOn(event as NodeJS.Signals, listener as never);
+    }) as typeof process.on;
+    globalThis.setInterval = ((handler: TimerHandler, _timeout?: number, ...args: never[]) =>
+      originalSetInterval(handler, 10, ...args)) as typeof setInterval;
+    globalThis.clearInterval = ((handle: number | NodeJS.Timeout | undefined) =>
+      originalClearInterval(handle)) as typeof clearInterval;
+
+    const { cmdTail } = await import("../src/commands.js");
+    const { activeRunFile } = makePaths(stateRoot);
+
+    cmdTail(
+      {
+        client: stubClient(() => jsonResponse(200, { models: {}, thresholds: {} })),
+        isDaemonUp: () => Promise.resolve(true),
+        log: (line) => logs.push(line),
+        err: (line) => logs.push(`ERR:${line}`),
+      },
+      [],
+    );
+
+    ok(logs.some((line) => line.includes("waiting for one to start")), logs.join("|"));
+
+    writeFileSync(
+      activeRunFile,
+      JSON.stringify({
+        runId: "20260101-000000-waiting",
+        runDir: join(stateRoot, "runs", "20260101-000000-waiting"),
+        worktree: join(stateRoot, "worktree", "20260101-000000-waiting"),
+        babySessionId: "baby-1",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    ok(logs.some((line) => line.includes("became active — tailing")), logs.join("|"));
+    ok(
+      logs.some((line) => line.includes(`run 20260101-000000-waiting has not started — waiting for its journal`)),
+      logs.join("|"),
+    );
+
+    try {
+      await sigintHandler?.();
+    } catch (err) {
+      if (!(err instanceof TailExit)) throw err;
+      equal(err.code, 0);
+    }
+  } finally {
+    process.env.HOME = originalHome;
+    process.exit = originalExit;
+    process.on = originalOn;
+    globalThis.setInterval = originalSetInterval;
+    globalThis.clearInterval = originalClearInterval;
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 // ---------------------------------------------------------------------------

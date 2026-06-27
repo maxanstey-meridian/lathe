@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import type { Config, Clock, Repo, Paths, RunMeta } from "@lathe/core";
-import { makePaths, StoreAdapter, systemClock, buildRepo, Config as ConfigSchema } from "@lathe/core";
+import { makePaths, SqliteStoreAdapter, systemClock, buildRepo, Config as ConfigSchema } from "@lathe/core";
 import type { Supervisor } from "../src/supervisor.js";
 import { createSupervisor, NonChainTipError, TerminalRunError, RunNotFoundError } from "../src/supervisor.js";
 import { createEventBus } from "../src/app.js";
@@ -144,7 +144,7 @@ test("abortRun throws TerminalRunError for a terminal run", async () => {
       updatedAt: "2026-01-01T00:02:00.000Z",
     });
     const repo = fakeRepo();
-    const store = StoreAdapter.create(paths, repo, systemClock);
+    const store = SqliteStoreAdapter.create(paths, repo, systemClock);
     store.writeMeta(meta);
 
     throws(
@@ -160,7 +160,7 @@ test("abortRun throws TerminalRunError for a terminal run", async () => {
 test("abortRun archives a queued run found in the queue (no meta)", async () => {
   await withSupervisor(async (supervisor, paths) => {
     const repo = fakeRepo();
-    const store = StoreAdapter.create(paths, repo, systemClock);
+    const store = SqliteStoreAdapter.create(paths, repo, systemClock);
 
     const runId = "queued-no-meta";
     const packet = makeTestPacket();
@@ -186,7 +186,7 @@ test("abortRun archives a queued run found in the queue (no meta)", async () => 
 test("abortRun archives a queued run (meta status queued)", async () => {
   await withSupervisor(async (supervisor, paths) => {
     const repo = fakeRepo();
-    const store = StoreAdapter.create(paths, repo, systemClock);
+    const store = SqliteStoreAdapter.create(paths, repo, systemClock);
 
     const runId = "queued-with-meta";
     const packet = makeTestPacket();
@@ -213,7 +213,7 @@ test("abortRun archives a queued run (meta status queued)", async () => {
 test("abortRun for a running run does not throw when no abortMap entry", async () => {
   await withSupervisor(async (supervisor, paths) => {
     const repo = fakeRepo();
-    const store = StoreAdapter.create(paths, repo, systemClock);
+    const store = SqliteStoreAdapter.create(paths, repo, systemClock);
 
     const runId = "running-no-abort";
     store.writeMeta(makeTestMeta({
@@ -239,7 +239,7 @@ test("abortRun for a running run does not throw when no abortMap entry", async (
 test("listRuns returns stored meta entries", async () => {
   await withSupervisor(async (supervisor, paths) => {
     const repo = fakeRepo();
-    const store = StoreAdapter.create(paths, repo, systemClock);
+    const store = SqliteStoreAdapter.create(paths, repo, systemClock);
 
     store.writeMeta(makeTestMeta({
       runId: "run-a",
@@ -264,7 +264,7 @@ test("listRuns returns stored meta entries", async () => {
 test("getRun returns a stored meta, undefined for absent", async () => {
   await withSupervisor(async (supervisor, paths) => {
     const repo = fakeRepo();
-    const store = StoreAdapter.create(paths, repo, systemClock);
+    const store = SqliteStoreAdapter.create(paths, repo, systemClock);
 
     const runId = "get-test";
     store.writeMeta(makeTestMeta({
@@ -333,7 +333,7 @@ test("acceptRun throws NonChainTipError for a non-chain-tip run", async () => {
 test("readEventsSince returns projected events from the journal", async () => {
   await withSupervisor(async (supervisor, paths) => {
     const repo = fakeRepo();
-    const store = StoreAdapter.create(paths, repo, systemClock);
+    const store = SqliteStoreAdapter.create(paths, repo, systemClock);
 
     const runId = "test-events";
     store.writeMeta(makeTestMeta({
@@ -370,7 +370,7 @@ test("rejectRun archives a queued run found in the queue (no meta)", async () =>
   });
 });
 
-const createStore = (paths: Paths) => StoreAdapter.create(paths, fakeRepo(), systemClock);
+const createStore = (paths: Paths) => SqliteStoreAdapter.create(paths, fakeRepo(), systemClock);
 
 const testConfig = {
   baby: { modelId: "test", baseUrl: "http://localhost:9999", contextWindow: 131072, turnSteps: 30 } as const,
@@ -404,7 +404,7 @@ test("acceptRun throws NonChainTipError with chainTip for a non-chain-tip run", 
       if (stagedEntries.some(s => s.parentRunId === id)) {
         throw new NonChainTipError(id, childRunId);
       }
-      return 2;
+      return 0;
     },
     rejectRun: () => {},
   };
@@ -441,7 +441,7 @@ test("acceptRun throws NonChainTipError with correct chainTip when multiple chai
       if (stagedEntries.some(s => s.parentRunId === id)) {
         throw new NonChainTipError(id, "b-child-chain");
       }
-      return 2;
+      return 0;
     },
     rejectRun: () => {},
   };
@@ -465,7 +465,7 @@ test("acceptRun throws NonChainTipError with correct chainTip when multiple chai
 test("acceptRun (real supervisor) refuses a mid-chain run and names the chain tip", async () => {
   await withSupervisor(async (supervisor, paths) => {
     const repo = fakeRepo();
-    const store = StoreAdapter.create(paths, repo, systemClock);
+    const store = SqliteStoreAdapter.create(paths, repo, systemClock);
 
     const parentRunId = "20260101-000000-parent";
     const childRunId = "20260101-000100-child";

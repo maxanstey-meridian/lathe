@@ -1424,6 +1424,7 @@ test("turnLoop: consult reorient → session replaced, Q9 reseed, then terminal"
     const decisions = store.readDecisions(RUN_ID);
     ok(decisions.some((d) => d.status === "reorient"));
     equal(store.readMeta(RUN_ID).reorientRetries, 1);
+    equal(store.readGateState(RUN_ID).phase.phase, "first-edit-latched");
     // The second prompt sent should be Q9 (reorient seed).
     const prompts = journal.filter((e) => e.event === "prompt_sent");
     equal(prompts.length, 2);

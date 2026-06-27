@@ -39,3 +39,24 @@ export const harvestReply = async (
     return { text: extractText(response), error: messageError(response.info) };
   }
 };
+
+export const harvestLatestReply = async (
+  executor: Executor,
+  sessionId: string,
+  response: TurnResponse,
+): Promise<Harvest> => {
+  try {
+    const all = await executor.listMessages(sessionId);
+    const latestAssistant = [...all].reverse().find((m) => m.info.role === "assistant");
+    if (!latestAssistant) {
+      return { text: extractText(response), error: messageError(response.info) };
+    }
+    const text = harvestAssistantText([latestAssistant]);
+    return {
+      text: text.trim().length > 0 ? text : extractText(response),
+      error: messageError(response.info),
+    };
+  } catch {
+    return { text: extractText(response), error: messageError(response.info) };
+  }
+};

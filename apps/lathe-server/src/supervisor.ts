@@ -21,7 +21,7 @@ import type {
   RunLoopSeams,
 } from "@lathe/core";
 import {
-  StoreAdapter,
+  SqliteStoreAdapter,
   systemClock,
   buildRepo,
   runDriver,
@@ -197,7 +197,7 @@ export const createSupervisor = (
   // Supervisor-owned Store/Repo/Clock (same pattern as convergeOnce/withServe).
   const clock: Clock = systemClock;
   const repo: Repo = buildRepo();
-  const store: Store = StoreAdapter.create(paths, repo, clock);
+  const store: Store = SqliteStoreAdapter.create(paths, repo, clock);
 
   // --- Lifecycle seams ---
 

@@ -623,7 +623,7 @@ export const turnLoop = async (
             attempt: used + 1,
             fix: plannerResponse.safe_next_action,
           });
-          sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, true);
+          sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, false);
           const ledger = store.readLedger(runId);
           const review = store.readReviewState(runId);
           const decisions = store.readDecisions(runId);

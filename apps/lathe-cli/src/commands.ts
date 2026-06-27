@@ -325,58 +325,73 @@ export const cmdTail = (env: CliEnv, args: string[]): void => {
   const follow = !args.includes("--no-follow");
   const plain = args.includes("--plain");
   const explicit = args.find((a) => !a.startsWith("--"));
+  const tailRunId = (target: string): void => {
+    const replay = (): void => {
+      if (existsSync(configPaths.journalFile(target))) {
+        env.log(renderJournalReplay(store, target));
+      }
+    };
 
-  let runId = explicit;
-  if (!runId) {
-    const active = store.readActiveRun();
-    runId = active?.runId;
-  }
-
-  if (!runId) {
-    env.log("no active run");
-    return;
-  }
-  const target = runId;
-
-  const replay = (): void => {
-    if (existsSync(configPaths.journalFile(target))) {
-      env.log(renderJournalReplay(store, target));
-    }
-  };
-
-  if (!follow || plain || !process.stdout.isTTY) {
-    if (!existsSync(configPaths.journalFile(target))) {
+    if (!follow || plain || !process.stdout.isTTY) {
+      if (!existsSync(configPaths.journalFile(target))) {
+        if (!follow) {
+          env.err(`no journal for ${target}`);
+          return;
+        }
+        env.log(`run ${target} has not started — waiting for its journal…`);
+      } else {
+        env.log(renderJournalReplay(store, target));
+      }
       if (!follow) {
-        env.err(`no journal for ${target}`);
         return;
       }
-      env.log(`run ${target} has not started — waiting for its journal…`);
     } else {
-      env.log(renderJournalReplay(store, target));
+      replay();
     }
+
+    let printed = existsSync(configPaths.journalFile(target)) ? store.readJournal(target).length : 0;
+    const flush = (): void => {
+      if (!existsSync(configPaths.journalFile(target))) {
+        return;
+      }
+      const events = store.readJournal(target);
+      for (const e of events.slice(printed)) {
+        env.log(renderJournalEvent(e));
+      }
+      printed = events.length;
+    };
+    watchFile(configPaths.journalFile(target), { interval: 1000 }, flush);
+    process.on("SIGINT", () => {
+      unwatchFile(configPaths.journalFile(target));
+      process.exit(0);
+    });
+  };
+
+  const target = explicit ?? store.readActiveRun()?.runId;
+  if (!target) {
     if (!follow) {
+      env.log("no active run");
       return;
     }
-  } else {
-    replay();
+
+    env.log("no active run — waiting for one to start…");
+    const poll = setInterval(() => {
+      const next = store.readActiveRun()?.runId;
+      if (!next) {
+        return;
+      }
+      clearInterval(poll);
+      env.log(`run ${next} became active — tailing…`);
+      tailRunId(next);
+    }, 1000);
+    process.on("SIGINT", () => {
+      clearInterval(poll);
+      process.exit(0);
+    });
+    return;
   }
 
-  let printed = existsSync(configPaths.journalFile(target)) ? store.readJournal(target).length : 0;
-  const flush = (): void => {
-    if (!existsSync(configPaths.journalFile(target))) {
-      return;
-    }
-    const events = store.readJournal(target);
-    for (const e of events.slice(printed)) {
-      env.log(renderJournalEvent(e));
-    }
-    printed = events.length;
-  };
-  watchFile(configPaths.journalFile(target), { interval: 1000 }, flush);
-  process.on("SIGINT", () => {
-    unwatchFile(configPaths.journalFile(target));
-    process.exit(0);
-  });
+  tailRunId(target);
 };
 
 // ---------------------------------------------------------------------------
@@ -401,6 +416,10 @@ export const usage = `lathe — sequential overnight executor of human-written s
 
 export const runCommand = async (env: CliEnv, command: string, args: string[]): Promise<number> => {
   switch (command) {
+    case "--help":
+    case "-h":
+      env.log(usage);
+      return 0;
     case "enqueue":
       return cmdEnqueue(env, args[0] ?? "");
     case "chain":

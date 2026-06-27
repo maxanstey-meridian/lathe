@@ -108,20 +108,19 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
 
   // Re-bind CRUD methods that need access to the merged getRun/isChainTip
   merged.abortRun = (runId: string) => {
+    if (overrides?.abortRun) return overrides.abortRun!(runId);
     const meta = merged.getRun!(runId);
     if (!meta) throw new RunNotFoundError(runId);
-    // If overrides.abortRun exists, use it; otherwise mutate in-place
-    if (overrides?.abortRun) return overrides.abortRun!(runId);
     metaStore.set(runId, { ...meta, status: "aborted" as const, updatedAt: new Date().toISOString() });
   };
 
   merged.acceptRun = (runId: string): number => {
+    if (overrides?.acceptRun) return overrides.acceptRun!(runId);
     if (merged.isChainTip!(runId)) {
       // Normal path — accept
       const metaObj = merged.getRun!(runId);
       if (!metaObj) throw new RunNotFoundError(runId);
       metaStore.set(runId, { ...metaObj, status: "accepted" as const, updatedAt: new Date().toISOString() });
-      if (overrides?.acceptRun) return overrides.acceptRun!(runId);
       return metaObj.attempt + 1;
     }
     // Not chain tip — compute the chain tip via chain walking, using the merged listRuns and isChainTip
@@ -136,14 +135,13 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
       }
       return false;
     });
-    if (overrides?.acceptRun) return overrides.acceptRun!(runId);
     throw new NonChainTipError(runId, tip?.runId ?? "unknown");
   };
 
   merged.rejectRun = (runId: string, reason: string) => {
+    if (overrides?.rejectRun) return overrides.rejectRun!(runId, reason);
     const meta = merged.getRun!(runId);
     if (!meta) throw new RunNotFoundError(runId);
-    if (overrides?.rejectRun) return overrides.rejectRun!(runId, reason);
     metaStore.set(runId, { ...meta, status: "blocked" as const, updatedAt: new Date().toISOString() });
   };
 
@@ -503,6 +501,22 @@ test("AbortRun for a running run returns updated summary", async () => {
   ok(["blocked", "aborted"].includes(body.status));
 });
 
+test("AbortRun for a queue-only run returns success without meta", async () => {
+  const runId = "abort-queued";
+  const supervisor = makeFakeSupervisor({
+    getRun: () => undefined,
+    abortRun: () => {},
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const req = new Request(`http://localhost/runs/${runId}/abort`, { method: "POST" });
+  const res = await app.request(req);
+  equal(res.status, 201);
+  const body = await res.json() as { runId: string; status: string };
+  equal(body.runId, runId);
+  equal(body.status, "aborted");
+});
+
 test("AcceptRun on chain tip returns 200", async () => {
   const runId = "accept-tip";
   const meta = {
@@ -537,6 +551,21 @@ test("AcceptRun on chain tip returns 200", async () => {
   const body = await res.json() as { runId: string; status: string };
   equal(body.runId, runId);
   equal(body.status, "accepted");
+});
+
+test("AcceptRun refusal returns a failing response", async () => {
+  const runId = "accept-refused";
+  const supervisor = makeFakeSupervisor({
+    getRun: () => undefined,
+    acceptRun: () => 0,
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const req = new Request(`http://localhost/runs/${runId}/accept`, { method: "POST" });
+  const res = await app.request(req);
+  equal(res.status, 409);
+  const body = await res.json() as { code: string; message: string };
+  equal(body.code, "accept_refused");
 });
 
 test("RejectRun returns updated summary", async () => {
@@ -579,6 +608,26 @@ equal(res.status, 201);
    equal(body.status, "paused");
 });
 
+test("RejectRun for a queue-only run returns success without meta", async () => {
+  const runId = "reject-queued";
+  const supervisor = makeFakeSupervisor({
+    getRun: () => undefined,
+    rejectRun: () => {},
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const req = new Request(`http://localhost/runs/${runId}/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason: "wrong scope" }),
+  });
+  const res = await app.request(req);
+  equal(res.status, 201);
+  const body = await res.json() as { runId: string; status: string };
+  equal(body.runId, runId);
+  equal(body.status, "paused");
+});
+
 // ---------------------------------------------------------------------------
 // SSE feed — basic connectivity
 // ---------------------------------------------------------------------------
@@ -595,6 +644,33 @@ test("SSE: /events returns 200 with text/event-stream", async () => {
   equal(res.status, 200);
   ok(res.headers.get("content-type")?.includes("text/event-stream"));
   await res.body?.cancel();
+});
+
+test("SSE: fresh connection with no Last-Event-ID replays the first event", async () => {
+  const bus = createEventBus();
+  const events: { seq: number; event: LatheEvent }[] = [
+    { seq: 1, event: { kind: "log", runId: "r", line: "e1", at: new Date().toISOString() } },
+    { seq: 2, event: { kind: "log", runId: "r", line: "e2", at: new Date().toISOString() } },
+  ];
+
+  const deps = {
+    bus,
+    readEventsSince: (seq: number): { seq: number; event: LatheEvent }[] => events.filter((e) => e.seq > seq),
+  };
+  const app = createApp(deps, null as unknown as Supervisor, { logger: false });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2000);
+  const res = await app.request("http://localhost/events", {
+    signal: controller.signal,
+  });
+  equal(res.status, 200);
+
+  const reader = res.body!.getReader();
+  const body = await readUntilId(reader, "1");
+  clearTimeout(timer);
+  await reader.cancel();
+  ok(body.includes("id: 1"), "replays the first event when Last-Event-ID is absent");
 });
 
 test("SSE: reconnect-mid-stream replay from Last-Event-ID", async () => {
@@ -630,6 +706,40 @@ test("SSE: reconnect-mid-stream replay from Last-Event-ID", async () => {
   ok(body.includes("id: 2"), "replays seq 2");
   ok(body.includes("id: 3"), "replays seq 3");
   ok(!body.includes("id: 1"), "does not replay seq 1 (exclusive)");
+});
+
+test("SSE: replay/live handoff does not duplicate replayed events", async () => {
+  const bus = {
+    publish: (_seq: number, _event: LatheEvent) => {},
+    subscribe: (onEvent: (seq: number, event: LatheEvent) => void) => {
+      onEvent(2, { kind: "log", runId: "r", line: "e2", at: new Date().toISOString() });
+      return () => {};
+    },
+  };
+  const events: { seq: number; event: LatheEvent }[] = [
+    { seq: 1, event: { kind: "log", runId: "r", line: "e1", at: new Date().toISOString() } },
+    { seq: 2, event: { kind: "log", runId: "r", line: "e2", at: new Date().toISOString() } },
+  ];
+
+  const deps = {
+    bus,
+    readEventsSince: (seq: number): { seq: number; event: LatheEvent }[] => events.filter((e) => e.seq > seq),
+  };
+  const app = createApp(deps, null as unknown as Supervisor, { logger: false });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2000);
+  const res = await app.request("http://localhost/events", {
+    signal: controller.signal,
+  });
+  equal(res.status, 200);
+
+  const reader = res.body!.getReader();
+  const body = await readUntilId(reader, "2");
+  clearTimeout(timer);
+  await reader.cancel();
+
+  equal((body.match(/id: 2/g) ?? []).length, 1, "replayed seq 2 is not duplicated by the live handoff");
 });
 
 test("SSE: reconnect with Last-Event-ID = 3 gets only live events", async () => {

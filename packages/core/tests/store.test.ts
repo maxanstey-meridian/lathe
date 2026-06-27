@@ -1323,6 +1323,35 @@ verification:
     strictEqual(store.readJournalSince(999).length, 0);
     await cleanTemp(tmp);
   }
+
+  // clearResumeArtifacts clears checkpoint, decisions, and review state
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-clear-`));
+    const clock = fixedClock();
+    const store = createStore(tmp, fakeRepo(), clock);
+    store.writeCheckpoint("20260101-000000-test", {
+      number: 1,
+      reason: "checkpoint",
+      summary: "s1",
+      outcomes: [{ id: "o1", status: "done" as const, evidence: [] }],
+      writtenAt: clock.nowIso(),
+    });
+    store.appendDecision("20260101-000000-test", {
+      timestamp: "2026-01-01T00:00:00.000Z",
+      source: "daddy" as const,
+      questionType: "other",
+      question: "q1",
+      status: "proceed",
+      answer: "a1",
+      constraints: [],
+    });
+    store.replaceObligations("20260101-000000-test", ["fix x"]);
+    store.clearResumeArtifacts("20260101-000000-test");
+    equal(store.latestCheckpoint("20260101-000000-test"), undefined);
+    strictEqual(store.readDecisions("20260101-000000-test").length, 0);
+    await rejects(async () => store.readReviewState("20260101-000000-test"));
+    await cleanTemp(tmp);
+  }
 };
 
 // Run contract tests against file adapter

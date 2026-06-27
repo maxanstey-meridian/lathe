@@ -18,6 +18,7 @@ import { priorReconciliationAccepted, rotationGateState } from "../../domain/gat
 import { initialGateState } from "../../domain/gate.js";
 import { parsePacketShape } from "../../domain/packet.js";
 import type { Packet } from "../../domain/packet.js";
+import { decideRunStart, type RunStartDecision } from "../../domain/run.js";
 import {
   q1InitialSeed,
   q2RotationSeed,
@@ -54,25 +55,35 @@ export const makeExecuteRun =
     const { store, repo, executor, planner, config, clock } = ports;
     const { repo: repoPath, worktree, base, branch } = runMeta as RunMetaPaths;
 
-    // K3: re-validate at run start, fail closed even if the file changed.
-    // Fresh queue entries have no frozen packet — fall back to the queue dir.
-    const raw = store.readFrozenPacket(runId) || store.readQueuePacket(runId) || "";
+    const priorMeta = store.readMetaIfExists(runId);
+    const frozenPacket = store.readFrozenPacket(runId);
+    const queuePacket = store.readQueuePacket(runId);
+
+    // Decide whether this run resumes a prior session or starts fresh.
+    const startDecision = decideRunStart(priorMeta, frozenPacket, queuePacket);
+
+    // Packet selection: fresh → queue packet wins (re-freeze current spec);
+    // resume → frozen snapshot wins (immune to mid-flight edits, K3).
+    const raw = startDecision.mode === "resume"
+      ? frozenPacket || queuePacket || ""
+      : queuePacket || frozenPacket || "";
     const shape = parsePacketShape(raw, runId);
     if (!shape.ok) {
-      const prior = store.readMetaIfExists(runId);
-      if (prior) {
-        store.writeMeta({ ...prior, status: "failed", updatedAt: clock.nowIso() });
+      if (priorMeta) {
+        store.writeMeta({ ...priorMeta, status: "failed", updatedAt: clock.nowIso() });
       }
       return;
     }
     const packet = shape.packet;
 
-    const priorMeta = store.readMetaIfExists(runId);
-    const isResume = priorMeta?.babySessionId !== undefined;
+    const isResume = startDecision.mode === "resume";
     const attempt = (priorMeta?.attempt ?? 0) + 1;
 
     if (!isResume) {
-      // Fresh: freeze the validated packet + seed durable state (R2).
+      // Fresh: clear stale resume artifacts from a prior session, then seed
+      // fresh durable state so a later unchanged-packet pickup cannot resume
+      // from pre-fresh checkpoint/decision/review state.
+      store.clearResumeArtifacts(runId);
       store.freezePacket(runId, packet.raw);
       store.writeLedger(store.initialLedger(packet));
       store.replaceObligations(runId, []);
@@ -130,6 +141,7 @@ export const makeExecuteRun =
       babySessionId,
       daddySessionId,
       stallRetries: priorMeta?.stallRetries ?? 0,
+      crashRetries: priorMeta?.crashRetries ?? 0,
       reorientRetries: priorMeta?.reorientRetries ?? 0,
       reviewerUnreachable: priorMeta?.reviewerUnreachable ?? 0,
       // Carry the strong-model promotion across the requeue/resume — turn-loop

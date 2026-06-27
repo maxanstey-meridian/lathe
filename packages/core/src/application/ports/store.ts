@@ -138,4 +138,9 @@ export type Store = {
   // Global resumable journal — cross-run, gap-free, sorted by seq.
   // The daemon's /events SSE spine consumes this for a single resuming stream.
   readJournalSince(seq: number): { seq: number; runId: string; event: JournalEvent }[];
+
+  // Fresh-start cleanup: remove checkpoint files, decisions, review state
+  // that a prior session wrote — a fresh attempt must not inherit resume-only
+  // durable state for a later unchanged-packet pickup to mistake for in-progress.
+  clearResumeArtifacts(runId: string): void;
 };

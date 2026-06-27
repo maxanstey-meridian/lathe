@@ -16,6 +16,7 @@ import {
   readdirSync,
   statSync,
   unlinkSync,
+  rmSync,
 } from "node:fs";
 import { join, dirname, basename } from "node:path";
 // VerificationResult is an inline port type (not a Zod schema), so we build
@@ -548,6 +549,27 @@ export class StoreAdapter implements Store {
   }
 
   // ---------------------------------------------------------------------------
+  // Fresh-start resume-artifact cleanup
+
+  clearResumeArtifacts(runId: string): void {
+    // Checkpoints (file-backed numbered .json files)
+    const checkpointDir = this.paths.checkpointsDir(runId);
+    if (existsSync(checkpointDir)) {
+      rmSync(checkpointDir, { recursive: true, force: true });
+    }
+    // Decisions (jsonl)
+    const decisionsFile = this.paths.decisionsFile(runId);
+    if (existsSync(decisionsFile)) {
+      unlinkSync(decisionsFile);
+    }
+    // Review state
+    const reviewStateFile = this.paths.reviewStateFile(runId);
+    if (existsSync(reviewStateFile)) {
+      unlinkSync(reviewStateFile);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Journal (append-only event log, CONTRACT §13, J3 lenient read)
 
   appendJournal(runId: string, event: JournalEvent): void {
@@ -625,7 +647,7 @@ export class StoreAdapter implements Store {
     if (!repo || !base) {
       return undefined;
     }
-    return {
+   return {
       runId,
       status: "queued",
       attempt: 1,
@@ -634,6 +656,7 @@ export class StoreAdapter implements Store {
       branch: `meridian/${runId}`,
       worktree: join(this.paths.runDir(runId), "worktree"),
       stallRetries: 0,
+      crashRetries: 0,
       reorientRetries: 0,
       reviewerUnreachable: 0,
       promoted: false,
@@ -642,6 +665,7 @@ export class StoreAdapter implements Store {
   }
 
   // ---------------------------------------------------------------------------
+
   // Internal helpers
 
   private archiveAndFail(runId: string, raw: string, problems: string[]): void {

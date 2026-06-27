@@ -66,6 +66,35 @@ export const decideStallRecovery = (
 };
 
 // ---------------------------------------------------------------------------
+// Crash recovery — bounded auto-requeue for crashed parks (CONTRACT §5 R10
+// sibling)
+//
+// Pure function, mirrors decideStallRecovery. Only a crashed park is
+// recoverable: wedged, judgement, and scope parks are never touched by this
+// function (they have their own paths). Bounded exactly like stall recovery:
+// auto-requeue up to maxCrashRetries. At the cap, escalate to Max.
+// ---------------------------------------------------------------------------
+
+export type CrashRecoveryDecision =
+  | { action: "requeue"; crashRetries: number }
+  | { action: "escalate"; crashRetries: number }
+  | { action: "none" };
+
+export const decideCrashRecovery = (
+  meta: { status: string; blockedReason?: string; crashRetries: number },
+  maxCrashRetries: number,
+): CrashRecoveryDecision => {
+  if (meta.status !== "blocked" || meta.blockedReason !== "crashed") {
+    return { action: "none" };
+  }
+  const used = meta.crashRetries ?? 0;
+  if (used < maxCrashRetries) {
+    return { action: "requeue", crashRetries: used + 1 };
+  }
+  return { action: "escalate", crashRetries: used };
+};
+
+// ---------------------------------------------------------------------------
 // Reorient bound — consecutive hallucination recoveries (CONTRACT §5 R11)
 //
 // The counter resets to 0 on any accepted planner decision (so it measures

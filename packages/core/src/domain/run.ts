@@ -59,6 +59,10 @@ export const RunMeta = z.object({
   // P6: count of automatic post-stall requeues spent on this run (§5 R10).
   // Carried across resumes; reset to 0 when Max answers a park (a human looked).
   stallRetries: z.number().int().min(0).default(0),
+  // Count of automatic crash recoveries spent on this run (§5 R10 sibling).
+  // Carried across resumes; reset to 0 when Max answers a park (a human
+  // looked). Mirrors stallRetries but for the crashed branch.
+  crashRetries: z.number().int().min(0).default(0),
   // Count of consecutive reorients (hallucination recoveries) spent without an
   // intervening accepted planner decision — the misfire tripwire. Reset to 0 on
   // any accepted consult (the reseeded Baby recovered); at maxReorientRetries the
@@ -130,3 +134,58 @@ export const Decision = z.object({
   messageId: z.string().optional(),
 });
 export type Decision = z.infer<typeof Decision>;
+
+// ---------------------------------------------------------------------------
+// Run start decision — fresh vs resume (CONTRACT §3, §5 R10 sibling)
+//
+// Pure function, no I/O. Replaces the naive `babySessionId !== undefined`
+// heuristic in execute-run.ts. Rules:
+//   - no prior meta or no babySessionId → fresh (nothing to resume)
+//   - a queue packet that EXISTS and DIFFERS from the frozen snapshot →
+//     fresh (the spec was edited; a session must never continue under a
+//     changed packet — sharpens K3 "fail closed if the file changed")
+//   - otherwise → resume (live session + unchanged packet)
+// ---------------------------------------------------------------------------
+
+export type RunStartDecision =
+  | { mode: "resume" }
+  | { mode: "fresh"; reason: string };
+
+export const decideRunStart = (
+  priorMeta:
+    | { babySessionId?: string; daddySessionId?: string; attempt?: number }
+    | undefined,
+  frozenPacket: string,
+  queuePacket: string | undefined,
+): RunStartDecision => {
+  // No prior state — nothing to resume.
+  if (!priorMeta) {
+    return { mode: "fresh", reason: "no prior run state" };
+  }
+
+  // No baby session — nothing to resume.
+  if (!priorMeta.babySessionId) {
+    return { mode: "fresh", reason: "no prior baby session" };
+  }
+
+  // No frozen packet AND no queue packet — fresh (shouldn't happen in practice,
+  // but if there's no packet at all, we can't resume meaningfully).
+  if (!frozenPacket && !queuePacket) {
+    return { mode: "fresh", reason: "no packet available" };
+  }
+
+  // Queue packet exists and differs from the frozen snapshot — the spec was
+  // edited between runs. Restart fresh on the current packet.
+  if (queuePacket && frozenPacket && queuePacket !== frozenPacket) {
+    return { mode: "fresh", reason: "queue packet differs from frozen snapshot" };
+  }
+
+  // Queue packet exists but no frozen packet — the frozen snapshot is absent,
+  // so we have nothing to resume from. Use the queue packet fresh.
+  if (queuePacket && !frozenPacket) {
+    return { mode: "fresh", reason: "no frozen snapshot, using queue packet" };
+  }
+
+  // Otherwise — prior session exists, packet is unchanged → resume.
+  return { mode: "resume" };
+};

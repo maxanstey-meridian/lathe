@@ -1,22 +1,30 @@
 #!/usr/bin/env node
 // ---------------------------------------------------------------------------
-// @lathe/cli entry — the `lathe` bin (was the stale `meridian` bin at root).
+// @lathe/cli entry — the `lathe` bin.
 //
-// P00: only `lathe serve` is wired here. The run-driving commands (queue, run,
-// status, accept, …) still live in @lathe/core's CLI and are reached via the
-// ~/.meridian/bin/lathe wrapper until P05 cuts them over to the daemon client.
+// Thin dispatcher: `serve` boots the daemon, `tail` opens a live journal stream
+// (neither returns an exit code), everything else routes through runCommand,
+// which returns an exit code. All command behaviour lives in commands.ts so it
+// is testable without process.exit or a real daemon.
 // ---------------------------------------------------------------------------
 
-import { startDaemon } from "./serve.js";
+import { cmdTail, makeEnv, runCommand } from "./commands.js";
 
-const [command] = process.argv.slice(2);
+const main = async (): Promise<void> => {
+  const [command, ...args] = process.argv.slice(2);
 
-if (command === "serve") {
-  startDaemon();
-} else {
-  console.error(
-    "lathe-cli (P00 skeleton): only `serve` is wired here. " +
-      "Run-driving commands go through the @lathe/core CLI until the P05 cutover.",
-  );
-  process.exit(1);
-}
+  if (command === "serve") {
+    const { startDaemon } = await import("./serve.js");
+    await startDaemon();
+    return;
+  }
+
+  if (command === "tail") {
+    cmdTail(makeEnv(), args);
+    return;
+  }
+
+  process.exit(await runCommand(makeEnv(), command ?? "", args));
+};
+
+main();

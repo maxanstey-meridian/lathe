@@ -10,6 +10,7 @@ export { createApp, createEventBus } from "./app.js";
 export { createSupervisor } from "./supervisor.js";
 export type { Supervisor, NonChainTipError, TerminalRunError, RunNotFoundError } from "./supervisor.js";
 export type { AppDeps, CreateAppOptions, EventBus } from "./app.js";
+export type { SupervisorOptions } from "./supervisor.js";
 export { acquireSingleInstanceLock, DaemonAlreadyRunningError } from "./single-instance-lock.js";
 export { projectJournalEvent } from "./event-projection.js";
 export type { ProjectionContext } from "./event-projection.js";

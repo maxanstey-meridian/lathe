@@ -80,7 +80,7 @@ const migratePhase = (raw: GateStateFile | GateStateFileLegacy): GateStateFile =
   return { ...rest, phase }
 }
 
-const STATE_ROOT = join(homedir(), ".meridian", "v2")
+const STATE_ROOT = join(homedir(), ".meridian", "v3")
 
 const readJson = <T>(path: string): T | undefined => {
   try {

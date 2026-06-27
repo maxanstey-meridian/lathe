@@ -42,6 +42,18 @@ export interface CliEnv {
   err: (line: string) => void;
 }
 
+type PathJsonResponse<
+  Path extends keyof paths,
+  Method extends keyof paths[Path],
+  Status extends paths[Path][Method] extends { responses: infer Responses } ? keyof Responses : never,
+> = paths[Path][Method] extends { responses: infer Responses }
+  ? Status extends keyof Responses
+    ? Responses[Status] extends { content: { "application/json": infer Json } }
+      ? Json
+      : never
+    : never
+  : never;
+
 // Probe daemon reachability over the generated client (GET /config) — no raw
 // fetch. A refused connection rejects the promise; treat that as "down".
 export const checkDaemon = async (client: DaemonClient): Promise<boolean> => {
@@ -133,7 +145,7 @@ export const cmdEnqueue = (env: CliEnv, packetPath: string): Promise<number> => 
     return Promise.resolve(1);
   }
 
-  return runDaemon<paths["/runs"]["post"]["responses"]["202"]["content"]["application/json"]>(
+  return runDaemon<PathJsonResponse<"/runs", "post", 202>>(
     env,
     (client) => client.POST("/runs", { body: { packetPath: resolved } }),
     (data) => env.log(`enqueued: ${data.runId} (${data.status})`),
@@ -158,7 +170,7 @@ export const cmdChain = (env: CliEnv, dir: string): Promise<number> => {
     return Promise.resolve(1);
   }
 
-  return runDaemon<paths["/chains"]["post"]["responses"]["202"]["content"]["application/json"]>(
+  return runDaemon<PathJsonResponse<"/chains", "post", 202>>(
     env,
     (client) => client.POST("/chains", { body: { chainDir: resolved } }),
     (runs) => {
@@ -175,9 +187,7 @@ export const cmdAbort = (env: CliEnv, runId: string): Promise<number> => {
     return Promise.resolve(1);
   }
 
-  return runDaemon<
-    paths["/runs/{runId}/abort"]["post"]["responses"]["201"]["content"]["application/json"]
-  >(
+  return runDaemon<PathJsonResponse<"/runs/{runId}/abort", "post", 201>>(
     env,
     (client) => client.POST("/runs/{runId}/abort", { params: { path: { runId } } }),
     (data) => env.log(`aborted: ${data.runId} (${data.status})`),
@@ -197,9 +207,7 @@ export const cmdAccept = (env: CliEnv, runId: string): Promise<number> => {
     return Promise.resolve(1);
   }
 
-  return runDaemon<
-    paths["/runs/{runId}/accept"]["post"]["responses"]["201"]["content"]["application/json"]
-  >(
+  return runDaemon<PathJsonResponse<"/runs/{runId}/accept", "post", 201>>(
     env,
     (client) => client.POST("/runs/{runId}/accept", { params: { path: { runId } } }),
     (data) => env.log(`accepted: ${data.runId} (${data.status})`),
@@ -222,9 +230,7 @@ export const cmdReject = (env: CliEnv, runId: string, reason: string): Promise<n
     return Promise.resolve(1);
   }
 
-  return runDaemon<
-    paths["/runs/{runId}/reject"]["post"]["responses"]["201"]["content"]["application/json"]
-  >(
+  return runDaemon<PathJsonResponse<"/runs/{runId}/reject", "post", 201>>(
     env,
     (client) =>
       client.POST("/runs/{runId}/reject", {

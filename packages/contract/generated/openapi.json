@@ -164,6 +164,48 @@
         }
       }
     },
+    "/runs/{runId}/answer": {
+      "post": {
+        "operationId": "lathe_answerRun",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "answerRun",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerRunRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunSummaryDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/runs/{runId}/accept": {
       "post": {
         "operationId": "lathe_acceptRun",
@@ -263,6 +305,17 @@
   },
   "components": {
     "schemas": {
+      "AnswerRunRequest": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "answer"
+        ]
+      },
       "ConfigDto": {
         "type": "object",
         "properties": {

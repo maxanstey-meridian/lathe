@@ -712,6 +712,13 @@ test("denyMessage: starts with MERIDIAN GATE BLOCKED", () => {
   assert.ok(msg.includes("Reads stay available for gathering evidence"));
 });
 
+test("denyMessage: reconciliation block asks only for Daddy-owned reconciliation", () => {
+  const msg = denyMessage("reconciliation required: no valid checkpoint from the previous session");
+  assert.ok(msg.includes('questionType "reconciliation"'));
+  assert.ok(msg.includes("Baby is only triggering Daddy-owned reconciliation"));
+  assert.ok(!msg.includes("what you were about to change"));
+});
+
 test("QUESTION_MESSAGE: interactive questions disabled", () => {
   assert.ok(QUESTION_MESSAGE.startsWith("MERIDIAN GATE BLOCKED"));
   assert.ok(QUESTION_MESSAGE.includes("interactive questions are disabled"));

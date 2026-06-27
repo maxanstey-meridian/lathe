@@ -216,8 +216,9 @@ describe("prompts — Q-table renderers", () => {
     it("says no valid checkpoint and requires reconciliation", () => {
       const prompt = q8ReconciliationSeed(minPacket(), minLedger(), minReview(), minDecisions());
       match(prompt, /No valid checkpoint/);
-      match(prompt, /RECONCILIATION, not implementation/);
+      match(prompt, /TRIGGER reconciliation/);
       match(prompt, /questionType "reconciliation"/);
+      match(prompt, /Do not inspect, compare, reconstruct, or prove/);
     });
   });
 
@@ -306,6 +307,20 @@ describe("prompts — Q-table renderers", () => {
       match(prompt, /## Review obligation lifecycle/);
       match(prompt, /## Approach audit/);
       match(prompt, /Current slice:/);
+    });
+
+    it("makes reconciliation Daddy-owned from driver evidence", () => {
+      const prompt = renderPlannerQuestion(
+        "reconciliation",
+        "reconciliation",
+        "reconcile",
+        "driver-owned",
+        ["current fingerprint: abc"],
+        minReview(),
+      );
+      match(prompt, /Baby did not reconstruct the state/);
+      match(prompt, /driver supplied durable state and git evidence/);
+      doesNotMatch(prompt, /executor has reconstructed state/i);
     });
   });
 

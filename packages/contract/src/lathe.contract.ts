@@ -65,6 +65,10 @@ export interface RejectRunRequest {
   reason?: string | null;
 }
 
+export interface AnswerRunRequest {
+  answer: string;
+}
+
 export interface ModelConfigDto {
   baby: { modelId: string; baseUrl: string; contextWindow: number };
   daddy: { modelId: string; provider: string };
@@ -126,6 +130,14 @@ export interface LatheContract extends Contract<"LatheContract"> {
   AbortRun: Endpoint<{
     method: "POST";
     route: "/runs/{runId}/abort";
+    params: { runId: string };
+    response: RunSummaryDto;
+  }>;
+
+  AnswerRun: Endpoint<{
+    method: "POST";
+    route: "/runs/{runId}/answer";
+    input: AnswerRunRequest;
     params: { runId: string };
     response: RunSummaryDto;
   }>;

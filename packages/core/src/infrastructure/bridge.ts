@@ -25,8 +25,6 @@ import {
   BlockedReason,
   ACCEPTED_STATUSES,
   clearedGateState,
-  isLatched,
-  gateReason,
   type Packet,
   type OutcomeLedger,
   type Checkpoint,
@@ -322,10 +320,10 @@ export const handleAskPlanner = async (ref: RunRef, input: AskPlannerInput) => {
   if (!input.currentSlice.trim()) {
     argProblems.push("currentSlice is empty");
   }
-  if (!input.approach.trim()) {
+  if (input.questionType !== "reconciliation" && !input.approach.trim()) {
     argProblems.push("approach is empty — state your design decisions and intended next steps");
   }
-  if (input.evidence.every((e) => !e.trim())) {
+  if (input.questionType !== "reconciliation" && input.evidence.every((e) => !e.trim())) {
     argProblems.push("evidence is empty");
   }
   if (argProblems.length > 0) {
@@ -591,14 +589,6 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
   }
   problems.push(...outcomeProblems(report, ledger));
 
-  // V5: a latched gate means an unresolved planner obligation.
-  const gateState = ctx.store.readGateState(ctx.packet.runId);
-  if (report.status === "ready_for_review" && isLatched(gateState)) {
-    problems.push(
-      `the gate is latched (${gateReason(gateState) ?? "planner checkpoint required"}) — ready_for_review requires a clear gate: call meridian-bridge_ask_planner and continue only on proceed`,
-    );
-  }
-
   // Verification failures from the driver's own run.
   for (const r of verificationResults) {
     if (r.exitCode !== 0) {
@@ -746,13 +736,13 @@ export const buildMcpServer = (ref: RunRef): McpServer => {
       question: z.string().min(1).describe("The narrow, scoped question."),
       approach: z
         .string()
-        .min(1)
+        .min(0)
         .describe(
           "Your implementation approach for this slice: every design decision you have already made or are about to make (representations, strategies, structure), plus your intended next steps. The planner reviews this, not just the question — withholding a decision here means implementing it unreviewed.",
         ),
       evidence: z
         .array(z.string())
-        .min(1)
+        .min(0)
         .describe("Concrete evidence: file paths, snippets, error text."),
     },
     async (input) => handleAskPlanner(ref, input),

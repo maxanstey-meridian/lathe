@@ -142,7 +142,7 @@ export const renderReview = (store: Store): string => {
     );
     if (m.status === "blocked") {
       lines.push(`   needs: ${m.blockedQuestion ?? "(no question recorded)"}`);
-      lines.push(`   answer with: meridian answer ${m.runId} "<your decision>"`);
+      lines.push(`   answer with: lathe answer ${m.runId} "<your decision>"`);
     }
     if (m.status === "ready_for_review") {
       lines.push(`   diff:   git -C ${m.repo} diff ${m.base}...${m.branch}`);

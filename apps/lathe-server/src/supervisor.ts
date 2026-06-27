@@ -29,6 +29,7 @@ import {
   recoverStalledRunsAtStartup,
   admitPacket,
   acceptRun as acceptRunUc,
+  answerRun as answerRunUc,
   promoteStaged,
   parseStaged,
 } from "@lathe/core";
@@ -66,6 +67,13 @@ export class RunNotFoundError extends Error {
   }
 }
 
+export class RunNotAnswerableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RunNotAnswerableError";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Supervisor options
 // ---------------------------------------------------------------------------
@@ -99,6 +107,8 @@ export type Supervisor = {
   getRun(runId: string): RunMeta | undefined;
   /** Abort a queued (archiveQueue) or running (fire per-run abort) run. */
   abortRun(runId: string): void;
+  /** Answer a parked blocked run and requeue it. */
+  answerRun(runId: string, answer: string): void;
   /** Accept a ready_for_review run (chain-tip guarded). */
   acceptRun(runId: string): number;
   /** Reject a run — archive if queued, mark blocked if running. */
@@ -417,6 +427,18 @@ export const createSupervisor = (
       throw new Error(
         `run ${runId} is in state "${meta.status}" — cannot abort`,
       );
+    },
+
+    answerRun(runId: string, answer: string): void {
+      const meta = store.readMetaIfExists(runId);
+      const result = answerRunUc(store, repo, runId, answer, meta?.worktree ?? "", clock);
+      if (result.ok) {
+        return;
+      }
+      if (!meta) {
+        throw new RunNotFoundError(runId);
+      }
+      throw new RunNotAnswerableError(result.reason);
     },
 
     acceptRun(runId: string): number {

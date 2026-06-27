@@ -89,6 +89,8 @@ export const JournalEvent = z.discriminatedUnion("event", [
     evidence_used: z.array(z.string()).default([]),
     safe_next_action: z.string().default(""),
     human_decision_needed: z.string().nullable().default(null),
+    reconciliation_fingerprint: z.string().optional(),
+    reconciliation_reused: z.boolean().optional(),
   }),
   z.object({
     ...base,

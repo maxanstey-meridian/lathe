@@ -44,6 +44,13 @@ const fakeRepo = (): Repo => ({
   readDiffStats: () => ({}),
   reviewableDiff: () => "",
   reviewableDiffAgainst: () => "",
+  reconciliationGitState: () => ({
+    head: "head",
+    status: [],
+    diffHash: "diff",
+    untracked: [],
+    changedFiles: [],
+  }),
   fetchBranchFromClone: () => {
     throw new Error("unimplemented");
   },
@@ -323,6 +330,22 @@ test("ask_planner: rejects empty evidence array", async () => {
   await cleanTemp(tmp);
 });
 
+test("ask_planner: accepts minimal reconciliation trigger without evidence", async () => {
+  const { ref, tmp } = makeRef();
+  const result = await handleAskPlanner(ref, {
+    questionType: "reconciliation",
+    currentSlice: "reconciliation",
+    question: "Please reconcile this resumed run from driver-built evidence.",
+    approach: " ",
+    evidence: [],
+  });
+  equal(result.isError, false);
+  strictEqual(ref.current.intents.length, 1);
+  equal(ref.current.pendingConsult?.questionType, "reconciliation");
+  deepStrictEqual(ref.current.pendingConsult?.evidence, []);
+  await cleanTemp(tmp);
+});
+
 test("ask_planner: rejects all args empty", async () => {
   const { ref, tmp } = makeRef();
   const result = await handleAskPlanner(ref, {
@@ -531,6 +554,33 @@ test("submit_report: sets final-review-requested intent when ready_for_review su
   equal(ref.current.intents[0].kind, "outcomes-updated");
   equal(ref.current.intents[ref.current.intents.length - 1].kind, "final-review-requested");
   strictEqual(ref.current.pendingFinalReview !== null, true);
+  await cleanTemp(tmp);
+});
+
+test("submit_report: ready_for_review is not blocked by a latched edit gate", async () => {
+  const { ref, tmp, clock } = makeRef();
+  ref.current.store.writeGateState(ref.current.packet.runId, {
+    runId: ref.current.packet.runId,
+    phase: { phase: "first-edit-latched", reason: "first edit of the new session" },
+    expectedGlobs: ["src/**"],
+    suspiciousGlobs: [],
+    baselineDiffStats: {},
+    updatedAt: clock.nowIso(),
+    mutationCommandPatterns: [],
+  });
+  await handleUpdateOutcomes(ref, {
+    outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
+  });
+
+  const result = await handleSubmitReport(ref, {
+    status: "ready_for_review",
+    summary: "All done.",
+  });
+
+  equal(result.isError, false);
+  const body = JSON.parse(result.content[0].text);
+  equal(body.status, "review_pending");
+  equal(ref.current.intents[ref.current.intents.length - 1].kind, "final-review-requested");
   await cleanTemp(tmp);
 });
 

@@ -46,6 +46,7 @@ export { buildRepo, runDriver } from "./interfaces/cli/composition.js";
 
 export { admitPacket } from "./application/use-cases/admit-packet.js";
 export { acceptRun } from "./application/use-cases/accept-run.js";
+export { answerRun } from "./application/use-cases/answer-run.js";
 export { promoteStaged } from "./application/use-cases/chain-promotion.js";
 export {
   runLoop,

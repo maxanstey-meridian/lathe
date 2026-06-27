@@ -6,7 +6,9 @@
 
 import { spawnSync } from "child_process";
 import { existsSync, readFileSync, rmSync, statSync, realpathSync } from "fs";
+import { createHash } from "node:crypto";
 import { join, dirname, relative, isAbsolute, sep } from "path";
+import type { ReconciliationGitState } from "../domain/reconciliation.js";
 
 // Run a git command with array arguments (no shell word-splitting).
 // cwd = directory to run in; args = the git subcommand + arguments.
@@ -298,6 +300,51 @@ export const reviewableDiffAgainst = (worktree: string, base: string, maxBytes: 
     return full || "(no changes on this branch vs base)";
   }
   return `${full.slice(0, maxBytes)}\n\n[diff truncated at ${maxBytes} bytes — run \`git diff ${base}\` and read files directly for the full picture]`;
+};
+
+const sha256 = (content: string | Buffer): string =>
+  createHash("sha256").update(content).digest("hex");
+
+export const reconciliationGitState = (worktree: string): ReconciliationGitState => {
+  const head = git(worktree, ["rev-parse", "HEAD"]);
+  const status = git(worktree, ["status", "--porcelain=v1", "-z"])
+    .split("\0")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .sort();
+  const diff = git(worktree, ["diff", "--binary", "HEAD"]);
+  const trackedChanged = git(worktree, ["diff", "--name-only", "HEAD"])
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const untracked = git(worktree, ["ls-files", "--others", "--exclude-standard"])
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .filter((f) => !f.startsWith("node_modules/") && !f.includes("/node_modules/"))
+    .flatMap((path) => {
+      const fullPath = join(worktree, path);
+      if (!existsSync(fullPath)) {
+        return [];
+      }
+      try {
+        const content = readFileSync(fullPath);
+        if (content.length > 1024 * 1024 || content.includes(0)) {
+          return [];
+        }
+        return [{ path, hash: sha256(content) }];
+      } catch {
+        return [];
+      }
+    })
+    .sort((a, b) => a.path.localeCompare(b.path));
+  return {
+    head,
+    status,
+    diffHash: sha256(diff),
+    untracked,
+    changedFiles: [...new Set([...trackedChanged, ...untracked.map((u) => u.path)])].sort(),
+  };
 };
 
 // HEAD branch in the worktree — used during admission to stamp the base from

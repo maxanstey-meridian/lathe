@@ -12,13 +12,13 @@ import { logger } from "hono/logger";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { registerRivetHonoRoutes, rivetHttpError } from "rivet-ts/hono";
-import type { LatheContract, LatheEvent, RejectRunRequest } from "@lathe/contract";
+import type { AnswerRunRequest, LatheContract, LatheEvent, RejectRunRequest } from "@lathe/contract";
 export type { LatheEvent };
 import contract from "@lathe/contract/generated/api.contract.json" with { type: "json" };
 
 import type { RunMeta } from "@lathe/core";
 import type { RunDtoCtx } from "./run-to-dto.js";
-import { RunNotFoundError, NonChainTipError } from "./supervisor.js";
+import { RunNotAnswerableError, RunNotFoundError, NonChainTipError } from "./supervisor.js";
 import type { Supervisor } from "./supervisor.js";
 import { configToDto } from "./config-to-dto.js";
 import { runToSummary, runToDetail } from "./run-to-dto.js";
@@ -119,6 +119,27 @@ export const createApp = (
         } catch (err) {
           if (err instanceof RunNotFoundError) {
             throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+          }
+          throw err;
+        }
+        const meta = supervisor.getRun(params.runId);
+        if (!meta) {
+          throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+        }
+        const ctx = buildDtoCtx(supervisor, meta);
+        return runToSummary(meta, ctx);
+      },
+
+      AnswerRun: async ({ params, body }) => {
+        const answer = (body as AnswerRunRequest).answer;
+        try {
+          supervisor.answerRun(params.runId, answer);
+        } catch (err) {
+          if (err instanceof RunNotFoundError) {
+            throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+          }
+          if (err instanceof RunNotAnswerableError) {
+            throw rivetHttpError(409, { code: "not_answerable", message: err.message });
           }
           throw err;
         }

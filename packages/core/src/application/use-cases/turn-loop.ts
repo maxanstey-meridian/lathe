@@ -48,9 +48,14 @@ import {
   qPlannerDecision,
   qPlannerUnavailable,
 } from "../../domain/prompts.js";
+import {
+  buildReconciliationEvidence,
+  renderReconciliationEvidence,
+  lastAcceptedReconciliation,
+} from "../../domain/reconciliation.js";
 import type { SubmitReport } from "../../domain/report.js";
 import { ACCEPTED_STATUSES } from "../../domain/review.js";
-import type { FinalReview } from "../../domain/review.js";
+import type { FinalReview, PlannerResponse } from "../../domain/review.js";
 import { evaluateTurn } from "../../domain/turn.js";
 import type { ModelConfig } from "../ports/executor.js";
 import { rotateSession } from "./rotation.js";
@@ -306,6 +311,27 @@ export const promotedModelLabel = (config: Config): string => {
   return `${m.providerId}/${m.modelId}`;
 };
 
+const buildDriverReconciliation = (
+  ports: RunPorts,
+  packet: Packet,
+  worktree: string,
+): ReturnType<typeof buildReconciliationEvidence> => {
+  const runId = packet.runId;
+  const ledger = ports.store.readLedger(runId);
+  const review = ports.store.readReviewState(runId);
+  const decisions = ports.store.readDecisions(runId);
+  const diffStats = ports.repo.readDiffStats(worktree, packet.frontmatter.base);
+  return buildReconciliationEvidence({
+    git: ports.repo.reconciliationGitState(worktree),
+    packet,
+    ledger,
+    review,
+    decisions,
+    diffStats,
+    diffSummary: ports.repo.reviewableDiffAgainst(worktree, packet.frontmatter.base, 20_000),
+  });
+};
+
 // ---------------------------------------------------------------------------
 // turnLoop — run one attempt to a terminal outcome.
 //
@@ -339,6 +365,7 @@ export const turnLoop = async (
   let turn = 0;
   let ladder = 0;
   let sendFailures = 0;
+  let consecutiveContextOverflows = 0;
   // Previous turn's measured context — lets the dead-session guard tell a
   // recoverable overflow (real context was in flight) from a dead reseed.
   let priorContextTokens = 0;
@@ -502,6 +529,9 @@ export const turnLoop = async (
     // Carry this turn's context into the next iteration BEFORE any branch
     // continues/returns — the dead-session guard reads it as priorContextTokens.
     priorContextTokens = obs.contextTokens;
+    if (decision.kind !== "recover_overflow") {
+      consecutiveContextOverflows = 0;
+    }
 
     // --- execute -------------------------------------------------------------
     switch (decision.kind) {
@@ -550,9 +580,44 @@ export const turnLoop = async (
           continue;
         }
 
-        let plannerResponse;
+        let effectiveSubmission = submission;
+        let reconciliation = undefined as
+          | ReturnType<typeof buildReconciliationEvidence>
+          | undefined;
+        let reconciliationReused = false;
+        let plannerResponse: PlannerResponse;
         try {
-          plannerResponse = await planner.consult(submission);
+          if (submission.questionType === "reconciliation") {
+            reconciliation = buildDriverReconciliation(ports, packet, worktree);
+            const prior = lastAcceptedReconciliation(store.readDecisions(runId));
+            if (prior?.reconciliation?.fingerprint === reconciliation.fingerprint.value) {
+              reconciliationReused = true;
+              plannerResponse = {
+                status: prior.status as PlannerResponse["status"],
+                answer: prior.answer,
+                constraints: prior.constraints,
+                evidence_used: [
+                  `reused accepted reconciliation for unchanged fingerprint ${reconciliation.fingerprint.value}`,
+                ],
+                safe_next_action:
+                  prior.safeNextAction ?? "Continue from the accepted reconciliation.",
+                human_decision_needed: prior.humanDecisionNeeded ?? null,
+              };
+            } else {
+              effectiveSubmission = {
+                questionType: "reconciliation",
+                currentSlice: "reconciliation",
+                question:
+                  "Reconcile this resumed run from driver-built durable state and git evidence. Decide Baby's next safe action.",
+                approach:
+                  "Driver-owned reconciliation. Baby only triggered this request; do not treat Baby prose as state reconstruction.",
+                evidence: renderReconciliationEvidence(reconciliation),
+              };
+              plannerResponse = await planner.consult(effectiveSubmission);
+            }
+          } else {
+            plannerResponse = await planner.consult(effectiveSubmission);
+          }
         } catch (err) {
           const detail = err instanceof Error ? err.message : String(err);
           journal(ports, runId, turn, {
@@ -568,25 +633,43 @@ export const turnLoop = async (
         store.appendDecision(runId, {
           timestamp: clock.nowIso(),
           source: "daddy",
-          questionType: submission.questionType,
-          currentSlice: submission.currentSlice,
-          question: submission.question,
-          approach: submission.approach,
-          evidence: submission.evidence,
+          questionType: effectiveSubmission.questionType,
+          currentSlice: effectiveSubmission.currentSlice,
+          question: effectiveSubmission.question,
+          approach: effectiveSubmission.approach,
+          evidence: effectiveSubmission.evidence,
           status: plannerResponse.status,
           answer: plannerResponse.answer,
           constraints: plannerResponse.constraints,
+          evidenceUsed: plannerResponse.evidence_used,
+          safeNextAction: plannerResponse.safe_next_action,
+          humanDecisionNeeded: plannerResponse.human_decision_needed,
+          ...(reconciliation
+            ? {
+                reconciliation: {
+                  fingerprint: reconciliation.fingerprint.value,
+                  reused: reconciliationReused,
+                  deltaKind: reconciliation.deltaKind,
+                },
+              }
+            : {}),
         });
         journal(ports, runId, turn, {
           event: "planner_exchange",
-          questionType: submission.questionType,
-          question: submission.question,
+          questionType: effectiveSubmission.questionType,
+          question: effectiveSubmission.question,
           status: plannerResponse.status,
           answer: plannerResponse.answer,
           constraints: plannerResponse.constraints,
           evidence_used: plannerResponse.evidence_used,
           safe_next_action: plannerResponse.safe_next_action,
           human_decision_needed: plannerResponse.human_decision_needed,
+          ...(reconciliation
+            ? {
+                reconciliation_fingerprint: reconciliation.fingerprint.value,
+                reconciliation_reused: reconciliationReused,
+              }
+            : {}),
         });
         ladder = 0;
         toolCallsSinceDecision = 0;
@@ -801,6 +884,32 @@ export const turnLoop = async (
           phase: "context_overflow",
           contextTokens: priorContextTokens,
         });
+        consecutiveContextOverflows += 1;
+
+        if (consecutiveContextOverflows >= 2) {
+          if (!promoted && config.thresholds.promoteAtCap) {
+            promoted = true;
+            babyModel = promotedModelConfig(config);
+            consecutiveContextOverflows = 0;
+            const pm = store.readMetaIfExists(runId);
+            if (pm) {
+              store.writeMeta({ ...pm, promoted: true, updatedAt: clock.nowIso() });
+            }
+            journal(ports, runId, turn, {
+              event: "model_promoted",
+              from: `${config.baby.providerId}/${config.baby.modelId}`,
+              to: promotedModelLabel(config),
+            });
+          } else {
+            return finish({
+              status: "blocked",
+              reason: "wedged",
+              question: promoted
+                ? "Two consecutive context-overflow recoveries occurred on the promoted model. The packet is still too large for the strong model; needs Max."
+                : "Two consecutive context-overflow recoveries occurred and promotion is disabled. The packet is too large for Baby; needs Max.",
+            });
+          }
+        }
         const {
           seed: reseed,
           needsReconciliation,

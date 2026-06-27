@@ -19,6 +19,9 @@ export * from "./gate-decisions.js";
 // Planner + Review (CONTRACT §9)
 export * from "./review.js";
 
+// Reconciliation (resume without checkpoint)
+export * from "./reconciliation.js";
+
 // Prompts (CONTRACT §15)
 export * from "./prompts.js";
 

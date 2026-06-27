@@ -11,6 +11,7 @@ import {
   checkDaemon,
   cmdAbort,
   cmdAccept,
+  cmdAnswer,
   cmdEnqueue,
   cmdReject,
   cmdTail,
@@ -23,7 +24,7 @@ import {
 // Stub daemon — routes openapi-fetch calls to a canned responder, no network.
 // ---------------------------------------------------------------------------
 
-const stubClient = (responder: (req: Request) => Response) => {
+const stubClient = (responder: (req: Request) => Response | Promise<Response>) => {
   const fetchImpl: typeof fetch = (input, init) => {
     const req = input instanceof Request ? input : new Request(input as URL | string, init);
     return Promise.resolve(responder(req));
@@ -44,7 +45,7 @@ interface Harness {
   paths: string[];
 }
 
-const harness = (responder: (req: Request) => Response, up = true): Harness => {
+const harness = (responder: (req: Request) => Response | Promise<Response>, up = true): Harness => {
   const logs: string[] = [];
   const errs: string[] = [];
   const paths: string[] = [];
@@ -147,6 +148,37 @@ test("cmdAbort: a 404 reports the run as not found", async () => {
   equal(code, 1);
   ok(
     h.errs.some((e) => e.includes("run missing-run not found")),
+    h.errs.join("|"),
+  );
+});
+
+test("cmdAnswer: success posts the answer and reports the requeued run", async () => {
+  let body: { answer?: string } | undefined;
+  const h = harness(async (req) => {
+    body = await req.json() as { answer?: string };
+    return jsonResponse(201, summary("blocked-run", "queued"));
+  });
+  const code = await cmdAnswer(h.env, "blocked-run", "go ahead");
+  equal(code, 0);
+  ok(h.paths.includes("/runs/blocked-run/answer"), "hit POST /runs/{runId}/answer");
+  equal(body?.answer, "go ahead");
+  ok(
+    h.logs.some((l) => l.includes("answered: blocked-run (queued)")),
+    h.logs.join("|"),
+  );
+});
+
+test("cmdAnswer: a 409 surfaces the not-answerable reason", async () => {
+  const h = harness(() =>
+    jsonResponse(409, {
+      code: "not_answerable",
+      message: "run r is not parked (status: running)",
+    }),
+  );
+  const code = await cmdAnswer(h.env, "r", "go ahead");
+  equal(code, 1);
+  ok(
+    h.errs.some((e) => e.includes("not parked")),
     h.errs.join("|"),
   );
 });
@@ -273,6 +305,18 @@ test("queue drop: missing runId is rejected with usage, no daemon call", async (
   );
 });
 
+test("answer: dispatch joins the decision words and routes through the daemon", async () => {
+  let body: { answer?: string } | undefined;
+  const h = harness(async (req) => {
+    body = await req.json() as { answer?: string };
+    return jsonResponse(201, summary("r", "queued"));
+  });
+  const code = await runCommand(h.env, "answer", ["r", "go", "ahead"]);
+  equal(code, 0);
+  ok(h.paths.includes("/runs/r/answer"), "answer hit POST /runs/{runId}/answer");
+  equal(body?.answer, "go ahead");
+});
+
 test("tail: TTY follow opens the Ink tail UI for an explicit run", () => {
   const h = harness(() => jsonResponse(200, {}));
   const opened: Array<{ runId: string; autoAdvance: boolean }> = [];
@@ -386,6 +430,7 @@ const fakeSupervisor = (order: string[], config = ConfigSchema.parse({})): Super
   listRuns: () => [],
   getRun: () => undefined,
   abortRun: () => {},
+  answerRun: () => {},
   acceptRun: () => 0,
   rejectRun: () => {},
   isChainTip: () => true,

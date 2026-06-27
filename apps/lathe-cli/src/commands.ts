@@ -201,6 +201,34 @@ export const cmdAbort = (env: CliEnv, runId: string): Promise<number> => {
   );
 };
 
+export const cmdAnswer = (env: CliEnv, runId: string, answer: string): Promise<number> => {
+  if (!runId || !answer) {
+    env.err("usage: lathe answer <runId> <decision>");
+    return Promise.resolve(1);
+  }
+
+  return runDaemon<PathJsonResponse<"/runs/{runId}/answer", "post", 201>>(
+    env,
+    (client) =>
+      client.POST("/runs/{runId}/answer", {
+        params: { path: { runId } },
+        body: { answer },
+      }),
+    (data) => env.log(`answered: ${data.runId} (${data.status})`),
+    (status, detail) => {
+      if (status === 404) {
+        env.err(`run ${runId} not found`);
+        return true;
+      }
+      if (status === 409) {
+        env.err(detail || `run ${runId} is not answerable`);
+        return true;
+      }
+      return false;
+    },
+  );
+};
+
 export const cmdAccept = (env: CliEnv, runId: string): Promise<number> => {
   if (!runId) {
     env.err("usage: lathe accept <runId>");
@@ -458,6 +486,7 @@ export const usage = `lathe — sequential overnight executor of human-written s
   lathe enqueue <packet.md>    add a packet to the queue (via daemon)
   lathe chain add <dir>        stage a chain of packets (via daemon)
   lathe abort <runId>          abort a run (via daemon)
+  lathe answer <runId> <decision>  answer a parked blocked run (via daemon)
   lathe accept <runId>         accept a ready_for_review run (via daemon, chain-tip guarded)
   lathe reject <runId> [reason]  reject a run (via daemon)
   lathe status                 what is running / queued / parked + campaign convergence
@@ -479,6 +508,8 @@ export const runCommand = async (env: CliEnv, command: string, args: string[]): 
       return cmdChain(env, args[1] ?? "");
     case "abort":
       return cmdAbort(env, args[0] ?? "");
+    case "answer":
+      return cmdAnswer(env, args[0] ?? "", args.slice(1).join(" "));
     case "accept":
       return cmdAccept(env, args[0] ?? "");
     case "reject":

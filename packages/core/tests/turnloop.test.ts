@@ -16,9 +16,10 @@ import {
 } from "../src/application/use-cases/turn-loop.js";
 import { makePaths } from "../src/config/paths.js";
 import { Config } from "../src/config/schemas.js";
-import type { MessagePart } from "../src/domain/agent-response.js";
+import type { MessagePart, TurnResponse } from "../src/domain/agent-response.js";
 import { initialGateState } from "../src/domain/gate.js";
 import { parsePacketShape, type Packet } from "../src/domain/packet.js";
+import { buildReconciliationEvidence } from "../src/domain/reconciliation.js";
 import { SubmitReport } from "../src/domain/report.js";
 import type { AskPlannerInput, PlannerResponse, FinalReview } from "../src/domain/review.js";
 import type { BridgeIntent } from "../src/domain/turn.js";
@@ -68,6 +69,13 @@ const fakeRepo = (diffStats: Record<string, { added: number; removed: number }> 
   readDiffStats: () => diffStats,
   reviewableDiff: () => "diff",
   reviewableDiffAgainst: () => "diff",
+  reconciliationGitState: () => ({
+    head: "head",
+    status: [],
+    diffHash: "diff",
+    untracked: [],
+    changedFiles: Object.keys(diffStats),
+  }),
   fetchBranchFromClone: () => {},
   removeSandbox: () => {},
   headBranch: () => "main",
@@ -107,6 +115,8 @@ type ScriptStep = {
   pendingFinalReview?: SubmitReport;
   bumpRejection?: number;
   toolParts?: MessagePart[];
+  contextOverflow?: boolean;
+  contextTokens?: number;
 };
 
 const toolPart = (tool: string): MessagePart => ({
@@ -125,12 +135,14 @@ const scriptedExecutor = (
   channel: RunChannel,
   steps: ScriptStep[],
   newSessionIds: string[] = [],
+  modelsUsed: string[] = [],
 ): Executor => {
   let i = 0;
   let s = 0;
   return {
     createSession: async () => newSessionIds[s++] ?? `baby-r${s}`,
-    sendMessage: async () => {
+    sendMessage: async (_sid, _text, model) => {
+      modelsUsed.push(`${model.providerId}/${model.modelId}`);
       const step = steps[i++] ?? {};
       if (step.intents) {
         channel.intents.push(...step.intents);
@@ -144,7 +156,23 @@ const scriptedExecutor = (
       if (step.bumpRejection) {
         channel.reportRejectionCount += step.bumpRejection;
       }
-      return { info: { id: `m${i}`, sessionID: "s", tokens: {} }, parts: step.toolParts ?? [] };
+      const response: TurnResponse = {
+        info: {
+          id: `m${i}`,
+          sessionID: "s",
+          tokens: { input: step.contextTokens ?? 0 },
+          ...(step.contextOverflow
+            ? {
+                error: {
+                  name: "ContextOverflowError",
+                  data: { message: "exceeds the available context size" },
+                },
+              }
+            : {}),
+        },
+        parts: step.toolParts ?? [],
+      };
+      return response;
     },
     listMessages: async () => [],
     deleteSession: async () => {},
@@ -434,6 +462,193 @@ test("turnLoop: promoted model also rejected → run fails (no double promotion)
 });
 
 // ---------------------------------------------------------------------------
+// context-overflow promotion: one overflow rotates; two consecutive overflows
+// promote once; non-overflow turns reset the counter; promoted overflow loops park.
+
+test("turnLoop: first context overflow rotates without promoting", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-overflow-once-"));
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+
+    const channel = emptyChannel();
+    const executor = scriptedExecutor(
+      channel,
+      [
+        { contextOverflow: true },
+        {
+          intents: [
+            {
+              kind: "report-accepted",
+              status: "blocked",
+              blockedReason: "stop_condition",
+              blockedQuestion: "done",
+              summary: "done",
+            },
+          ],
+        },
+      ],
+      ["baby-r1"],
+    );
+    const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
+
+    const result = await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    equal(result.outcome.status, "blocked");
+    const journal = store.readJournal(RUN_ID);
+    ok(journal.some((e) => e.event === "rotation" && e.phase === "context_overflow"));
+    ok(journal.some((e) => e.event === "rotation" && e.phase === "session_replaced"));
+    ok(!journal.some((e) => e.event === "model_promoted"));
+    await cleanTemp(tmp);
+  })();
+});
+
+test("turnLoop: two consecutive context overflows promote and continue on the promoted model", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-overflow-promote-"));
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+
+    const channel = emptyChannel();
+    const modelsUsed: string[] = [];
+    const executor = scriptedExecutor(
+      channel,
+      [
+        { contextOverflow: true },
+        { contextOverflow: true },
+        {
+          intents: [
+            {
+              kind: "report-accepted",
+              status: "blocked",
+              blockedReason: "stop_condition",
+              blockedQuestion: "done",
+              summary: "done",
+            },
+          ],
+        },
+      ],
+      ["baby-r1", "baby-r2"],
+      modelsUsed,
+    );
+    const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
+
+    const result = await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    equal(result.outcome.status, "blocked");
+    const journal = store.readJournal(RUN_ID);
+    const promoEvent = journal.find((e) => e.event === "model_promoted");
+    ok(promoEvent, "model_promoted journal event must be emitted");
+    equal(modelsUsed[0], "omlx/Qwen3.6-35B-A3B-UD-MLX-4bit");
+    equal(modelsUsed[1], "omlx/Qwen3.6-35B-A3B-UD-MLX-4bit");
+    equal(modelsUsed[2], "zai-coding-plan/glm-5.1");
+    equal(store.readMeta(RUN_ID).promoted, true);
+    await cleanTemp(tmp);
+  })();
+});
+
+test("turnLoop: non-overflow turn resets the consecutive overflow counter", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-overflow-reset-"));
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+
+    const channel = emptyChannel();
+    const executor = scriptedExecutor(
+      channel,
+      [
+        { contextOverflow: true },
+        { toolParts: [toolPart("Read")], contextTokens: 1_000 },
+        { contextOverflow: true },
+        {
+          intents: [
+            {
+              kind: "report-accepted",
+              status: "blocked",
+              blockedReason: "stop_condition",
+              blockedQuestion: "done",
+              summary: "done",
+            },
+          ],
+        },
+      ],
+      ["baby-r1", "baby-r2"],
+    );
+    const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
+
+    const result = await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    equal(result.outcome.status, "blocked");
+    const journal = store.readJournal(RUN_ID);
+    ok(!journal.some((e) => e.event === "model_promoted"));
+    equal(store.readMeta(RUN_ID).promoted, false);
+    await cleanTemp(tmp);
+  })();
+});
+
+test("turnLoop: promoted model context-overflow loop parks wedged", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-overflow-promoted-park-"));
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+    store.writeMeta({ ...store.readMeta(RUN_ID), promoted: true });
+
+    const channel = emptyChannel();
+    const executor = scriptedExecutor(
+      channel,
+      [{ contextOverflow: true }, { contextOverflow: true }],
+      ["baby-r1"],
+    );
+    const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
+
+    const result = await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    equal(result.outcome.status, "blocked");
+    if (result.outcome.status === "blocked") {
+      equal(result.outcome.reason, "wedged");
+      ok(result.outcome.question.includes("promoted model"));
+    }
+    await cleanTemp(tmp);
+  })();
+});
+
+// ---------------------------------------------------------------------------
 // cooperative-stop: the bridge sets turnComplete=true after recording a submit
 // intent; subsequent tool calls return errors; the executor turn resolves
 // normally and the driver acts on the recorded intent this turn.
@@ -559,6 +774,164 @@ test("turnLoop: consult round-trip — accepted decision clears the gate", () =>
     const decisions = store.readDecisions(RUN_ID);
     ok(decisions.some((d) => d.status === "proceed"));
     deepEqual(store.readReviewState(RUN_ID).obligations, ["keep the seam narrow"]);
+    await cleanTemp(tmp);
+  })();
+});
+
+test("turnLoop: reconciliation consult is enriched from driver evidence", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-reconcile-"));
+    const repo = fakeRepo({ "src/index.ts": { added: 3, removed: 0 } });
+    const store = StoreAdapter.create(makePaths(tmp), repo, fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+    store.writeGateState(RUN_ID, {
+      ...store.readGateState(RUN_ID),
+      phase: {
+        phase: "reconciliation-latched",
+        reason: "reconciliation required: no valid checkpoint from the previous session",
+      },
+    });
+
+    const channel = emptyChannel();
+    const submission: AskPlannerInput = {
+      questionType: "reconciliation",
+      currentSlice: "reconciliation",
+      question: "trigger",
+      approach: "trigger only",
+      evidence: [],
+    };
+    let seen: AskPlannerInput | undefined;
+    const planner = fakePlanner({
+      consult: async (input) => {
+        seen = input;
+        return PROCEED;
+      },
+    });
+    const executor = scriptedExecutor(channel, [
+      { intents: [{ kind: "consult-requested" }], pendingConsult: submission },
+      {
+        intents: [
+          {
+            kind: "report-accepted",
+            status: "blocked",
+            blockedReason: "stop_condition",
+            blockedQuestion: "done",
+            summary: "done",
+          },
+        ],
+      },
+    ]);
+    const ports = makePorts(store, repo, executor, planner);
+
+    await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    equal(seen?.questionType, "reconciliation");
+    ok(seen?.evidence.some((e) => e.includes("current fingerprint:")));
+    ok(seen?.evidence.some((e) => e.includes("changed files:")));
+    const decision = store.readDecisions(RUN_ID).find((d) => d.questionType === "reconciliation");
+    ok(decision?.reconciliation?.fingerprint);
+    equal(decision?.reconciliation?.reused, false);
+    equal(store.readGateState(RUN_ID).phase.phase, "cleared");
+    await cleanTemp(tmp);
+  })();
+});
+
+test("turnLoop: reconciliation reuses prior accepted fingerprint without Daddy", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-reconcile-reuse-"));
+    const repo = fakeRepo();
+    const store = StoreAdapter.create(makePaths(tmp), repo, fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+    const fingerprint = buildReconciliationEvidence({
+      git: repo.reconciliationGitState("/tmp/worktree"),
+      packet,
+      ledger: store.readLedger(RUN_ID),
+      review: store.readReviewState(RUN_ID),
+      decisions: [],
+      diffStats: repo.readDiffStats("/tmp/worktree", packet.frontmatter.base),
+      diffSummary: repo.reviewableDiffAgainst("/tmp/worktree", packet.frontmatter.base, 20_000),
+    }).fingerprint.value;
+    store.appendDecision(RUN_ID, {
+      timestamp: "2026-01-01T00:00:00.000Z",
+      source: "daddy",
+      questionType: "reconciliation",
+      currentSlice: "reconciliation",
+      question: "prior",
+      approach: "driver-owned",
+      evidence: ["prior evidence"],
+      status: "proceed",
+      answer: "carry on",
+      constraints: ["keep going"],
+      safeNextAction: "continue",
+      reconciliation: { fingerprint, reused: false, deltaKind: "unchanged" },
+    });
+    store.writeGateState(RUN_ID, {
+      ...store.readGateState(RUN_ID),
+      phase: {
+        phase: "reconciliation-latched",
+        reason: "reconciliation required: no valid checkpoint from the previous session",
+      },
+    });
+
+    const channel = emptyChannel();
+    const submission: AskPlannerInput = {
+      questionType: "reconciliation",
+      currentSlice: "reconciliation",
+      question: "trigger",
+      approach: "trigger only",
+      evidence: [],
+    };
+    let calls = 0;
+    const planner = fakePlanner({
+      consult: async () => {
+        calls += 1;
+        throw new Error("Daddy should not be called for unchanged fingerprint");
+      },
+    });
+    const executor = scriptedExecutor(channel, [
+      { intents: [{ kind: "consult-requested" }], pendingConsult: submission },
+      {
+        intents: [
+          {
+            kind: "report-accepted",
+            status: "blocked",
+            blockedReason: "stop_condition",
+            blockedQuestion: "done",
+            summary: "done",
+          },
+        ],
+      },
+    ]);
+    const ports = makePorts(store, repo, executor, planner);
+
+    await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    equal(calls, 0);
+    const decisions = store
+      .readDecisions(RUN_ID)
+      .filter((d) => d.questionType === "reconciliation");
+    equal(decisions.length, 2);
+    equal(decisions[1]?.reconciliation?.reused, true);
+    equal(store.readReviewState(RUN_ID).obligations[0], "keep going");
+    equal(store.readGateState(RUN_ID).phase.phase, "cleared");
     await cleanTemp(tmp);
   })();
 });

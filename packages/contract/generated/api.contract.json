@@ -1,6 +1,20 @@
 {
   "types": [
     {
+      "name": "AnswerRunRequest",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "answer",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
       "name": "ConfigDto",
       "typeParameters": [],
       "properties": [
@@ -566,6 +580,45 @@
             "type": "string"
           },
           "source": "route",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "ref",
+        "name": "RunSummaryDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 201,
+          "dataType": {
+            "kind": "ref",
+            "name": "RunSummaryDto"
+          }
+        }
+      ]
+    },
+    {
+      "name": "answerRun",
+      "httpMethod": "POST",
+      "routeTemplate": "/runs/{runId}/answer",
+      "params": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "source": "route",
+          "isOptional": false
+        },
+        {
+          "name": "body",
+          "type": {
+            "kind": "ref",
+            "name": "AnswerRunRequest"
+          },
+          "source": "body",
           "isOptional": false
         }
       ],

@@ -131,6 +131,16 @@ export const Decision = z.object({
   status: z.string(),
   answer: z.string(),
   constraints: z.array(z.string()).default([]),
+  evidenceUsed: z.array(z.string()).optional(),
+  safeNextAction: z.string().optional(),
+  humanDecisionNeeded: z.string().nullable().optional(),
+  reconciliation: z
+    .object({
+      fingerprint: z.string(),
+      reused: z.boolean().default(false),
+      deltaKind: z.string().optional(),
+    })
+    .optional(),
   messageId: z.string().optional(),
 });
 export type Decision = z.infer<typeof Decision>;

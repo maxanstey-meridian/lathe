@@ -35,6 +35,13 @@ const _repoContract: Repo = {
   readDiffStats: () => ({}),
   reviewableDiff: () => "",
   reviewableDiffAgainst: () => "",
+  reconciliationGitState: () => ({
+    head: "head",
+    status: [],
+    diffHash: "diff",
+    untracked: [],
+    changedFiles: [],
+  }),
   fetchBranchFromClone: () => {},
   removeSandbox: () => {},
   headBranch: () => "main",

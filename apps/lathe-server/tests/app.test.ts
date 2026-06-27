@@ -5,7 +5,7 @@ import type { RunMeta } from "@lathe/core";
 import type { Supervisor } from "../src/supervisor.js";
 import { createApp, createEventBus } from "../src/app.js";
 import type { LatheEvent } from "@lathe/contract";
-import { RunNotFoundError, NonChainTipError } from "../src/supervisor.js";
+import { RunNotAnswerableError, RunNotFoundError, NonChainTipError } from "../src/supervisor.js";
 
 // ---------------------------------------------------------------------------
 // Fake Supervisor — in-memory state, no real git/SQLite/runDriver
@@ -67,6 +67,13 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
       metaStore.set(runId, { ...meta, status: "aborted" as const, updatedAt: new Date().toISOString() });
     },
 
+    answerRun: (runId: string, _answer: string): void => {
+      const meta = metaStore.get(runId);
+      if (!meta) throw new RunNotFoundError(runId);
+      if (meta.status !== "blocked") throw new RunNotAnswerableError(`run ${runId} is not parked (status: ${meta.status})`);
+      metaStore.set(runId, { ...meta, status: "queued" as const, updatedAt: new Date().toISOString() });
+    },
+
     acceptRun: (runId: string): number => {
       if (isChainTip(runId)) {
         const meta = metaStore.get(runId);
@@ -113,6 +120,14 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
     // If overrides.abortRun exists, use it; otherwise mutate in-place
     if (overrides?.abortRun) return overrides.abortRun!(runId);
     metaStore.set(runId, { ...meta, status: "aborted" as const, updatedAt: new Date().toISOString() });
+  };
+
+  merged.answerRun = (runId: string, answer: string) => {
+    const meta = merged.getRun!(runId);
+    if (!meta) throw new RunNotFoundError(runId);
+    if (overrides?.answerRun) return overrides.answerRun!(runId, answer);
+    if (meta.status !== "blocked") throw new RunNotAnswerableError(`run ${runId} is not parked (status: ${meta.status})`);
+    metaStore.set(runId, { ...meta, status: "queued" as const, updatedAt: new Date().toISOString() });
   };
 
   merged.acceptRun = (runId: string): number => {
@@ -501,6 +516,86 @@ test("AbortRun for a running run returns updated summary", async () => {
   const body = await res.json() as { runId: string; status: string };
   equal(body.runId, runId);
   ok(["blocked", "aborted"].includes(body.status));
+});
+
+test("AnswerRun returns updated queued summary", async () => {
+  const runId = "answer-blocked";
+  const meta = {
+    runId,
+    status: "blocked" as const,
+    attempt: 1,
+    repo: "/tmp/test",
+    base: "main",
+    branch: "meridian/answer-blocked",
+    worktree: "/tmp/w",
+    stallRetries: 1,
+    reorientRetries: 0,
+    reviewerUnreachable: 0,
+    blockedReason: "human_decision" as const,
+    blockedQuestion: "proceed?",
+    updatedAt: new Date().toISOString(),
+    queuedAt: new Date().toISOString(),
+  } as RunMeta;
+  let answerSeen = "";
+
+  const supervisor = makeFakeSupervisor({
+    getRun: (id: string) => (id === runId ? meta : undefined),
+    answerRun: (id: string, answer: string) => {
+      if (id !== runId) throw new RunNotFoundError(id);
+      answerSeen = answer;
+      meta.status = "queued" as const;
+    },
+    isChainTip: () => true,
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const req = new Request(`http://localhost/runs/${runId}/answer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ answer: "go ahead" }),
+  });
+  const res = await app.request(req);
+  equal(res.status, 201);
+  const body = await res.json() as { runId: string; status: string };
+  equal(body.runId, runId);
+  equal(body.status, "queued");
+  equal(answerSeen, "go ahead");
+});
+
+test("AnswerRun for a non-blocked run returns 409", async () => {
+  const runId = "answer-running";
+  const meta = {
+    runId,
+    status: "running" as const,
+    attempt: 1,
+    repo: "/tmp/test",
+    base: "main",
+    branch: "meridian/answer-running",
+    worktree: "/tmp/w",
+    stallRetries: 0,
+    reorientRetries: 0,
+    reviewerUnreachable: 0,
+    updatedAt: new Date().toISOString(),
+    queuedAt: new Date().toISOString(),
+    startedAt: new Date().toISOString(),
+  } as RunMeta;
+
+  const supervisor = makeFakeSupervisor({
+    getRun: (id: string) => (id === runId ? meta : undefined),
+    isChainTip: () => true,
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const req = new Request(`http://localhost/runs/${runId}/answer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ answer: "go ahead" }),
+  });
+  const res = await app.request(req);
+  equal(res.status, 409);
+  const body = await res.json() as { code: string; message: string };
+  equal(body.code, "not_answerable");
+  ok(body.message.includes("not parked"));
 });
 
 test("AcceptRun on chain tip returns 200", async () => {

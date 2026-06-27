@@ -263,14 +263,11 @@ export const q8ReconciliationSeed = (
   decisions: Decision[],
 ): string => `You are Baby: the Meridian executor, resuming a run whose previous session ended WITHOUT a valid checkpoint. No valid checkpoint exists; the current state of your worktree, the decision ledger, and the outcome file below are ground truth; the previous session's intentions are unknown.
 
-Your first task is RECONCILIATION, not implementation:
+Your first task is only to TRIGGER reconciliation, not to perform it:
 
-1. Inspect the current state of the files in your worktree (your cwd).
-2. Compare them against the outcome ledger and the packet's expected change surface.
-3. Form a reconstruction: which outcomes the current code actually advances. Is anything half-finished or inconsistent?
-4. Call meridian-bridge_ask_planner with questionType "reconciliation", your reconstruction as the question, and the worktree/ledger facts as evidence.
+Do not inspect, compare, reconstruct, or prove the state. The driver owns reconciliation evidence from durable state and git. Call meridian-bridge_ask_planner with questionType "reconciliation", currentSlice "reconciliation", question "Please reconcile this resumed run from driver-built evidence.", approach "Baby is only triggering reconciliation; the driver owns the evidence and state reconstruction.", and an empty evidence array. Then stop and end your turn.
 
-Edits are blocked until Daddy accepts your reconstruction. Reads are available.
+Edits are blocked until Daddy accepts the driver-built reconciliation. Reads are available, but broad inspection is not required before asking.
 
 ${BRIDGE_CONTRACT}
 
@@ -469,7 +466,7 @@ This is a closure audit. The executor may be trying to prove it satisfied review
       ? `
 ## Reconciliation rules
 
-The previous executor session ended without a valid checkpoint. The executor has reconstructed state from the diff, ledger, and outcome file. Accept (proceed / proceed_with_constraints) only if the reconstruction is consistent with the durable evidence supplied; otherwise return stop or revise_slice and name what is inconsistent.
+The previous executor session ended without a valid checkpoint. Baby did not reconstruct the state; Baby only triggered this request. The driver supplied durable state and git evidence below. Own the reconciliation yourself: decide whether Baby can safely carry on, whether constraints are needed, or whether the run must stop/escalate. Prefer narrow delta review when the evidence shows unchanged, test-only, ledger-only, or expected-surface changes. Broaden only when the delta is suspicious or the durable facts conflict.
 `
       : "";
 

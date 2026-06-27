@@ -146,6 +146,21 @@ test("cmdAccept: a 409 names the chain tip to accept first", async () => {
   );
 });
 
+test("cmdAccept: a 409 with code accept_refused reports refusal", async () => {
+  const h = harness(() =>
+    jsonResponse(409, {
+      code: "accept_refused",
+      message: "accept parent refused",
+    }),
+  );
+  const code = await cmdAccept(h.env, "parent");
+  equal(code, 1);
+  ok(
+    h.errs.some((e) => e.includes("refused — do not accept")),
+    h.errs.join("|"),
+  );
+});
+
 test("cmdAccept: success reports the accepted run", async () => {
   const h = harness(() => jsonResponse(201, summary("tip", "accepted")));
   const code = await cmdAccept(h.env, "tip");

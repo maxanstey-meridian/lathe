@@ -96,7 +96,7 @@ const runDaemon = async <T>(
   env: CliEnv,
   fn: (client: DaemonClient) => Promise<{ data?: T; error?: unknown; response: Response }>,
   onOk: (data: T) => void,
-  onErr?: (status: number, detail: string) => boolean,
+  onErr?: (status: number, detail: string, error: unknown) => boolean,
 ): Promise<number> => {
   if (!(await env.isDaemonUp())) {
     env.err("no daemon running — start `lathe serve` first");
@@ -110,7 +110,7 @@ const runDaemon = async <T>(
   }
 
   const detail = errorDetail(error);
-  if (onErr?.(response.status, detail)) {
+  if (onErr?.(response.status, detail, error)) {
     return 1;
   }
   env.err(`daemon error (${response.status}): ${detail}`);
@@ -202,8 +202,13 @@ export const cmdAccept = (env: CliEnv, runId: string): Promise<number> => {
     env,
     (client) => client.POST("/runs/{runId}/accept", { params: { path: { runId } } }),
     (data) => env.log(`accepted: ${data.runId} (${data.status})`),
-    (status, detail) => {
+    (status, detail, error) => {
       if (status === 409) {
+        const e = error as { code?: string };
+        if (e.code === "accept_refused") {
+          env.err(`${runId} was refused — do not accept`);
+          return true;
+        }
         // Daemon 409 body: "<runId> is not a chain tip — accept <tip> first".
         const match = detail.match(/accept (.+) first/);
         const chainTip = match ? match[1] : "a chain tip";

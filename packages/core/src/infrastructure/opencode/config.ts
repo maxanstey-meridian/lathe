@@ -273,10 +273,13 @@ export const waitForServer = async (config: Config, timeoutMs = 30_000): Promise
 };
 
 // The plugin path: ships with @lathe/core at packages/core/plugin/gate-core.ts.
-// This file lives at packages/core/src/infrastructure/opencode/config.ts — three
-// levels from the package root. tsx runs from source (no compilation);
-// import.meta.url resolves to the source path, so THREE '..' lands at packages/core.
+// Source execution resolves from src/infrastructure/opencode; bundled execution
+// resolves from dist. Support both layouts so the built daemon stays gated.
 export const pluginPath = (): string => {
   const here = dirname(new URL(import.meta.url).pathname);
-  return join(here, "..", "..", "..", "plugin", "gate-core.ts");
+  const sourcePath = join(here, "..", "..", "..", "plugin", "gate-core.ts");
+  if (existsSync(sourcePath)) {
+    return sourcePath;
+  }
+  return join(here, "..", "plugin", "gate-core.ts");
 };

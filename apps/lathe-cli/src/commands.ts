@@ -22,10 +22,11 @@ import {
   renderStatus,
   renderReview,
   renderQueue,
-  renderJournalReplay,
   renderJournalEvent,
   fmtOutcomes,
 } from "@lathe/core";
+import type { Paths, Store } from "@lathe/core";
+import { openTail } from "@lathe/core/tail";
 import { existsSync, statSync, watchFile, unwatchFile } from "node:fs";
 import { resolve } from "node:path";
 import { createDaemonClient, type DaemonClient } from "./client.js";
@@ -252,6 +253,43 @@ const openStore = () => {
   return { configPaths, store };
 };
 
+type TailStore = Pick<Store, "readActiveRun" | "readActiveConvergence" | "readJournal">;
+type TailPaths = Pick<Paths, "journalFile">;
+
+export type TailDeps = {
+  paths: TailPaths;
+  store: TailStore;
+  openTail: (runId: string, autoAdvance: boolean) => number;
+  stdoutIsTTY: () => boolean;
+  watchJournal: (runId: string, flush: () => void) => () => void;
+  startPolling: (poll: () => void) => () => void;
+  onSigint: (handler: () => void) => void;
+  exit: (code: number) => never;
+};
+
+const openTailDeps = (): TailDeps => {
+  const { config, paths: configPaths } = loadConfig();
+  const repo = buildRepo();
+  const store = StoreAdapter.create(configPaths, repo, systemClock);
+  return {
+    paths: configPaths,
+    store,
+    openTail: (runId, autoAdvance) => openTail(config, configPaths, runId, autoAdvance),
+    stdoutIsTTY: () => process.stdout.isTTY === true,
+    watchJournal: (runId, flush) => {
+      const file = configPaths.journalFile(runId);
+      watchFile(file, { interval: 1000 }, flush);
+      return () => unwatchFile(file);
+    },
+    startPolling: (poll) => {
+      const interval = setInterval(poll, 1000);
+      return () => clearInterval(interval);
+    },
+    onSigint: (handler) => process.on("SIGINT", handler),
+    exit: (code) => process.exit(code),
+  };
+};
+
 export const cmdStatus = (env: CliEnv): number => {
   const { store } = openStore();
   env.log(renderStatus(store));
@@ -319,64 +357,88 @@ export const cmdGet = (env: CliEnv, runId: string): number => {
   return 0;
 };
 
-export const cmdTail = (env: CliEnv, args: string[]): void => {
-  const { configPaths, store } = openStore();
+const activeTailRunId = (deps: TailDeps): string | undefined =>
+  deps.store.readActiveRun()?.runId ?? deps.store.readActiveConvergence()?.runId;
 
-  const follow = !args.includes("--no-follow");
-  const plain = args.includes("--plain");
-  const explicit = args.find((a) => !a.startsWith("--"));
+const renderTailReplay = (store: TailStore, runId: string): string =>
+  store.readJournal(runId).map(renderJournalEvent).join("\n");
 
-  let runId = explicit;
-  if (!runId) {
-    const active = store.readActiveRun();
-    runId = active?.runId;
-  }
-
-  if (!runId) {
-    env.log("no active run");
+const tailRunId = (
+  env: CliEnv,
+  deps: TailDeps,
+  runId: string,
+  follow: boolean,
+  plain: boolean,
+  autoAdvance: boolean,
+): void => {
+  if (follow && !plain && deps.stdoutIsTTY()) {
+    deps.openTail(runId, autoAdvance);
     return;
   }
-  const target = runId;
 
-  const replay = (): void => {
-    if (existsSync(configPaths.journalFile(target))) {
-      env.log(renderJournalReplay(store, target));
-    }
-  };
-
-  if (!follow || plain || !process.stdout.isTTY) {
-    if (!existsSync(configPaths.journalFile(target))) {
-      if (!follow) {
-        env.err(`no journal for ${target}`);
-        return;
-      }
-      env.log(`run ${target} has not started — waiting for its journal…`);
-    } else {
-      env.log(renderJournalReplay(store, target));
-    }
+  const file = deps.paths.journalFile(runId);
+  if (!existsSync(file)) {
     if (!follow) {
+      env.err(`no journal for ${runId}`);
       return;
     }
+    env.log(`run ${runId} has not started — waiting for its journal…`);
   } else {
-    replay();
+    env.log(renderTailReplay(deps.store, runId));
+  }
+  if (!follow) {
+    return;
   }
 
-  let printed = existsSync(configPaths.journalFile(target)) ? store.readJournal(target).length : 0;
+  let printed = existsSync(file) ? deps.store.readJournal(runId).length : 0;
   const flush = (): void => {
-    if (!existsSync(configPaths.journalFile(target))) {
+    if (!existsSync(file)) {
       return;
     }
-    const events = store.readJournal(target);
+    const events = deps.store.readJournal(runId);
     for (const e of events.slice(printed)) {
       env.log(renderJournalEvent(e));
     }
     printed = events.length;
   };
-  watchFile(configPaths.journalFile(target), { interval: 1000 }, flush);
-  process.on("SIGINT", () => {
-    unwatchFile(configPaths.journalFile(target));
-    process.exit(0);
+  const cancelWatch = deps.watchJournal(runId, flush);
+  deps.onSigint(() => {
+    cancelWatch();
+    deps.exit(0);
   });
+};
+
+export const cmdTail = (env: CliEnv, args: string[], deps = openTailDeps()): void => {
+  const follow = !args.includes("--no-follow");
+  const plain = args.includes("--plain");
+  const explicit = args.find((a) => !a.startsWith("--"));
+
+  const autoAdvance = explicit === undefined;
+  const runId = explicit ?? activeTailRunId(deps);
+
+  if (!runId) {
+    if (!follow) {
+      env.log("no active run");
+      return;
+    }
+    env.log("no active run or convergence — waiting for one to start…");
+    let cancelPoll = (): void => {};
+    cancelPoll = deps.startPolling(() => {
+      const next = activeTailRunId(deps);
+      if (next !== undefined) {
+        cancelPoll();
+        env.log(`run ${next} became active — tailing…`);
+        tailRunId(env, deps, next, follow, plain, autoAdvance);
+      }
+    });
+    deps.onSigint(() => {
+      cancelPoll();
+      deps.exit(0);
+    });
+    return;
+  }
+
+  tailRunId(env, deps, runId, follow, plain, autoAdvance);
 };
 
 // ---------------------------------------------------------------------------

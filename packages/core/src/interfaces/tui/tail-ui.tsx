@@ -6,6 +6,7 @@
 // run simply has no live SSE deltas, only the journal).
 
 import { render, Box, Text, useApp, useInput } from "ink";
+import React from "react";
 import { useEffect, useRef, useState } from "react";
 import type { OpencodeEvent } from "../../application/ports/events.js";
 import type { Store } from "../../application/ports/store.js";

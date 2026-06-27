@@ -7,6 +7,10 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./tail": {
+      "types": "./src/interfaces/cli/tail.ts",
+      "default": "./src/interfaces/cli/tail.ts"
     }
   },
   "scripts": {

@@ -13,8 +13,10 @@ import {
   cmdAccept,
   cmdEnqueue,
   cmdReject,
+  cmdTail,
   runCommand,
   type CliEnv,
+  type TailDeps,
 } from "../src/commands.js";
 
 // ---------------------------------------------------------------------------
@@ -83,6 +85,24 @@ const withTempDir = (fn: (path: string) => Promise<void>): Promise<void> => {
   const dir = mkdtempSync(join(tmpdir(), "lathe-chain-"));
   return fn(dir).finally(() => rmSync(dir, { recursive: true, force: true }));
 };
+
+const tailDeps = (overrides: Partial<TailDeps> = {}): TailDeps => ({
+  paths: { journalFile: (runId) => join(tmpdir(), `missing-${runId}.jsonl`) },
+  store: {
+    readActiveRun: () => undefined,
+    readActiveConvergence: () => undefined,
+    readJournal: () => [],
+  },
+  openTail: () => 0,
+  stdoutIsTTY: () => false,
+  watchJournal: () => () => {},
+  startPolling: () => () => {},
+  onSigint: () => {},
+  exit: (code) => {
+    throw new Error(`exit(${code})`);
+  },
+  ...overrides,
+});
 
 // ---------------------------------------------------------------------------
 // Daemon routing + response handling
@@ -251,6 +271,92 @@ test("queue drop: missing runId is rejected with usage, no daemon call", async (
     h.errs.some((e) => e.includes("usage: lathe queue drop <runId>")),
     h.errs.join("|"),
   );
+});
+
+test("tail: TTY follow opens the Ink tail UI for an explicit run", () => {
+  const h = harness(() => jsonResponse(200, {}));
+  const opened: Array<{ runId: string; autoAdvance: boolean }> = [];
+
+  cmdTail(
+    h.env,
+    ["run-1"],
+    tailDeps({
+      stdoutIsTTY: () => true,
+      openTail: (runId, autoAdvance) => {
+        opened.push({ runId, autoAdvance });
+        return -1;
+      },
+    }),
+  );
+
+  deepEqual(opened, [{ runId: "run-1", autoAdvance: false }]);
+});
+
+test("tail: --plain keeps the plain journal stream instead of opening Ink", () => {
+  const h = harness(() => jsonResponse(200, {}));
+  let opened = false;
+  let watched = false;
+
+  cmdTail(
+    h.env,
+    ["--plain", "run-1"],
+    tailDeps({
+      stdoutIsTTY: () => true,
+      openTail: () => {
+        opened = true;
+        return -1;
+      },
+      watchJournal: () => {
+        watched = true;
+        return () => {};
+      },
+    }),
+  );
+
+  equal(opened, false);
+  equal(watched, true);
+  ok(h.logs.some((l) => l.includes("waiting for its journal")), h.logs.join("|"));
+});
+
+test("tail: no active run waits and then opens TTY tail with auto-advance", () => {
+  const h = harness(() => jsonResponse(200, {}));
+  const opened: Array<{ runId: string; autoAdvance: boolean }> = [];
+  let active = false;
+
+  cmdTail(
+    h.env,
+    [],
+    tailDeps({
+      store: {
+        readActiveRun: () =>
+          active
+            ? {
+                runId: "run-2",
+                runDir: "/runs/run-2",
+                worktree: "/worktrees/run-2",
+                babySessionId: "baby",
+                startedAt: "2026-01-01T00:00:00Z",
+              }
+            : undefined,
+        readActiveConvergence: () => undefined,
+        readJournal: () => [],
+      },
+      stdoutIsTTY: () => true,
+      startPolling: (poll) => {
+        active = true;
+        poll();
+        return () => {};
+      },
+      openTail: (runId, autoAdvance) => {
+        opened.push({ runId, autoAdvance });
+        return -1;
+      },
+    }),
+  );
+
+  ok(h.logs.some((l) => l.includes("waiting for one to start")), h.logs.join("|"));
+  ok(h.logs.some((l) => l.includes("run run-2 became active")), h.logs.join("|"));
+  deepEqual(opened, [{ runId: "run-2", autoAdvance: true }]);
 });
 
 // ---------------------------------------------------------------------------

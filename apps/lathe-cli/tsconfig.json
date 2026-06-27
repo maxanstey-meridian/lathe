@@ -10,6 +10,7 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "verbatimModuleSyntax": true,
+    "jsx": "react-jsx",
     "skipLibCheck": true,
     "declaration": false,
     "sourceMap": true

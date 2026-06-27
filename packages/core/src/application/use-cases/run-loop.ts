@@ -15,7 +15,7 @@
 
 import type { Config } from "../../config/schemas.js";
 import { decideStallRecovery, decideCrashRecovery } from "../../domain/liveness.js";
-import type { StallRecoveryDecision, CrashRecoveryDecision } from "../../domain/liveness.js";
+import type { StallRecoveryDecision } from "../../domain/liveness.js";
 import type { BridgePort } from "../ports/bridge.js";
 import type { Caffeinate } from "../ports/caffeinate.js";
 import type { Clock } from "../ports/clock.js";
@@ -179,7 +179,10 @@ export const runLoop = async <Ref>(
               updatedAt: clock.nowIso(),
             };
             store.writeMeta(crashedMeta);
-            const crashDecision = decideCrashRecovery(crashedMeta, config.thresholds.maxCrashRetries);
+            const crashDecision = decideCrashRecovery(
+              crashedMeta,
+              config.thresholds.maxCrashRetries,
+            );
             if (crashDecision.action === "requeue") {
               if (crashMeta.worktree) {
                 repo.wipCommit(crashMeta.worktree, `meridian: WIP ${runId} [crashed]`);
@@ -196,9 +199,10 @@ export const runLoop = async <Ref>(
             }
 
             // Cap reached (or none — meta no longer crashed, fall through) — escalate to Max.
-            const crashCount = crashDecision.action === "none"
-              ? crashedMeta.crashRetries ?? 0
-              : crashDecision.crashRetries;
+            const crashCount =
+              crashDecision.action === "none"
+                ? (crashedMeta.crashRetries ?? 0)
+                : crashDecision.crashRetries;
             store.writeMeta({
               ...crashedMeta,
               status: "blocked" as const,

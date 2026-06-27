@@ -10,13 +10,13 @@ import type { Planner } from "../src/application/ports/planner.js";
 import type { Repo } from "../src/application/ports/repo.js";
 import type { Store } from "../src/application/ports/store.js";
 import { makeExecuteRun, type BridgeBinding } from "../src/application/use-cases/execute-run.js";
-import { decideRunStart } from "../src/domain/run.js";
 import { rotateSession } from "../src/application/use-cases/rotation.js";
 import type { RunPorts, RunChannel } from "../src/application/use-cases/run-runtime.js";
 import { makePaths } from "../src/config/paths.js";
 import { Config } from "../src/config/schemas.js";
 import { initialGateState } from "../src/domain/gate.js";
 import { parsePacketShape, type Packet } from "../src/domain/packet.js";
+import { decideRunStart } from "../src/domain/run.js";
 import type { BridgeIntent } from "../src/domain/turn.js";
 import { StoreAdapter } from "../src/infrastructure/store.js";
 
@@ -759,7 +759,7 @@ new body
         handshakeCalled = true;
         return "daddy-new";
       },
-      resumeSession: async (sid: string) => {
+      resumeSession: async (_sid: string) => {
         // Should NOT be called — this is a fresh start, not a resume.
         throw new Error("resumeSession should NOT be called on fresh start");
       },
@@ -996,16 +996,8 @@ new body
     );
 
     // Verify stale artifacts are cleared.
-    equal(
-      store.latestCheckpoint(RUN_ID),
-      undefined,
-      "stale checkpoint cleared on fresh start",
-    );
-    strictEqual(
-      store.readDecisions(RUN_ID).length,
-      0,
-      "stale decisions cleared on fresh start",
-    );
+    equal(store.latestCheckpoint(RUN_ID), undefined, "stale checkpoint cleared on fresh start");
+    strictEqual(store.readDecisions(RUN_ID).length, 0, "stale decisions cleared on fresh start");
     strictEqual(
       store.readReviewState(RUN_ID).obligations.length,
       0,

@@ -15,9 +15,9 @@ import {
   type ConvergeCallback,
   type WaitForWorkCallback,
 } from "../src/application/use-cases/run-loop.js";
-import { decideCrashRecovery } from "../src/domain/liveness.js";
 import { makePaths } from "../src/config/paths.js";
 import { Config } from "../src/config/schemas.js";
+import { decideCrashRecovery } from "../src/domain/liveness.js";
 import type { RunMeta } from "../src/domain/run.js";
 import { StoreAdapter } from "../src/infrastructure/store.js";
 
@@ -660,7 +660,12 @@ test("runLoop crash branch: decideCrashRecovery requeue under cap → queued", (
     const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     store.writeMeta(
-      makeMeta({ runId: "20260101-000000-c", status: "blocked" as const, blockedReason: "crashed" as const, crashRetries: 0 }),
+      makeMeta({
+        runId: "20260101-000000-c",
+        status: "blocked" as const,
+        blockedReason: "crashed" as const,
+        crashRetries: 0,
+      }),
     );
 
     const decision = decideCrashRecovery(
@@ -681,10 +686,6 @@ test("runLoop crash branch: decideCrashRecovery requeue under cap → queued", (
 
 test("runLoop crash branch: decideCrashRecovery escalate at cap", () => {
   return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-crash-escalate-"));
-    const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-
     const decision = decideCrashRecovery(
       { status: "blocked", blockedReason: "crashed", crashRetries: 2 },
       2,
@@ -692,8 +693,6 @@ test("runLoop crash branch: decideCrashRecovery escalate at cap", () => {
 
     equal(decision.action, "escalate");
     equal(decision.crashRetries, 2);
-
-    await cleanTemp(tmp);
   })();
 });
 
@@ -758,7 +757,11 @@ test("runLoop crash branch: thrown executeRun requeues crashed run under cap", (
       repo,
       { holdPowerAssertion: async () => {} },
       clock,
-      { bind: () => Promise.resolve({ current: undefined }), clearActive: () => undefined, close: () => undefined },
+      {
+        bind: () => Promise.resolve({ current: undefined }),
+        clearActive: () => undefined,
+        close: () => undefined,
+      },
       executeRun,
       async () => {},
       async () => {},
@@ -822,7 +825,11 @@ test("runLoop crash branch: thrown executeRun escalates crashed run at cap", () 
       repo,
       { holdPowerAssertion: async () => {} },
       clock,
-      { bind: () => Promise.resolve({ current: undefined }), clearActive: () => undefined, close: () => undefined },
+      {
+        bind: () => Promise.resolve({ current: undefined }),
+        clearActive: () => undefined,
+        close: () => undefined,
+      },
       executeRun,
       async () => {},
       async () => {},

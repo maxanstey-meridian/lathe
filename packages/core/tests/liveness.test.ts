@@ -1,6 +1,11 @@
 import assert from "node:assert";
 import { test } from "node:test";
-import { stallAction, decideStallRecovery, checkReorientBound, decideCrashRecovery } from "../src/domain/liveness.js";
+import {
+  stallAction,
+  decideStallRecovery,
+  checkReorientBound,
+  decideCrashRecovery,
+} from "../src/domain/liveness.js";
 
 // ---------------------------------------------------------------------------
 // stallAction (CONTRACT §6 L3)

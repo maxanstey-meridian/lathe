@@ -38,7 +38,6 @@ export const createSandbox = (
   branch: string,
   base: string,
 ): void => {
-  const dotGit = join(sandboxPath, ".git");
   // Fresh restart: if a prior sandbox exists, discard it and recreate a clean clone.
   // A dirty or half-made sandbox must not be reused on a fresh attempt.
   if (existsSync(sandboxPath)) {

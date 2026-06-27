@@ -18,7 +18,6 @@ import { priorReconciliationAccepted, rotationGateState } from "../../domain/gat
 import { initialGateState } from "../../domain/gate.js";
 import { parsePacketShape } from "../../domain/packet.js";
 import type { Packet } from "../../domain/packet.js";
-import { decideRunStart, type RunStartDecision } from "../../domain/run.js";
 import {
   q1InitialSeed,
   q2RotationSeed,
@@ -27,6 +26,7 @@ import {
   renderDaddySeed,
 } from "../../domain/prompts.js";
 import { renderReportMarkdown } from "../../domain/report.js";
+import { decideRunStart } from "../../domain/run.js";
 import type { ExecuteRunCallback } from "./run-loop.js";
 import {
   journal,
@@ -64,9 +64,10 @@ export const makeExecuteRun =
 
     // Packet selection: fresh → queue packet wins (re-freeze current spec);
     // resume → frozen snapshot wins (immune to mid-flight edits, K3).
-    const raw = startDecision.mode === "resume"
-      ? frozenPacket || queuePacket || ""
-      : queuePacket || frozenPacket || "";
+    const raw =
+      startDecision.mode === "resume"
+        ? frozenPacket || queuePacket || ""
+        : queuePacket || frozenPacket || "";
     const shape = parsePacketShape(raw, runId);
     if (!shape.ok) {
       if (priorMeta) {

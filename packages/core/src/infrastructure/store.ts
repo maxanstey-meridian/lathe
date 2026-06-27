@@ -647,7 +647,7 @@ export class StoreAdapter implements Store {
     if (!repo || !base) {
       return undefined;
     }
-   return {
+    return {
       runId,
       status: "queued",
       attempt: 1,

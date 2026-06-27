@@ -147,14 +147,10 @@ export type Decision = z.infer<typeof Decision>;
 //   - otherwise → resume (live session + unchanged packet)
 // ---------------------------------------------------------------------------
 
-export type RunStartDecision =
-  | { mode: "resume" }
-  | { mode: "fresh"; reason: string };
+export type RunStartDecision = { mode: "resume" } | { mode: "fresh"; reason: string };
 
 export const decideRunStart = (
-  priorMeta:
-    | { babySessionId?: string; daddySessionId?: string; attempt?: number }
-    | undefined,
+  priorMeta: { babySessionId?: string; daddySessionId?: string; attempt?: number } | undefined,
   frozenPacket: string,
   queuePacket: string | undefined,
 ): RunStartDecision => {

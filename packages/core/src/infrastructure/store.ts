@@ -52,6 +52,7 @@ import {
   stampBase,
   extractRepoFromYaml,
   extractBaseFromYaml,
+  freshQueuePriority,
 } from "../domain/packet.js";
 import { RunMeta as RunMetaSchema } from "../domain/run.js";
 import { ReviewState as ReviewStateSchema } from "../domain/run.js";
@@ -426,7 +427,7 @@ export class StoreAdapter implements Store {
       return [];
     });
 
-    // Fresh packets in queue dir, sorted lexically (F1), excluding consumed runs.
+    // Fresh packets in queue dir, lifecycle-priority sorted, excluding consumed runs.
     const fresh: QueueEntry[] = readdirSync(this.paths.queueDir)
       .filter((f) => f.endsWith(".md"))
       .sort()
@@ -434,9 +435,11 @@ export class StoreAdapter implements Store {
         const runId = f.replace(/\.md$/, "");
         const fullPath = join(this.paths.queueDir, f);
         const mtime = statSync(fullPath).mtime.toISOString();
-        return { runId, admittedAt: mtime };
+        return { runId, admittedAt: mtime, priority: freshQueuePriority(readFileSync(fullPath, "utf-8")) };
       })
-      .filter((e) => !existsSync(this.paths.runDir(e.runId)));
+      .filter((e) => !existsSync(this.paths.runDir(e.runId)))
+      .sort((a, b) => a.priority - b.priority || a.runId.localeCompare(b.runId))
+      .map(({ runId, admittedAt }) => ({ runId, admittedAt }));
 
     return [...requeued, ...fresh];
   }

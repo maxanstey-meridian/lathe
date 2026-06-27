@@ -1213,6 +1213,68 @@ verification:
     await cleanTemp(tmp);
   }
 
+  // Queue — fresh packets sort by lifecycle priority, not just filename
+  {
+    const tmp = await mkdtemp(join(tmpdir(), `${label}-qlist-priority-`));
+    const store = createStore(tmp, fakeRepo(), fixedClock());
+    await mkdir(join(tmp, "queue"), { recursive: true });
+
+    const unrelated = `---
+repo: /tmp/test-repo
+base: main
+summary: unrelated packet
+outcomes:
+  - id: unrelated
+    description: unrelated outcome
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+`;
+    const chainChild = `---
+repo: /tmp/test-repo
+base: main
+parent_run_id: 20260101-000000-parent
+summary: dependent chain packet
+outcomes:
+  - id: chain
+    description: chain outcome
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+`;
+    const repair = `---
+repo: /tmp/test-repo
+base: meridian/20260101-000000-parent
+campaign_id: 20260101-000000-parent
+parent_run_id: 20260101-000000-parent
+pass: 2
+summary: repair packet
+outcomes:
+  - id: repair
+    description: repair outcome
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+`;
+
+    await writeFile(join(tmp, "queue", "20260101-000000-a-unrelated.md"), unrelated);
+    await writeFile(join(tmp, "queue", "20260101-000000-b-chain.md"), chainChild);
+    await writeFile(join(tmp, "queue", "20260101-000000-c-repair.md"), repair);
+
+    const entries = store.listQueue();
+    strictEqual(entries.length, 3);
+    equal(entries[0].runId, "20260101-000000-c-repair");
+    equal(entries[1].runId, "20260101-000000-b-chain");
+    equal(entries[2].runId, "20260101-000000-a-unrelated");
+    await cleanTemp(tmp);
+  }
+
   // Queue — admit
   {
     const tmp = await mkdtemp(join(tmpdir(), `${label}-adm-`));

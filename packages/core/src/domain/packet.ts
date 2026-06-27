@@ -56,6 +56,15 @@ export type Packet = {
   raw: string;
 };
 
+export type FreshQueuePriority = 0 | 1 | 2;
+
+const QueuePriorityFrontmatter = z
+  .object({
+    campaign_id: z.string().optional(),
+    parent_run_id: z.string().optional(),
+  })
+  .passthrough();
+
 // ---------------------------------------------------------------------------
 // Admission result type
 
@@ -181,6 +190,36 @@ export const parsePacketShape = (raw: string, runId?: string): AdmissionResult =
     ok: true,
     packet: { runId: runId ?? "", frontmatter: fm.data, body: parts.body, raw },
   };
+};
+
+// Fresh queue packets share one filesystem inbox, but lifecycle repair/chain work
+// must outrank unrelated packets. Invalid/unparseable packets sort last; admission
+// still owns the actual rejection path.
+export const freshQueuePriority = (raw: string): FreshQueuePriority => {
+  const parts = extractFrontmatter(raw);
+  if (!parts) {
+    return 2;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(parts.yaml);
+  } catch {
+    return 2;
+  }
+
+  const fm = QueuePriorityFrontmatter.safeParse(parsed);
+  if (!fm.success) {
+    return 2;
+  }
+
+  if (fm.data.campaign_id !== undefined) {
+    return 0;
+  }
+  if (fm.data.parent_run_id !== undefined) {
+    return 1;
+  }
+  return 2;
 };
 
 // ---------------------------------------------------------------------------

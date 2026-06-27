@@ -42,6 +42,18 @@ export interface CliEnv {
   err: (line: string) => void;
 }
 
+/**
+ * Keeps daemon command response types tied to the generated OpenAPI contract
+ * without repeating the full indexed-access chain at every call site.
+ *
+ * Before:
+ *   paths["/runs"]["post"]["responses"][202]["content"]["application/json"]
+ *
+ * Now:
+ *   PathJsonResponse<"/runs", "post", 202>
+ *
+ * That example is the JSON body returned by `POST /runs` when enqueue succeeds.
+ */
 type PathJsonResponse<
   Path extends keyof paths,
   Method extends keyof paths[Path],

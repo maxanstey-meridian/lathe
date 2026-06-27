@@ -1,7 +1,7 @@
 import assert from "node:assert";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { test } from "node:test";
 import { makePaths } from "../src/config/paths.js";
 import type { Config } from "../src/config/schemas.js";
@@ -254,7 +254,9 @@ test("config generation: skips copy when node_modules trio already present", () 
 });
 
 test("pluginPath resolves to an existing file", () => {
-  assert.ok(existsSync(pluginPath()), "pluginPath() must point to an existing gate-plugin.ts");
+  const path = pluginPath();
+  assert.ok(existsSync(path), "pluginPath() must point to an existing gate-plugin.ts");
+  assert.strictEqual(basename(path), "gate-plugin.ts");
 });
 
 test("config generation: seeds node_modules trio from global dir when missing", () => {

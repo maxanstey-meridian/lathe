@@ -347,10 +347,15 @@ export const evaluateTurn = (facts: z.infer<typeof TurnFacts>): Dec => {
   //     and continue.
   //   - Low prior context → the reseed-dead-session case: the reseed itself
   //     never landed, so rotating again just repeats it → park.
-  // The divide is contextBudget/2: above it, real context was in flight.
+  // The divide is contextBudget/2: below it, don't churn teardown/rotation from
+  // a tiny landing. Either real context was in flight (recover overflow) or the
+  // model made some observable progress (continue and let normal gates apply).
   if (!isFirstTurn && contextTokens < contextTokensFloor) {
     if (priorContextTokens >= contextBudget / 2) {
       return { kind: "recover_overflow" };
+    }
+    if (hadAllowedToolCall || worktreeChanged || checkpointWritten !== null) {
+      return { kind: "continue", softNudgeDue };
     }
     return {
       kind: "park",

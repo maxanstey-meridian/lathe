@@ -581,9 +581,7 @@ test("evaluateTurn: dead-session guard — low tokens but first turn has progres
   assert.strictEqual(result.kind, "continue");
 });
 
-test("evaluateTurn: dead-session guard — low tokens not first turn parks regardless of progress (guard fires before branch 10)", () => {
-  // The guard fires BEFORE progress evaluation — that's the intended design.
-  // Below-floor tokens means dead session regardless of any spurious tool call.
+test("evaluateTurn: dead-session guard — low tokens with progress continues below overflow threshold", () => {
   const facts = def({
     contextTokens: 50,
     contextTokensFloor: 128,
@@ -591,8 +589,7 @@ test("evaluateTurn: dead-session guard — low tokens not first turn parks regar
     hadAllowedToolCall: true,
   });
   const result = run(facts);
-  assert.strictEqual(result.kind, "park");
-  assert.strictEqual(result.reason, "wedged");
+  assert.strictEqual(result.kind, "continue");
 });
 
 test("evaluateTurn: dead-session guard — tokens above floor does not trip", () => {

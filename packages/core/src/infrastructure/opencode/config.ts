@@ -272,14 +272,14 @@ export const waitForServer = async (config: Config, timeoutMs = 30_000): Promise
   );
 };
 
-// The plugin path: ships with @lathe/core at packages/core/plugin/gate-core.ts.
+// The plugin path: ships with @lathe/core at packages/core/plugin/gate-plugin.ts.
 // Source execution resolves from src/infrastructure/opencode; bundled execution
 // resolves from dist. Support both layouts so the built daemon stays gated.
 export const pluginPath = (): string => {
   const here = dirname(new URL(import.meta.url).pathname);
-  const sourcePath = join(here, "..", "..", "..", "plugin", "gate-core.ts");
+  const sourcePath = join(here, "..", "..", "..", "plugin", "gate-plugin.ts");
   if (existsSync(sourcePath)) {
     return sourcePath;
   }
-  return join(here, "..", "plugin", "gate-core.ts");
+  return join(here, "..", "plugin", "gate-plugin.ts");
 };

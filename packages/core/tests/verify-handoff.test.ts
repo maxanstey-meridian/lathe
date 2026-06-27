@@ -168,9 +168,7 @@ const makeRef = (overrides?: {
   store.writeLedger(store.initialLedger(packet));
   store.writeGateState(packet.runId, {
     runId: packet.runId,
-    latched: false,
-    firstEditApproved: false,
-    reconciliationRequired: false,
+    phase: { phase: "initial" },
     expectedGlobs: ["src/**"],
     suspiciousGlobs: [],
     baselineDiffStats: {},

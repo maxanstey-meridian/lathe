@@ -23,26 +23,18 @@ export const clearedGateState = (
   nowIso: string,
 ): GateState => ({
   ...state,
-  latched: false,
-  latchReason: undefined,
-  firstEditApproved: true,
-  reconciliationRequired: false,
+  phase: { phase: "cleared" },
   lastAcceptedDecisionAt: nowIso,
   baselineDiffStats,
   updatedAt: nowIso,
 });
 
-// G5: trigger evaluation — first match wins.
-// The in-worktree surface gate is GONE (only absolute-path-outside
-// is blocked). The checkpoint cadence is no longer a gate trigger
-// (demoted to non-blocking NOTICE). Gate latches for first-edit
-// approval exactly once per session, plus crash-path reconciliation.
+// G5: trigger evaluation — only fires for the initial phase (first edit).
+// Reconciliation is now a latched phase; the caller checks isLatched(gate)
+// before calling this, so reconciliation states never reach here.
 export const gateTriggerReason = (state: GateState, delta: DeltaInput): string | undefined => {
-  if (!state.firstEditApproved && delta.files.length > 0) {
+  if (state.phase.phase === "initial" && delta.files.length > 0) {
     return "first edit of the run requires an accepted planner decision";
-  }
-  if (state.reconciliationRequired) {
-    return "reconciliation required: no valid checkpoint from the previous session";
   }
   return undefined;
 };
@@ -83,22 +75,29 @@ export const rotationGateState = (
   return {
     next: {
       ...state,
-      latched: true,
-      firstEditApproved: false,
-      reconciliationRequired: needsReconciliation,
-      latchReason: reason,
+      phase: needsReconciliation
+        ? { phase: "reconciliation-latched", reason }
+        : { phase: "first-edit-latched", reason },
     },
     reason,
   };
 };
 
-// Re-latch an unlatched gate mid-run (checkpoint demand). Preserves
-// firstEditApproved and reconciliationRequired — only forces latched.
-export const relatchGate = (state: GateState, reason: string): GateState => ({
-  ...state,
-  latched: true,
-  latchReason: reason,
-});
+// Re-latch an unlatched gate mid-run (checkpoint demand). Only called from
+// unlatched states (initial or cleared). From cleared, produces
+// checkpoint-demand-latched; from initial, produces first-edit-latched.
+export const relatchGate = (state: GateState, reason: string): GateState => {
+  if (state.phase.phase === "cleared") {
+    return {
+      ...state,
+      phase: { phase: "checkpoint-demand-latched", reason },
+    };
+  }
+  return {
+    ...state,
+    phase: { phase: "first-edit-latched", reason },
+  };
+};
 
 // O6 skip: if the most recent decision was a Daddy-accepted reconciliation,
 // the state was already validated — don't force the successor session to
@@ -113,7 +112,7 @@ export const priorReconciliationAccepted = (decisions: Decision[]): boolean => {
 };
 
 // G5 (deny): mutation deny reason, first match wins.
-// Order: out-of-surface absolute > latched > memory-latch > first-edit > reconciliation.
+// Order: out-of-surface absolute > latched > memory-latch (initial/cleared) > first-edit.
 // This calls editTargetOutOfSurface from gate-tools; both files are
 // pure, so this cross-module import has no I/O.
 export const mutationDenyReason = (
@@ -127,19 +126,22 @@ export const mutationDenyReason = (
   if (surfaceTarget) {
     return `attempted edit outside the handoff's expected change surface: ${surfaceTarget}`;
   }
-  if (state.latched) {
-    return state.latchReason ?? "planner checkpoint required";
+  switch (state.phase.phase) {
+    case "initial":
+      if (memoryLatchReason) {
+        return memoryLatchReason;
+      }
+      return "first edit of the run requires an accepted planner decision";
+    case "first-edit-latched":
+    case "reconciliation-latched":
+    case "checkpoint-demand-latched":
+      return state.phase.reason;
+    case "cleared":
+      if (memoryLatchReason) {
+        return memoryLatchReason;
+      }
+      return undefined;
   }
-  if (memoryLatchReason) {
-    return memoryLatchReason;
-  }
-  if (!state.firstEditApproved) {
-    return "first edit of the run requires an accepted planner decision";
-  }
-  if (state.reconciliationRequired) {
-    return "reconciliation required: no valid checkpoint from the previous session";
-  }
-  return undefined;
 };
 
 // L1 (soft checkpoint reminder): time-based, non-blocking.
@@ -151,7 +153,7 @@ export const checkpointNudgeDue = (
   nowMs: number,
   intervalMs: number,
 ): number | undefined => {
-  if (!state.firstEditApproved || !state.lastAcceptedDecisionAt) {
+  if (state.phase.phase !== "cleared" || !state.lastAcceptedDecisionAt) {
     return undefined;
   }
   const elapsed = nowMs - Date.parse(state.lastAcceptedDecisionAt);
@@ -165,7 +167,7 @@ export const checkpointNudgeDue = (
 // Returns the notice string when due, else undefined.
 // The driver appends this to executor per-mutation results.
 export const checkpointNudgeNotice = (state: GateState, nowMs: number): string | undefined => {
-  if (!state.firstEditApproved || !state.lastAcceptedDecisionAt) {
+  if (state.phase.phase !== "cleared" || !state.lastAcceptedDecisionAt) {
     return undefined;
   }
   const intervalMs = state.checkpointNudgeMs ?? 20 * 60 * 1000;

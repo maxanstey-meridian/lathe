@@ -52,6 +52,7 @@ export const TurnFacts = z.object({
   // Context budget (branch 8): measured tokens vs threshold
   contextTokens: z.number(),
   contextBudget: z.number(),
+  contextOverflow: z.boolean().default(false),
 
   // Dead-session guard (complementary to branch 7 send-failure path):
   // floor of acceptable context tokens; first-turn exempt. priorContextTokens is
@@ -169,6 +170,7 @@ export const evaluateTurn = (facts: z.infer<typeof TurnFacts>): Dec => {
     watchdogPastDeadline,
     contextTokens,
     contextBudget,
+    contextOverflow,
     contextTokensFloor,
     priorContextTokens,
     isFirstTurn,
@@ -309,6 +311,12 @@ export const evaluateTurn = (facts: z.infer<typeof TurnFacts>): Dec => {
     return { kind: "re_demand_teardown" };
   }
 
+  // Provider-declared context overflow is authoritative: the request failed
+  // before Baby could produce a meaningful turn, even when token counters read 0.
+  if (contextOverflow) {
+    return { kind: "recover_overflow" };
+  }
+
   // ---- Branch 8: Context budget reached ----
   if (contextTokens >= contextBudget) {
     return { kind: "demand_teardown" };
@@ -331,7 +339,9 @@ export const evaluateTurn = (facts: z.infer<typeof TurnFacts>): Dec => {
   // A send that returns but with an empty/near-zero prompt landing. First-turn
   // exempt (a fresh session always starts with the full seed). Fires BEFORE the
   // no-progress ladder so a dead landing is handled deliberately instead of
-  // spiralling up the ladder. Two distinct causes, split on the PRIOR turn:
+  // spiralling up the ladder. Provider-declared overflow is handled above. This
+  // keeps the older unlabeled provider-failure fallback: two distinct causes,
+  // split on the PRIOR turn:
   //   - High prior context → a working session whose request overflowed the
   //     server window (opencode returns an empty completion on the 4xx). Rotate
   //     and continue.

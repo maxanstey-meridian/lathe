@@ -13,7 +13,13 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { babyContextBudget } from "../../config/config.js";
 import type { Config } from "../../config/schemas.js";
-import { extractText, extractReasoning, gateDeniedPart } from "../../domain/agent-response.js";
+import {
+  extractText,
+  extractReasoning,
+  gateDeniedPart,
+  isContextOverflowError,
+  messageError,
+} from "../../domain/agent-response.js";
 import type { TurnResponse, MessagePart } from "../../domain/agent-response.js";
 import { diffDelta } from "../../domain/gate-classification.js";
 import {
@@ -24,6 +30,7 @@ import {
   relatchGate,
   priorReconciliationAccepted,
 } from "../../domain/gate-decisions.js";
+import { isLatched, gateReason } from "../../domain/gate.js";
 import { checkReorientBound } from "../../domain/liveness.js";
 import type { Packet } from "../../domain/packet.js";
 import {
@@ -64,8 +71,19 @@ import {
 type TurnObservations = {
   text: string;
   contextTokens: number;
+  contextOverflow: boolean;
   hadAllowedToolCall: boolean;
   toolCalls: number;
+};
+
+type TurnPartHarvest = {
+  parts: MessagePart[];
+  responsePartCount: number;
+  responsePartTypes: string[];
+  listMessageCount?: number;
+  listStart?: number;
+  listPartCount?: number;
+  listError?: string;
 };
 
 // opencode's POST /message returns only the FINAL assistant message's parts, so
@@ -78,16 +96,30 @@ const collectTurnParts = async (
   sessionId: string,
   lastSeenMessageId: string | undefined,
   response: TurnResponse,
-): Promise<MessagePart[]> => {
+): Promise<TurnPartHarvest> => {
+  const responsePartCount = response.parts.length;
+  const responsePartTypes = response.parts.map((p) => p.type);
   try {
     const messages = await ports.executor.listMessages(sessionId);
     const start = lastSeenMessageId
       ? messages.findIndex((m) => m.info.id === lastSeenMessageId) + 1
       : 0;
     const parts = messages.slice(start).flatMap((m) => m.parts);
-    return parts.length > 0 ? parts : response.parts;
-  } catch {
-    return response.parts;
+    return {
+      parts: parts.length > 0 ? parts : response.parts,
+      responsePartCount,
+      responsePartTypes,
+      listMessageCount: messages.length,
+      listStart: start,
+      listPartCount: parts.length,
+    };
+  } catch (err) {
+    return {
+      parts: response.parts,
+      responsePartCount,
+      responsePartTypes,
+      listError: err instanceof Error ? err.message : String(err),
+    };
   }
 };
 
@@ -99,17 +131,20 @@ const journalTurn = (
   runId: string,
   turn: number,
   response: TurnResponse,
-  turnParts: MessagePart[],
+  harvest: TurnPartHarvest,
 ): TurnObservations => {
   const text = extractText(response);
   const reasoning = extractReasoning(response);
   const tokens = response.info.tokens ?? {};
   const contextTokens = (tokens.input ?? 0) + (tokens.cache?.read ?? 0) + (tokens.output ?? 0);
+  const contextOverflow = isContextOverflowError(response.info);
+  const responseError = messageError(response.info);
+  const rawResponseError = response.info.error;
 
   let hadAllowedToolCall = false;
   let toolCalls = 0;
 
-  for (const part of turnParts) {
+  for (const part of harvest.parts) {
     if (part.type !== "tool") {
       continue;
     }
@@ -158,11 +193,33 @@ const journalTurn = (
       cacheWrite: tokens.cache?.write ?? 0,
     },
     contextTokens,
+    responsePartCount: harvest.responsePartCount,
+    responsePartTypes: harvest.responsePartTypes,
+    ...(responseError ? { responseError } : {}),
+    ...(rawResponseError
+      ? {
+          responseErrorDetail: {
+            ...(rawResponseError.name ? { name: rawResponseError.name } : {}),
+            ...(rawResponseError.data?.statusCode !== undefined
+              ? { statusCode: rawResponseError.data.statusCode }
+              : {}),
+            ...(rawResponseError.data?.message ? { message: rawResponseError.data.message } : {}),
+            ...(rawResponseError.data?.responseBody
+              ? { responseBodyPreview: rawResponseError.data.responseBody.slice(0, 1000) }
+              : {}),
+          },
+        }
+      : {}),
+    ...(harvest.listMessageCount !== undefined
+      ? { harvestMessageCount: harvest.listMessageCount }
+      : {}),
+    ...(harvest.listStart !== undefined ? { harvestStart: harvest.listStart } : {}),
+    ...(harvest.listPartCount !== undefined ? { harvestPartCount: harvest.listPartCount } : {}),
     text: text.slice(0, 2000),
     ...(reasoning ? { reasoning: reasoning.slice(0, 1000) } : {}),
   });
 
-  return { text, contextTokens, hadAllowedToolCall, toolCalls };
+  return { text, contextTokens, contextOverflow, hadAllowedToolCall, toolCalls };
 };
 
 // A prose "all done" without submit_report → the report-properly nudge (Q6).
@@ -385,16 +442,34 @@ export const turnLoop = async (
 
     // --- gather --------------------------------------------------------------
     const turnParts = await collectTurnParts(ports, sessionId, lastSeenMessageId, response);
+    if (turnParts.listError) {
+      journal(ports, runId, turn, {
+        event: "turn_harvest_failed",
+        messageId: response.info.id,
+        detail: turnParts.listError,
+      });
+    }
     lastSeenMessageId = response.info.id;
     const obs = journalTurn(ports, runId, turn, response, turnParts);
     toolCallsSinceDecision += obs.toolCalls;
 
     const intents = channel.intents;
+
+    // Re-arm orphaned consult: pendingConsult is sticky (set by ask_planner,
+    // cleared by run_consult). But the consult-requested INTENT is per-turn.
+    // If a higher-precedence branch shadowed it on a prior turn (e.g.
+    // report-rejected, branch 4 > branch 5), the consult was never sent.
+    // Re-push it so the consult runs this turn — same pattern as the
+    // pendingFinalReview re-arm in the submit_report handler.
+    if (channel.pendingConsult && !intents.some((i) => i.kind === "consult-requested")) {
+      intents.push({ kind: "consult-requested" });
+    }
+
     const worktreeChanged = JSON.stringify(repo.readDiffStats(worktree)) !== diffBefore;
     const gate = store.readGateState(runId);
     const delta = diffDelta(gate.baselineDiffStats, repo.readDiffStats(worktree));
-    const gateReason = gate.latched
-      ? (gate.latchReason ?? "planner checkpoint required")
+    const reason = isLatched(gate)
+      ? (gateReason(gate) ?? "planner checkpoint required")
       : gateTriggerReason(gate, delta);
     const softNudgeDue =
       checkpointNudgeDue(gate, clock.now(), config.thresholds.checkpointNudgeMs) !== undefined;
@@ -404,11 +479,12 @@ export const turnLoop = async (
       watchdogPastDeadline: clock.now() >= deadlineMs,
       contextTokens: obs.contextTokens,
       contextBudget,
+      contextOverflow: obs.contextOverflow,
       contextTokensFloor: config.thresholds.contextTokensFloor,
       priorContextTokens,
       isFirstTurn: turn === 1,
-      gateDemandsCheckpoint: gateReason !== undefined,
-      gateReason,
+      gateDemandsCheckpoint: reason !== undefined,
+      gateReason: reason,
       hadAllowedToolCall: obs.hadAllowedToolCall,
       worktreeChanged,
       rotationPending,
@@ -718,9 +794,8 @@ export const turnLoop = async (
         // to a fresh session that reseeds LOW — Q2 from the latest durable
         // checkpoint, else Q8 worktree reconciliation; the worktree (committed +
         // uncommitted work) survives the rotation, so progress is not lost. No
-        // ladder climb: the wall was the window, not a stall. If the reseed
-        // itself overflows, the next turn lands at 0 with priorContextTokens 0,
-        // which falls through to the dead-session park — so this cannot spin.
+        // ladder climb: the wall was the window, not a stall. Repeated explicit
+        // provider overflow stays in this path; watchdog/backstops own livelock.
         journal(ports, runId, turn, {
           event: "rotation",
           phase: "context_overflow",
@@ -764,7 +839,7 @@ export const turnLoop = async (
       case "demand_gate_checkpoint": {
         climb();
         const g = store.readGateState(runId);
-        if (!g.latched) {
+        if (!isLatched(g)) {
           store.writeGateState(runId, relatchGate(g, decision.reason));
           journal(ports, runId, turn, { event: "gate_latched", reason: decision.reason });
         }

@@ -32,24 +32,27 @@ import {
   editTargetOutOfSurface,
   commandFromArgs,
 } from "../src/domain/gate-tools.ts";
-import type { GateState } from "../src/domain/gate.ts";
+import { GateState, type GatePhase } from "../src/domain/gate.ts";
 
 // ===========================================================================
 // Build helpers
 // ===========================================================================
 
-const makeState = (partial: Partial<GateState> = {}): GateState => ({
-  runId: "20260618-000000-test",
-  latched: false,
-  firstEditApproved: false,
-  reconciliationRequired: false,
-  expectedGlobs: ["src/**"],
-  suspiciousGlobs: ["weird/**"],
-  baselineDiffStats: {},
-  mutationCommandPatterns: [],
-  updatedAt: "2026-01-01T00:00:00Z",
-  ...partial,
-});
+const makeState = (
+  overrides: { phase?: GatePhase } & Partial<Omit<GateState, "phase">> = {},
+): GateState => {
+  const { phase = { phase: "initial" }, ...rest } = overrides;
+  return {
+    runId: "20260618-000000-test",
+    phase,
+    expectedGlobs: ["src/**"],
+    suspiciousGlobs: ["weird/**"],
+    baselineDiffStats: {},
+    mutationCommandPatterns: [],
+    updatedAt: "2026-01-01T00:00:00Z",
+    ...rest,
+  };
+};
 
 // ===========================================================================
 // G1: glob translation (carried from v1)
@@ -330,22 +333,21 @@ test("editTargetOutOfSurface: non-edit tools return undefined", () => {
 // G5: gateTriggerReason (first-edit + reconciliation, no cadence, no surface)
 // ===========================================================================
 
-test("gateTriggerReason: first edit unapproved, no files → no trigger", () => {
-  const state = makeState({ firstEditApproved: false });
+test("gateTriggerReason: initial phase, no files → no trigger", () => {
+  const state = makeState();
   assert.strictEqual(gateTriggerReason(state, { files: [], loc: 0 }), undefined);
 });
 
-test("gateTriggerReason: first edit unapproved, files present → first-edit reason", () => {
-  const state = makeState({ firstEditApproved: false });
+test("gateTriggerReason: initial phase, files present → first-edit reason", () => {
+  const state = makeState();
   const reason = gateTriggerReason(state, { files: ["src/file.ts"], loc: 0 });
   assert.ok(reason?.includes("first edit"));
   assert.ok(!reason?.includes("out-of-surface"));
 });
 
-test("gateTriggerReason: first edit approved, no reconciliation → no trigger (G5: cadence gone)", () => {
+test("gateTriggerReason: cleared phase → no trigger (G5: cadence gone)", () => {
   const state = makeState({
-    firstEditApproved: true,
-    reconciliationRequired: false,
+    phase: { phase: "cleared" },
     lastAcceptedDecisionAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
   });
   const reason = gateTriggerReason(state, {
@@ -355,37 +357,27 @@ test("gateTriggerReason: first edit approved, no reconciliation → no trigger (
   assert.strictEqual(reason, undefined);
 });
 
-test("gateTriggerReason: reconciliation required → always latched regardless of delta", () => {
-  const state = makeState({ firstEditApproved: true, reconciliationRequired: true });
-  const reason = gateTriggerReason(state, { files: [], loc: 0 });
-  assert.ok(reason?.includes("reconciliation"));
-});
-
 // ===========================================================================
 // O5: rotationGateState
 // ===========================================================================
 
 test("rotationGateState: clean rotation (no reconciliation) re-latches first-edit", () => {
-  const base = makeState({ latched: false, firstEditApproved: true });
+  const base = makeState({ phase: { phase: "cleared" } });
   const result = rotationGateState(base, false);
 
   assert.strictEqual(
-    result.next.firstEditApproved,
-    false,
+    result.next.phase.phase,
+    "first-edit-latched",
     "replaced session must re-earn first-edit",
   );
-  assert.strictEqual(result.next.latched, true);
-  assert.strictEqual(result.next.reconciliationRequired, false, "no reconciliation needed");
   assert.ok(result.reason.includes("first edit"));
 });
 
 test("rotationGateState: crash rotation stacks reconciliation", () => {
-  const base = makeState({ latched: false, firstEditApproved: true });
+  const base = makeState({ phase: { phase: "cleared" } });
   const result = rotationGateState(base, true);
 
-  assert.strictEqual(result.next.firstEditApproved, false);
-  assert.strictEqual(result.next.latched, true);
-  assert.strictEqual(result.next.reconciliationRequired, true, "no checkpoint → reconciliation");
+  assert.strictEqual(result.next.phase.phase, "reconciliation-latched");
   assert.ok(result.reason.includes("reconciliation"));
   assert.ok(result.reason.includes("checkpoint"));
 });
@@ -488,9 +480,7 @@ test("priorReconciliationAccepted: empty decisions → false", () => {
 
 test("mutationDenyReason: out-of-surface absolute path wins first", () => {
   const state = makeState({
-    latched: false,
-    firstEditApproved: false,
-    reconciliationRequired: true,
+    phase: { phase: "reconciliation-latched", reason: "recon" },
   });
   const reason = mutationDenyReason(
     "edit",
@@ -504,10 +494,7 @@ test("mutationDenyReason: out-of-surface absolute path wins first", () => {
 
 test("mutationDenyReason: when latched, latch reason is returned", () => {
   const state = makeState({
-    latched: true,
-    latchReason: "initial latch",
-    firstEditApproved: false,
-    reconciliationRequired: false,
+    phase: { phase: "first-edit-latched", reason: "initial latch" },
   });
   const reason = mutationDenyReason(
     "edit",
@@ -519,12 +506,8 @@ test("mutationDenyReason: when latched, latch reason is returned", () => {
   assert.strictEqual(reason, "initial latch");
 });
 
-test("mutationDenyReason: memory latch fires when gate is clear", () => {
-  const state = makeState({
-    latched: false,
-    firstEditApproved: true,
-    reconciliationRequired: false,
-  });
+test("mutationDenyReason: memory latch fires when gate is cleared", () => {
+  const state = makeState({ phase: { phase: "cleared" } });
   const reason = mutationDenyReason(
     "edit",
     { filePath: "src/file.ts" },
@@ -535,12 +518,8 @@ test("mutationDenyReason: memory latch fires when gate is clear", () => {
   assert.strictEqual(reason, "subagent used");
 });
 
-test("mutationDenyReason: first edit unapproved (gate clear, no memory latch)", () => {
-  const state = makeState({
-    latched: false,
-    firstEditApproved: false,
-    reconciliationRequired: false,
-  });
+test("mutationDenyReason: initial phase denies first edit (no memory latch)", () => {
+  const state = makeState();
   const reason = mutationDenyReason(
     "edit",
     { filePath: "src/file.ts" },
@@ -551,11 +530,9 @@ test("mutationDenyReason: first edit unapproved (gate clear, no memory latch)", 
   assert.ok(reason?.includes("first edit"));
 });
 
-test("mutationDenyReason: reconciliation required (gate clear)", () => {
+test("mutationDenyReason: reconciliation-latched returns its reason", () => {
   const state = makeState({
-    latched: false,
-    firstEditApproved: true,
-    reconciliationRequired: true,
+    phase: { phase: "reconciliation-latched", reason: "reconciliation required" },
   });
   const reason = mutationDenyReason(
     "edit",
@@ -564,15 +541,11 @@ test("mutationDenyReason: reconciliation required (gate clear)", () => {
     "/home/wt",
     undefined,
   );
-  assert.ok(reason?.includes("reconciliation"));
+  assert.strictEqual(reason, "reconciliation required");
 });
 
-test("mutationDenyReason: nothing triggers → undefined", () => {
-  const state = makeState({
-    latched: false,
-    firstEditApproved: true,
-    reconciliationRequired: false,
-  });
+test("mutationDenyReason: cleared with no memory latch → undefined", () => {
+  const state = makeState({ phase: { phase: "cleared" } });
   const reason = mutationDenyReason(
     "edit",
     { filePath: "src/file.ts" },
@@ -591,28 +564,37 @@ const INTERVAL = 20 * 60 * 1000;
 const now = Date.now();
 const iso = (msAgo: number) => new Date(now - msAgo).toISOString();
 
-test("checkpointNudgeDue: new run (no firstEditApproved) → undefined", () => {
-  const state = makeState({ firstEditApproved: false, lastAcceptedDecisionAt: iso(INTERVAL * 2) });
+test("checkpointNudgeDue: initial phase → undefined", () => {
+  const state = makeState({ lastAcceptedDecisionAt: iso(INTERVAL * 2) });
   assert.strictEqual(checkpointNudgeDue(state, now, INTERVAL), undefined);
 });
 
-test("checkpointNudgeDue: approved but no lastAcceptedDecisionAt → undefined", () => {
-  const state = makeState({ firstEditApproved: true });
+test("checkpointNudgeDue: cleared but no lastAcceptedDecisionAt → undefined", () => {
+  const state = makeState({ phase: { phase: "cleared" } });
   assert.strictEqual(checkpointNudgeDue(state, now, INTERVAL), undefined);
 });
 
 test("checkpointNudgeDue: within interval → undefined (grace period)", () => {
-  const state = makeState({ firstEditApproved: true, lastAcceptedDecisionAt: iso(5 * 60 * 1000) });
+  const state = makeState({
+    phase: { phase: "cleared" },
+    lastAcceptedDecisionAt: iso(5 * 60 * 1000),
+  });
   assert.strictEqual(checkpointNudgeDue(state, now, INTERVAL), undefined);
 });
 
 test("checkpointNudgeDue: past interval → returns elapsed minutes", () => {
-  const state = makeState({ firstEditApproved: true, lastAcceptedDecisionAt: iso(30 * 60 * 1000) });
+  const state = makeState({
+    phase: { phase: "cleared" },
+    lastAcceptedDecisionAt: iso(30 * 60 * 1000),
+  });
   assert.strictEqual(checkpointNudgeDue(state, now, INTERVAL), 30);
 });
 
 test("checkpointNudgeDue: un-throttled — always reports elapsed minutes", () => {
-  const state = makeState({ firstEditApproved: true, lastAcceptedDecisionAt: iso(90 * 60 * 1000) });
+  const state = makeState({
+    phase: { phase: "cleared" },
+    lastAcceptedDecisionAt: iso(90 * 60 * 1000),
+  });
   assert.strictEqual(checkpointNudgeDue(state, now, INTERVAL), 90);
 });
 
@@ -621,12 +603,18 @@ test("checkpointNudgeDue: un-throttled — always reports elapsed minutes", () =
 // ===========================================================================
 
 test("checkpointNudgeNotice: not due while below interval", () => {
-  const state = makeState({ firstEditApproved: true, lastAcceptedDecisionAt: iso(5 * 60 * 1000) });
+  const state = makeState({
+    phase: { phase: "cleared" },
+    lastAcceptedDecisionAt: iso(5 * 60 * 1000),
+  });
   assert.strictEqual(checkpointNudgeNotice(state, now), undefined);
 });
 
 test("checkpointNudgeNotice: past interval → NOTICE string", () => {
-  const state = makeState({ firstEditApproved: true, lastAcceptedDecisionAt: iso(30 * 60 * 1000) });
+  const state = makeState({
+    phase: { phase: "cleared" },
+    lastAcceptedDecisionAt: iso(30 * 60 * 1000),
+  });
   const notice = checkpointNudgeNotice(state, now);
   assert.ok(notice?.includes("MERIDIAN GATE NOTICE"));
   assert.ok(notice?.includes("~30 min"));
@@ -636,7 +624,7 @@ test("checkpointNudgeNotice: past interval → NOTICE string", () => {
 
 test("checkpointNudgeNotice: uses default 20 min if checkpointNudgeMs not set", () => {
   const state = makeState({
-    firstEditApproved: true,
+    phase: { phase: "cleared" },
     lastAcceptedDecisionAt: iso(25 * 60 * 1000),
     checkpointNudgeMs: undefined,
   });
@@ -743,4 +731,115 @@ test("GIT_MESSAGE: git mutations blocked to driver", () => {
   assert.ok(GIT_MESSAGE.startsWith("MERIDIAN GATE BLOCKED"));
   assert.ok(GIT_MESSAGE.includes("git mutations are not yours"));
   assert.ok(GIT_MESSAGE.includes("the driver commits at the end of the run"));
+});
+
+// ===========================================================================
+// Legacy migration — old-format gate-state on disk must parse to new phase
+// ===========================================================================
+
+const legacyBase = {
+  runId: "20260101-000000-test",
+  expectedGlobs: ["src/**"],
+  suspiciousGlobs: [],
+  baselineDiffStats: {},
+  mutationCommandPatterns: [],
+  updatedAt: "2026-01-01T00:00:00Z",
+};
+
+test("GateState.parse: legacy FFF → initial", () => {
+  const parsed = GateState.parse({
+    ...legacyBase,
+    latched: false,
+    firstEditApproved: false,
+    reconciliationRequired: false,
+  });
+  assert.strictEqual(parsed.phase.phase, "initial");
+});
+
+test("GateState.parse: legacy TFF → first-edit-latched", () => {
+  const parsed = GateState.parse({
+    ...legacyBase,
+    latched: true,
+    latchReason: "first edit pending",
+    firstEditApproved: false,
+    reconciliationRequired: false,
+  });
+  assert.strictEqual(parsed.phase.phase, "first-edit-latched");
+  if (parsed.phase.phase === "first-edit-latched") {
+    assert.strictEqual(parsed.phase.reason, "first edit pending");
+  }
+});
+
+test("GateState.parse: legacy TFT → reconciliation-latched", () => {
+  const parsed = GateState.parse({
+    ...legacyBase,
+    latched: true,
+    latchReason: "recon needed",
+    firstEditApproved: false,
+    reconciliationRequired: true,
+  });
+  assert.strictEqual(parsed.phase.phase, "reconciliation-latched");
+  if (parsed.phase.phase === "reconciliation-latched") {
+    assert.strictEqual(parsed.phase.reason, "recon needed");
+  }
+});
+
+test("GateState.parse: legacy FTF → cleared", () => {
+  const parsed = GateState.parse({
+    ...legacyBase,
+    latched: false,
+    firstEditApproved: true,
+    reconciliationRequired: false,
+  });
+  assert.strictEqual(parsed.phase.phase, "cleared");
+});
+
+test("GateState.parse: legacy TTF → checkpoint-demand-latched", () => {
+  const parsed = GateState.parse({
+    ...legacyBase,
+    latched: true,
+    latchReason: "checkpoint demand",
+    firstEditApproved: true,
+    reconciliationRequired: false,
+  });
+  assert.strictEqual(parsed.phase.phase, "checkpoint-demand-latched");
+  if (parsed.phase.phase === "checkpoint-demand-latched") {
+    assert.strictEqual(parsed.phase.reason, "checkpoint demand");
+  }
+});
+
+test("GateState.parse: legacy with lastAcceptedDecisionAt preserves it", () => {
+  const parsed = GateState.parse({
+    ...legacyBase,
+    latched: false,
+    firstEditApproved: true,
+    reconciliationRequired: false,
+    lastAcceptedDecisionAt: "2026-06-01T00:00:00Z",
+  });
+  assert.strictEqual(parsed.phase.phase, "cleared");
+  assert.strictEqual(parsed.lastAcceptedDecisionAt, "2026-06-01T00:00:00Z");
+});
+
+test("GateState.parse: legacy with no latchReason gets default", () => {
+  const parsed = GateState.parse({
+    ...legacyBase,
+    latched: true,
+    firstEditApproved: false,
+    reconciliationRequired: false,
+  });
+  assert.strictEqual(parsed.phase.phase, "first-edit-latched");
+  if (parsed.phase.phase === "first-edit-latched") {
+    assert.ok(parsed.phase.reason.length > 0, "missing latchReason gets a default");
+  }
+});
+
+test("GateState.parse: new-format passes through unchanged", () => {
+  const parsed = GateState.parse({
+    ...legacyBase,
+    phase: { phase: "reconciliation-latched", reason: "test" },
+  });
+  assert.strictEqual(parsed.phase.phase, "reconciliation-latched");
+  if (parsed.phase.phase === "reconciliation-latched") {
+    assert.strictEqual(parsed.phase.reason, "test");
+  }
 });

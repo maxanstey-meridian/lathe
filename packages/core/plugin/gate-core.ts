@@ -18,12 +18,16 @@ export type ActiveRun = {
   babySessionId: string
 }
 
+export type GatePhaseValue =
+  | { phase: "initial" }
+  | { phase: "first-edit-latched"; reason: string }
+  | { phase: "reconciliation-latched"; reason: string }
+  | { phase: "cleared" }
+  | { phase: "checkpoint-demand-latched"; reason: string }
+
 export type GateStateFile = {
   runId: string
-  latched: boolean
-  latchReason?: string
-  firstEditApproved: boolean
-  reconciliationRequired: boolean
+  phase: GatePhaseValue
   expectedGlobs: string[]
   baselineDiffStats: Record<string, { added: number; removed: number }>
   lastAcceptedDecisionAt?: string
@@ -40,6 +44,42 @@ export type GateStateFile = {
   mutationCommandPatterns: string[]
 }
 
+// Legacy format (pre-phase-refactor): three control booleans.
+type GateStateFileLegacy = {
+  runId: string
+  latched: boolean
+  latchReason?: string
+  firstEditApproved: boolean
+  reconciliationRequired: boolean
+  expectedGlobs: string[]
+  baselineDiffStats: Record<string, { added: number; removed: number }>
+  lastAcceptedDecisionAt?: string
+  checkpointNudgeMs?: number
+  checkpointToolCalls?: number
+  checkpointFiles?: number
+  checkpointLoc?: number
+  mutationCommandPatterns: string[]
+}
+
+// Transparent migration: old-format gate-state files are converted on read.
+const migratePhase = (raw: GateStateFile | GateStateFileLegacy): GateStateFile => {
+  if ("phase" in raw) return raw
+  const { latched, latchReason, firstEditApproved, reconciliationRequired, ...rest } = raw
+  let phase: GatePhaseValue
+  if (!latched && !firstEditApproved && !reconciliationRequired)
+    phase = { phase: "initial" }
+  else if (latched && !firstEditApproved && !reconciliationRequired)
+    phase = { phase: "first-edit-latched", reason: latchReason ?? "planner checkpoint required" }
+  else if (latched && !firstEditApproved && reconciliationRequired)
+    phase = { phase: "reconciliation-latched", reason: latchReason ?? "reconciliation required: no valid checkpoint from the previous session" }
+  else if (!latched && firstEditApproved && !reconciliationRequired)
+    phase = { phase: "cleared" }
+  // Remaining (TTF reachable via relatchGate; FTT/FFT/TTT unreachable)
+  else
+    phase = { phase: "checkpoint-demand-latched", reason: latchReason ?? "planner checkpoint required" }
+  return { ...rest, phase }
+}
+
 const STATE_ROOT = join(homedir(), ".meridian", "v2")
 
 const readJson = <T>(path: string): T | undefined => {
@@ -53,8 +93,11 @@ const readJson = <T>(path: string): T | undefined => {
 export const activeRun = (): ActiveRun | undefined =>
   readJson<ActiveRun>(join(STATE_ROOT, "active-run.json"))
 
-export const gateState = (run: ActiveRun): GateStateFile | undefined =>
-  readJson<GateStateFile>(join(run.runDir, "gate-state.json"))
+export const gateState = (run: ActiveRun): GateStateFile | undefined => {
+  const raw = readJson<GateStateFile | GateStateFileLegacy>(join(run.runDir, "gate-state.json"))
+  if (!raw) return undefined
+  return migratePhase(raw)
+}
 
 // --- tool classification -----------------------------------------------------
 
@@ -179,12 +222,18 @@ export const mutationDenyReason = (
   const surfaceTarget = editTargetOutOfSurface(tool, args, worktree)
   if (surfaceTarget) return `attempted edit outside the handoff's expected change surface: ${surfaceTarget}`
 
-  if (state.latched) return state.latchReason ?? "planner checkpoint required"
-  if (memoryLatchReason) return memoryLatchReason
-
-  if (!state.firstEditApproved) return "first edit of the run requires an accepted planner decision"
-  if (state.reconciliationRequired) return "reconciliation required: no valid checkpoint from the previous session"
-  return undefined
+  switch (state.phase.phase) {
+    case "initial":
+      if (memoryLatchReason) return memoryLatchReason
+      return "first edit of the run requires an accepted planner decision"
+    case "first-edit-latched":
+    case "reconciliation-latched":
+    case "checkpoint-demand-latched":
+      return state.phase.reason
+    case "cleared":
+      if (memoryLatchReason) return memoryLatchReason
+      return undefined
+  }
 }
 
 // NON-BLOCKING per-call checkpoint reminder (§10), on the ALLOW path. The mutation runs; this notice is APPENDED to its
@@ -193,7 +242,7 @@ export const mutationDenyReason = (
 // in (clearGate moves lastAcceptedDecisionAt forward). Deliberately un-throttled.
 // Returns the notice when due, else undefined.
 export const checkpointNudgeNotice = (state: GateStateFile, nowMs: number): string | undefined => {
-  if (!state.firstEditApproved || !state.lastAcceptedDecisionAt) return undefined
+  if (state.phase.phase !== "cleared" || !state.lastAcceptedDecisionAt) return undefined
   const intervalMs = state.checkpointNudgeMs ?? 20 * 60 * 1000
   const elapsed = nowMs - Date.parse(state.lastAcceptedDecisionAt)
   if (elapsed < intervalMs) return undefined

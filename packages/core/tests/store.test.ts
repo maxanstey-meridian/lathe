@@ -337,9 +337,7 @@ test("store: gate state round-trip", async () => {
   const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   const state = {
     runId: "20260101-000000-test",
-    latched: false,
-    firstEditApproved: true,
-    reconciliationRequired: false,
+    phase: { phase: "cleared" } as const,
     expectedGlobs: ["src/**/*.ts"],
     suspiciousGlobs: [],
     baselineDiffStats: {},
@@ -349,8 +347,7 @@ test("store: gate state round-trip", async () => {
   store.writeGateState(state.runId, state);
   const read = store.readGateState(state.runId);
   equal(read.runId, state.runId);
-  equal(read.latched, false);
-  equal(read.firstEditApproved, true);
+  equal(read.phase.phase, "cleared");
   await cleanTemp(tmp);
 });
 
@@ -1008,9 +1005,7 @@ const runContractTests = async (
     const store = createStore(tmp, fakeRepo(), clock);
     const state = {
       runId: "20260101-000000-test",
-      latched: false,
-      firstEditApproved: true,
-      reconciliationRequired: false,
+      phase: { phase: "cleared" } as const,
       expectedGlobs: ["src/**/*.ts"],
       suspiciousGlobs: [],
       baselineDiffStats: {},
@@ -1020,8 +1015,7 @@ const runContractTests = async (
     store.writeGateState(state.runId, state);
     const read = store.readGateState(state.runId);
     equal(read.runId, state.runId);
-    equal(read.latched, false);
-    equal(read.firstEditApproved, true);
+    equal(read.phase.phase, "cleared");
     await cleanTemp(tmp);
   }
 

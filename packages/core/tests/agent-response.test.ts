@@ -5,6 +5,7 @@ import {
   extractText,
   firstProviderError,
   harvestAssistantText,
+  isContextOverflowError,
 } from "../src/domain/agent-response.js";
 
 const assistant = (id: string, text: string): TurnResponse => ({
@@ -53,5 +54,49 @@ describe("firstProviderError", () => {
 
   it("is null when no turn carried an error", () => {
     assert.equal(firstProviderError([assistant("a1", "ok"), assistant("a2", "done")]), null);
+  });
+});
+
+describe("isContextOverflowError", () => {
+  it("detects ContextOverflowError by provider error name", () => {
+    assert.equal(
+      isContextOverflowError({
+        id: "a1",
+        sessionID: "s",
+        error: {
+          name: "ContextOverflowError",
+          data: { message: "request (106197 tokens) exceeds the available context size" },
+        },
+      }),
+      true,
+    );
+  });
+
+  it("detects provider response bodies carrying exceed_context_size_error", () => {
+    assert.equal(
+      isContextOverflowError({
+        id: "a1",
+        sessionID: "s",
+        error: {
+          name: "ProviderError",
+          data: {
+            responseBody:
+              '{"error":{"type":"exceed_context_size_error","message":"too many tokens"}}',
+          },
+        },
+      }),
+      true,
+    );
+  });
+
+  it("does not classify unrelated provider errors as context overflow", () => {
+    assert.equal(
+      isContextOverflowError({
+        id: "a1",
+        sessionID: "s",
+        error: { name: "APIError", data: { statusCode: 503, message: "upstream" } },
+      }),
+      false,
+    );
   });
 });

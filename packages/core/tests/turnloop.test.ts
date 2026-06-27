@@ -505,8 +505,10 @@ test("turnLoop: consult round-trip — accepted decision clears the gate", () =>
     // Latch the gate (first edit pending) so the accepted consult must clear it.
     store.writeGateState(RUN_ID, {
       ...store.readGateState(RUN_ID),
-      latched: true,
-      latchReason: "first edit of the run requires an accepted planner decision",
+      phase: {
+        phase: "first-edit-latched",
+        reason: "first edit of the run requires an accepted planner decision",
+      },
     });
 
     const channel = emptyChannel();
@@ -552,12 +554,87 @@ test("turnLoop: consult round-trip — accepted decision clears the gate", () =>
     equal(result.outcome.status, "blocked");
     // Gate cleared by the accepted consult.
     const gate = store.readGateState(RUN_ID);
-    equal(gate.latched, false);
-    equal(gate.firstEditApproved, true);
+    equal(gate.phase.phase, "cleared");
     // The decision + the proceed obligation were persisted.
     const decisions = store.readDecisions(RUN_ID);
     ok(decisions.some((d) => d.status === "proceed"));
     deepEqual(store.readReviewState(RUN_ID).obligations, ["keep the seam narrow"]);
+    await cleanTemp(tmp);
+  })();
+});
+
+test("turnLoop: orphaned consult re-arms and runs on the next turn", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-rearm-"));
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+
+    const channel = emptyChannel();
+    const submission: AskPlannerInput = {
+      questionType: "diff_audit",
+      currentSlice: "the slice",
+      question: "why was my report rejected?",
+      approach: "checking the gate latch",
+      evidence: ["src/index.ts"],
+    };
+    let consultCalls = 0;
+    const planner = fakePlanner({
+      consult: async () => {
+        consultCalls += 1;
+        return PROCEED;
+      },
+    });
+
+    // Turn 1: report rejected + consult submitted in the same turn.
+    //   Branch 4 (report-rejected) shadows branch 5 (consult-requested).
+    //   The consult is never sent; pendingConsult stays set on the bridge.
+    // Turn 2: no new intents — re-arm sees pendingConsult still set,
+    //   pushes consult-requested, branch 5 fires, consult runs, gate clears.
+    // Turn 3: Baby submits blocked → terminal.
+    const executor = scriptedExecutor(channel, [
+      {
+        intents: [
+          { kind: "report-rejected", problems: ["gate latched"] },
+          { kind: "consult-requested" },
+        ],
+        pendingConsult: submission,
+        bumpRejection: 1,
+      },
+      {},
+      {
+        intents: [
+          {
+            kind: "report-accepted",
+            status: "blocked",
+            blockedReason: "stop_condition",
+            blockedQuestion: "done",
+            summary: "work complete",
+          },
+        ],
+      },
+    ]);
+    const ports = makePorts(store, fakeRepo(), executor, planner);
+
+    const result = await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    equal(consultCalls, 1, "consult must run on turn 2 after re-arm");
+    const gate = store.readGateState(RUN_ID);
+    equal(gate.phase.phase, "cleared", "gate cleared by the re-armed consult");
+    const decisions = store.readDecisions(RUN_ID);
+    ok(
+      decisions.some((d) => d.status === "proceed"),
+      "proceed decision persisted",
+    );
+    equal(result.outcome.status, "blocked");
     await cleanTemp(tmp);
   })();
 });
@@ -651,8 +728,68 @@ test("turnLoop: no-progress rotate — session replaced, gate re-latched, then t
     ok(journal.some((e) => e.event === "rotation" && e.phase === "session_replaced"));
     // No checkpoint existed → the rotated gate stacks reconciliation (O6).
     const gate = store.readGateState(RUN_ID);
-    equal(gate.reconciliationRequired, true);
+    equal(gate.phase.phase, "reconciliation-latched");
     equal(store.readMeta(RUN_ID).babySessionId, "baby-rotated");
+    await cleanTemp(tmp);
+  })();
+});
+
+test("turnLoop: provider context overflow rotates instead of parking as dead session", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-overflow-"));
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+
+    const channel = emptyChannel();
+    let turnCount = 0;
+    const executor: Executor = {
+      createSession: async () => "baby-overflow-rotated",
+      sendMessage: async (sessionID) => {
+        turnCount += 1;
+        if (turnCount === 1) {
+          return {
+            info: {
+              id: "m1",
+              sessionID,
+              tokens: {},
+              error: {
+                name: "ContextOverflowError",
+                data: { message: "request (106197 tokens) exceeds the available context size" },
+              },
+            },
+            parts: [],
+          };
+        }
+
+        channel.intents.push({
+          kind: "report-accepted",
+          status: "failed",
+          summary: "after overflow rotation",
+        });
+        return { info: { id: "m2", sessionID, tokens: {} }, parts: [] };
+      },
+      listMessages: async () => [],
+      deleteSession: async () => {},
+    };
+    const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
+
+    const result = await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    equal(result.outcome.status, "failed");
+    const journal = store.readJournal(RUN_ID);
+    ok(journal.some((e) => e.event === "rotation" && e.phase === "context_overflow"));
+    ok(journal.some((e) => e.event === "rotation" && e.phase === "session_replaced"));
+    ok(!journal.some((e) => e.event === "parked" && e.reason === "wedged"));
+    equal(store.readMeta(RUN_ID).babySessionId, "baby-overflow-rotated");
     await cleanTemp(tmp);
   })();
 });
@@ -663,7 +800,7 @@ test("turnLoop: no-progress rotate — session replaced, gate re-latched, then t
 test("turnLoop: gate trigger at turn end → latch + demand checkpoint (Q4)", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-gate-"));
-    // A diff present + firstEditApproved=false → the first-edit trigger fires.
+    // A diff present + initial phase → the first-edit trigger fires.
     const repo = fakeRepo({ "src/index.ts": { added: 5, removed: 1 } });
     const store = StoreAdapter.create(makePaths(tmp), repo, fixedClock());
     const packet = parseFixture();

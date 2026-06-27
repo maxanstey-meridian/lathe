@@ -62,6 +62,24 @@ export const harvestAssistantText = (turns: TurnResponse[]): string =>
 export const firstProviderError = (turns: TurnResponse[]): string | null =>
   turns.map((t) => messageError(t.info)).find((e): e is string => e !== null) ?? null;
 
+export const isContextOverflowError = (info: MessageInfo): boolean => {
+  const error = info.error;
+  if (!error) {
+    return false;
+  }
+
+  const name = error.name ?? "";
+  const message = error.data?.message ?? "";
+  const responseBody = error.data?.responseBody ?? "";
+  const detail = `${name}\n${message}\n${responseBody}`.toLowerCase();
+
+  return (
+    name === "ContextOverflowError" ||
+    detail.includes("exceed_context_size_error") ||
+    detail.includes("exceeds the available context size")
+  );
+};
+
 // Pure helper: extract all reasoning parts from a turn response.
 export const extractReasoning = (response: TurnResponse): string =>
   response.parts

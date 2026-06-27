@@ -9,6 +9,7 @@ import { render, Box, Text, useApp, useInput } from "ink";
 import { useEffect, useRef, useState } from "react";
 import type { OpencodeEvent } from "../../application/ports/events.js";
 import type { Store } from "../../application/ports/store.js";
+import { isLatched, gateReason } from "../../domain/gate.js";
 import type { JournalEvent } from "../../domain/journal.js";
 import { renderJournalEvent, isDriverEvent } from "../../domain/journal.js";
 
@@ -234,7 +235,7 @@ const TailApp = ({ store, budget, subscribe, runId, daddyDirectory, models }: Ta
         ...s,
         done: ledger?.outcomes.filter((o) => o.status === "done").length ?? s.done,
         total: ledger?.outcomes.length ?? s.total,
-        gate: gate?.latched ? (gate.latchReason ?? "latched") : "",
+        gate: gate && isLatched(gate) ? (gateReason(gate) ?? "latched") : "",
         status: m?.status ?? s.status,
       }));
     }, 1000);

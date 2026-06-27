@@ -25,6 +25,8 @@ import {
   BlockedReason,
   ACCEPTED_STATUSES,
   clearedGateState,
+  isLatched,
+  gateReason,
   type Packet,
   type OutcomeLedger,
   type Checkpoint,
@@ -591,9 +593,9 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
 
   // V5: a latched gate means an unresolved planner obligation.
   const gateState = ctx.store.readGateState(ctx.packet.runId);
-  if (report.status === "ready_for_review" && gateState.latched) {
+  if (report.status === "ready_for_review" && isLatched(gateState)) {
     problems.push(
-      `the gate is latched (${gateState.latchReason ?? "planner checkpoint required"}) — ready_for_review requires a clear gate: call meridian-bridge_ask_planner and continue only on proceed`,
+      `the gate is latched (${gateReason(gateState) ?? "planner checkpoint required"}) — ready_for_review requires a clear gate: call meridian-bridge_ask_planner and continue only on proceed`,
     );
   }
 

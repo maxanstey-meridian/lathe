@@ -49,9 +49,7 @@ const makeStore = (meta?: ReturnType<typeof makeMeta>): Store => {
     nextCheckpointNumber: () => 1,
     readGateState: () => ({
       runId: "fake",
-      latched: false,
-      firstEditApproved: false,
-      reconciliationRequired: false,
+      phase: { phase: "initial" },
       expectedGlobs: [],
       suspiciousGlobs: [],
       baselineDiffStats: {},

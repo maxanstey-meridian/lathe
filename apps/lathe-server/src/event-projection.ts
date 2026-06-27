@@ -107,6 +107,7 @@ export const projectJournalEvent = (e: JournalEvent, ctx: ProjectionContext): La
     case "report_submitted":
     case "report_rejected":
     case "report_accepted":
+    case "turn_harvest_failed":
     case "ladder_step":
       return null;
 

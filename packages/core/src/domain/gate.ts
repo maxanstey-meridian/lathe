@@ -5,16 +5,28 @@ import { z } from "zod";
 
 export const DiffStat = z.object({ added: z.number(), removed: z.number() });
 
-export const GateState = z.object({
+// The five gate phases. Invalid boolean combinations are unconstructable.
+// Factories (initialGateState, clearedGateState, rotationGateState,
+// relatchGate) are the only way to produce these values.
+export const GatePhase = z.discriminatedUnion("phase", [
+  z.object({ phase: z.literal("initial") }),
+  z.object({ phase: z.literal("first-edit-latched"), reason: z.string() }),
+  z.object({ phase: z.literal("reconciliation-latched"), reason: z.string() }),
+  z.object({ phase: z.literal("cleared") }),
+  z.object({ phase: z.literal("checkpoint-demand-latched"), reason: z.string() }),
+]);
+export type GatePhase = z.infer<typeof GatePhase>;
+
+// Shared config fields orthogonal to the phase.
+const GateStateFields = z.object({
   runId: z.string(),
-  latched: z.boolean(),
-  latchReason: z.string().optional(),
-  firstEditApproved: z.boolean(),
-  reconciliationRequired: z.boolean(),
+  // Top-level (not inside phase): rotation spreads state, preserving this
+  // sentinel across phase changes. The bridge's get_decisions uses it to
+  // prevent stale decisions from re-clearing the gate.
+  lastAcceptedDecisionAt: z.string().optional(),
   expectedGlobs: z.array(z.string()),
   suspiciousGlobs: z.array(z.string()),
   baselineDiffStats: z.record(z.string(), DiffStat),
-  lastAcceptedDecisionAt: z.string().optional(),
   // Plumbed to the plugin (§10) so its allow-path checkpoint NOTICE uses the same
   // interval as the driver's per-turn nudge. Optional so gate-state written before
   // this field still validates on resume (the plugin falls back to 20 min).
@@ -30,7 +42,86 @@ export const GateState = z.object({
   mutationCommandPatterns: z.array(z.string()).default([]),
   updatedAt: z.string(),
 });
-export type GateState = z.infer<typeof GateState>;
+
+const GateStateNew = GateStateFields.extend({ phase: GatePhase });
+
+// Legacy shape (pre-phase-refactor): three control booleans + latchReason.
+// Kept for transparent migration on read — old runs on disk still have this.
+const GateStateLegacy = z.object({
+  runId: z.string(),
+  latched: z.boolean(),
+  latchReason: z.string().optional(),
+  firstEditApproved: z.boolean(),
+  reconciliationRequired: z.boolean(),
+  expectedGlobs: z.array(z.string()),
+  suspiciousGlobs: z.array(z.string()),
+  baselineDiffStats: z.record(z.string(), DiffStat),
+  lastAcceptedDecisionAt: z.string().optional(),
+  checkpointNudgeMs: z.number().int().optional(),
+  checkpointToolCalls: z.number().int().optional(),
+  checkpointFiles: z.number().int().optional(),
+  checkpointLoc: z.number().int().optional(),
+  mutationCommandPatterns: z.array(z.string()).default([]),
+  updatedAt: z.string(),
+});
+
+type LegacyGateState = z.infer<typeof GateStateLegacy>;
+
+const migrateLegacy = (old: LegacyGateState): z.infer<typeof GateStateNew> => {
+  const { latched, latchReason, firstEditApproved, reconciliationRequired, ...rest } = old;
+  if (!latched && !firstEditApproved && !reconciliationRequired) {
+    return { ...rest, phase: { phase: "initial" } };
+  }
+  if (latched && !firstEditApproved && !reconciliationRequired) {
+    return {
+      ...rest,
+      phase: { phase: "first-edit-latched", reason: latchReason ?? "planner checkpoint required" },
+    };
+  }
+  if (latched && !firstEditApproved && reconciliationRequired) {
+    return {
+      ...rest,
+      phase: {
+        phase: "reconciliation-latched",
+        reason:
+          latchReason ?? "reconciliation required: no valid checkpoint from the previous session",
+      },
+    };
+  }
+  if (!latched && firstEditApproved && !reconciliationRequired) {
+    return { ...rest, phase: { phase: "cleared" } };
+  }
+  // Remaining combinations (TTF, and unreachable FTT/FFT/TTT).
+  // TTF (latched && firstEditApproved && !reconciliationRequired) is the only
+  // reachable one — relatchGate on a cleared state. The rest can't arise
+  // through factories but get the same mapping for safety.
+  return {
+    ...rest,
+    phase: {
+      phase: "checkpoint-demand-latched",
+      reason: latchReason ?? "planner checkpoint required",
+    },
+  };
+};
+
+export const GateState = z.union([GateStateNew, GateStateLegacy.transform(migrateLegacy)]);
+export type GateState = z.infer<typeof GateStateNew>;
+
+// Read helpers — eliminate verbose phase narrowing at consumer sites.
+export const isLatched = (gate: GateState): boolean =>
+  gate.phase.phase !== "initial" && gate.phase.phase !== "cleared";
+
+export const gateReason = (gate: GateState): string | undefined => {
+  switch (gate.phase.phase) {
+    case "first-edit-latched":
+    case "reconciliation-latched":
+    case "checkpoint-demand-latched":
+      return gate.phase.reason;
+    case "initial":
+    case "cleared":
+      return undefined;
+  }
+};
 
 // The gate a fresh run starts with (R2/G5): first-edit is unapproved (the first
 // edit demands an accepted planner decision), nothing is reconciling, and the
@@ -51,9 +142,7 @@ export const initialGateState = (
   nowIso: string,
 ): GateState => ({
   runId,
-  latched: false,
-  firstEditApproved: false,
-  reconciliationRequired: false,
+  phase: { phase: "initial" },
   expectedGlobs,
   suspiciousGlobs,
   baselineDiffStats: {},

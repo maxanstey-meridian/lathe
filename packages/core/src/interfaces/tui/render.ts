@@ -15,6 +15,7 @@
 // ---------------------------------------------------------------------------
 
 import type { Store } from "../../application/ports/store.js";
+import { isLatched, gateReason } from "../../domain/gate.js";
 import { renderJournalEvent } from "../../domain/journal.js";
 
 // Outcome roll-up: "2/3 done, 1 in progress". Empty string when no ledger yet.
@@ -48,8 +49,8 @@ export const renderStatus = (store: Store): string => {
     let latched: string | undefined;
     try {
       const gate = store.readGateState(active.runId);
-      if (gate.latched) {
-        latched = gate.latchReason ?? "unknown";
+      if (isLatched(gate)) {
+        latched = gateReason(gate) ?? "unknown";
       }
     } catch {
       /* no gate yet */

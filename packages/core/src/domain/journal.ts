@@ -33,8 +33,28 @@ export const JournalEvent = z.discriminatedUnion("event", [
       cacheWrite: z.number(),
     }),
     contextTokens: z.number(),
+    responseError: z.string().optional(),
+    responseErrorDetail: z
+      .object({
+        name: z.string().optional(),
+        statusCode: z.number().optional(),
+        message: z.string().optional(),
+        responseBodyPreview: z.string().optional(),
+      })
+      .optional(),
+    responsePartCount: z.number().int().optional(),
+    responsePartTypes: z.array(z.string()).optional(),
+    harvestMessageCount: z.number().int().optional(),
+    harvestStart: z.number().int().optional(),
+    harvestPartCount: z.number().int().optional(),
     text: z.string(),
     reasoning: z.string().optional(),
+  }),
+  z.object({
+    ...base,
+    event: z.literal("turn_harvest_failed"),
+    messageId: z.string(),
+    detail: z.string(),
   }),
   z.object({
     ...base,
@@ -160,7 +180,9 @@ export const renderJournalEvent = (e: JournalEvent): string => {
     case "prompt_sent":
       return `${t} → ${e.promptName}`;
     case "turn_ended":
-      return `${t} ◀ turn ${e.turn ?? "?"} (${e.contextTokens} ctx tokens)${e.text ? `\n   ${e.text.slice(0, 200).replace(/\n/g, "\n   ")}` : ""}`;
+      return `${t} ◀ turn ${e.turn ?? "?"} (${e.contextTokens} ctx tokens)${e.responseError ? ` ERROR: ${e.responseError.slice(0, 120)}` : ""}${e.text ? `\n   ${e.text.slice(0, 200).replace(/\n/g, "\n   ")}` : ""}`;
+    case "turn_harvest_failed":
+      return `${t} ✗ turn harvest failed: ${e.detail.slice(0, 160)}`;
     case "tool_call":
       return `${t}   ${e.gateDenied ? "⛔" : "·"} ${e.tool}${e.command ? ` ${e.command.slice(0, 80)}` : ""}${e.target ? ` ${e.target}` : ""}${e.status === "error" && !e.gateDenied ? " ✗" : ""}`;
     case "gate_latched":

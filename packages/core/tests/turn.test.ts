@@ -625,6 +625,40 @@ test("evaluateTurn: dead-session guard — empty turn after HIGH prior context r
   assert.strictEqual(result.kind, "recover_overflow");
 });
 
+test("evaluateTurn: provider-declared context overflow recovers even with LOW prior context", () => {
+  // The provider error is authoritative. Token counters can be zero when the
+  // request never fit into the server window, so priorContextTokens must not
+  // misclassify this as a dead reseed.
+  const facts = def({
+    contextTokens: 0,
+    contextBudget: 100_000,
+    contextOverflow: true,
+    contextTokensFloor: 128,
+    priorContextTokens: 0,
+    isFirstTurn: false,
+    hadAllowedToolCall: false,
+    worktreeChanged: false,
+  });
+  const result = run(facts);
+  assert.strictEqual(result.kind, "recover_overflow");
+});
+
+test("evaluateTurn: provider-declared context overflow beats dead-session guard with ladder > 0", () => {
+  const facts = def({
+    contextTokens: 0,
+    contextBudget: 100_000,
+    contextOverflow: true,
+    contextTokensFloor: 128,
+    priorContextTokens: 0,
+    isFirstTurn: false,
+    hadAllowedToolCall: false,
+    worktreeChanged: false,
+    ladder: 9,
+  });
+  const result = run(facts);
+  assert.strictEqual(result.kind, "recover_overflow");
+});
+
 test("evaluateTurn: dead-session guard — empty turn after LOW prior context still parks (dead reseed)", () => {
   // The reseed itself never landed, so prior context is low. Rotating again would
   // repeat the dead reseed.

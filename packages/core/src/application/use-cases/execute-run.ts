@@ -97,8 +97,8 @@ export const makeExecuteRun =
       repo.createSandbox(repoPath, worktree, branch, base);
     } else {
       // Resume: REFRESH config-derived gate fields (cadence + mutation patterns)
-      // from current config; preserve run-state (firstEditApproved, baseline,
-      // lastAcceptedDecisionAt, reconciliation).
+      // from current config; preserve run-state (phase, baseline,
+      // lastAcceptedDecisionAt).
       const gate = store.readGateState(runId);
       store.writeGateState(runId, {
         ...gate,

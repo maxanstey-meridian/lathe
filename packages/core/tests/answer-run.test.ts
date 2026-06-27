@@ -123,13 +123,11 @@ test("answer-run: succeeds for blocked run", async () => {
   // Write gate state (blocked runs always have a live gate)
   store.writeGateState("20260101-000000-test", {
     runId: "20260101-000000-test",
-    latched: true,
-    latchReason: "first edit approved",
-    firstEditApproved: true,
-    reconciliationRequired: false,
+    phase: { phase: "checkpoint-demand-latched", reason: "first edit approved" },
     expectedGlobs: ["src/**/*.ts"],
     suspiciousGlobs: [],
     baselineDiffStats: {},
+    lastAcceptedDecisionAt: clock.nowIso(),
     updatedAt: clock.nowIso(),
     mutationCommandPatterns: [],
   });
@@ -158,7 +156,7 @@ test("answer-run: succeeds for blocked run", async () => {
 
   // Gate cleared
   const gate = store.readGateState("20260101-000000-test");
-  strictEqual(gate.latched, false);
+  strictEqual(gate.phase.phase, "cleared");
   ok(gate.lastAcceptedDecisionAt);
 
   // Meta updated
@@ -180,9 +178,7 @@ test("answer-run: uses meta.blockedQuestion when present, placeholder when absen
   store.writeMeta(meta);
   store.writeGateState("20260101-000000-noq", {
     runId: "20260101-000000-noq",
-    latched: false,
-    firstEditApproved: true,
-    reconciliationRequired: false,
+    phase: { phase: "cleared" },
     expectedGlobs: [],
     suspiciousGlobs: [],
     baselineDiffStats: {},
@@ -207,9 +203,7 @@ test("answer-run: returns checkpoint number when checkpoint exists", async () =>
   store.writeMeta(meta);
   store.writeGateState("20260101-000000-ckpt", {
     runId: "20260101-000000-ckpt",
-    latched: false,
-    firstEditApproved: true,
-    reconciliationRequired: false,
+    phase: { phase: "cleared" },
     expectedGlobs: [],
     suspiciousGlobs: [],
     baselineDiffStats: {},
@@ -248,9 +242,7 @@ test("answer-run: returns checkpoint undefined when no checkpoint", async () => 
   store.writeMeta(meta);
   store.writeGateState("20260101-000000-nockpt", {
     runId: "20260101-000000-nockpt",
-    latched: false,
-    firstEditApproved: true,
-    reconciliationRequired: false,
+    phase: { phase: "cleared" },
     expectedGlobs: [],
     suspiciousGlobs: [],
     baselineDiffStats: {},

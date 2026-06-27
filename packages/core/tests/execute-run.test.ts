@@ -181,9 +181,7 @@ test("rotateSession: replaces the session, updates meta, latches first-edit (wit
     equal(newId, "baby-1");
     equal(store.readMeta(RUN_ID).babySessionId, "baby-1");
     const gate = store.readGateState(RUN_ID);
-    equal(gate.latched, true);
-    equal(gate.firstEditApproved, false);
-    equal(gate.reconciliationRequired, false); // no reconciliation needed
+    equal(gate.phase.phase, "first-edit-latched");
     await cleanTemp(tmp);
   })();
 });
@@ -232,7 +230,7 @@ test("rotateSession: no checkpoint stacks reconciliation (O6)", () => {
     await rotateSession(ports, packet, "/tmp/wt", "baby-0", 2, true);
 
     const gate = store.readGateState(RUN_ID);
-    equal(gate.reconciliationRequired, true);
+    equal(gate.phase.phase, "reconciliation-latched");
     await cleanTemp(tmp);
   })();
 });
@@ -508,27 +506,24 @@ test("makeExecuteRun: resume without checkpoint but prior accepted reconciliatio
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     // Simulate the real gate state after reconciliation was accepted:
-    // clearedGateState set latched=false, firstEditApproved=true.
-    store.writeGateState(
-      RUN_ID,
-      {
-        ...initialGateState(
-          RUN_ID,
-          ["src/index.ts"],
-          [],
-          {
-            checkpointNudgeMs: 1_000_000,
-            checkpointToolCalls: 50,
-            checkpointFiles: 6,
-            checkpointLoc: 80,
-            mutationCommandPatterns: [],
-          },
-          "2026-01-01T00:00:00.000Z",
-        ),
-        latched: false,
-        firstEditApproved: true,
-      },
-    );
+    // clearedGateState set phase to "cleared".
+    store.writeGateState(RUN_ID, {
+      ...initialGateState(
+        RUN_ID,
+        ["src/index.ts"],
+        [],
+        {
+          checkpointNudgeMs: 1_000_000,
+          checkpointToolCalls: 50,
+          checkpointFiles: 6,
+          checkpointLoc: 80,
+          mutationCommandPatterns: [],
+        },
+        "2026-01-01T00:00:00.000Z",
+      ),
+      phase: { phase: "cleared" },
+      lastAcceptedDecisionAt: "2026-01-01T00:00:00.000Z",
+    });
     const shape = parsePacketShape(PACKET_RAW, RUN_ID);
     ok(shape.ok);
     store.writeLedger(store.initialLedger(shape.packet));
@@ -596,11 +591,9 @@ test("makeExecuteRun: resume without checkpoint but prior accepted reconciliatio
       ports.clock,
     );
 
-    // Gate must NOT have reconciliationRequired, but MUST re-latch first-edit.
+    // Gate must be first-edit-latched (no reconciliation).
     const gate = store.readGateState(RUN_ID);
-    equal(gate.reconciliationRequired, false, "prior accepted recon → no reconciliation gate");
-    equal(gate.latched, true, "gate re-latched for first-edit consult");
-    equal(gate.firstEditApproved, false, "first edit not pre-approved — new session must earn it");
+    equal(gate.phase.phase, "first-edit-latched", "gate re-latched for first-edit consult");
     // Seed must be Q8b (resume, not reconcile).
     ok(firstSeed.includes("resuming a run after a session rotation"), "Q8b resume seed");
     ok(!firstSeed.includes("RECONCILIATION"), "not the Q8 reconciliation seed");

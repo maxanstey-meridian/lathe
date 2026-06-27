@@ -167,9 +167,7 @@ const makeRef = (overrides?: { packet?: Packet; awaitingVerification?: boolean }
   store.writeLedger(ledger);
   store.writeGateState(packet.runId, {
     runId: packet.runId,
-    latched: false,
-    firstEditApproved: false,
-    reconciliationRequired: false,
+    phase: { phase: "initial" },
     expectedGlobs: ["src/**"],
     suspiciousGlobs: [],
     baselineDiffStats: {},
@@ -515,13 +513,13 @@ test("submit_report: failed records report-accepted intent", async () => {
 
 test("submit_report: sets final-review-requested intent when ready_for_review succeeds", async () => {
   const { ref, tmp } = makeRef();
-  // Mark outcome done, gate clear (already latched=false by default), verification green (echo ok passes)
+  // Mark outcome done, gate clear (initial phase by default), verification green (echo ok passes)
   await handleUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
   // Verify gate is clear
   const gateState = ref.current.store.readGateState(ref.current.packet.runId);
-  equal(gateState.latched, false);
+  equal(gateState.phase.phase, "initial");
   const result = await handleSubmitReport(ref, {
     status: "ready_for_review",
     summary: "All done.",
@@ -938,10 +936,7 @@ test("get_decisions: clears gate on accepted decision newer than lastAcceptedDec
   // Overwrite with a dirty gate so post-clear assertions are non-vacuous
   ref.current.store.writeGateState(ref.current.packet.runId, {
     runId: ref.current.packet.runId,
-    latched: true,
-    latchReason: "work in progress",
-    firstEditApproved: false,
-    reconciliationRequired: true,
+    phase: { phase: "reconciliation-latched", reason: "work in progress" },
     expectedGlobs: ["src/**"],
     suspiciousGlobs: [],
     // Seed a stale sentinel so the post-clear value is provably a fresh read,
@@ -964,10 +959,7 @@ test("get_decisions: clears gate on accepted decision newer than lastAcceptedDec
   });
   await handleGetDecisions(ref, {});
   const gateState = ref.current.store.readGateState(ref.current.packet.runId);
-  equal(gateState.latched, false);
-  equal(gateState.latchReason, undefined);
-  equal(gateState.firstEditApproved, true);
-  equal(gateState.reconciliationRequired, false);
+  strictEqual(gateState.phase.phase, "cleared");
   ok(
     gateState.lastAcceptedDecisionAt &&
       gateState.lastAcceptedDecisionAt > "2025-01-01T00:00:00.000Z",
@@ -983,10 +975,7 @@ test("get_decisions: gate unchanged for non-accepted decision", async () => {
   const { ref, tmp, clock } = makeRef();
   ref.current.store.writeGateState(ref.current.packet.runId, {
     runId: ref.current.packet.runId,
-    latched: true,
-    latchReason: "work in progress",
-    firstEditApproved: false,
-    reconciliationRequired: true,
+    phase: { phase: "reconciliation-latched", reason: "work in progress" },
     expectedGlobs: ["src/**"],
     suspiciousGlobs: [],
     baselineDiffStats: {},
@@ -1006,10 +995,8 @@ test("get_decisions: gate unchanged for non-accepted decision", async () => {
   });
   await handleGetDecisions(ref, {});
   const gateState = ref.current.store.readGateState(ref.current.packet.runId);
-  equal(gateState.latched, true);
-  strictEqual(gateState.latchReason, "work in progress");
-  equal(gateState.firstEditApproved, false);
-  equal(gateState.reconciliationRequired, true);
+  strictEqual(gateState.phase.phase, "reconciliation-latched");
+  strictEqual(gateState.phase.reason, "work in progress");
   strictEqual(gateState.lastAcceptedDecisionAt, "2025-01-01T00:00:00.000Z");
   await cleanTemp(tmp);
 });
@@ -1018,10 +1005,7 @@ test("get_decisions: gate unchanged for stale accepted decision", async () => {
   const { ref, tmp, clock } = makeRef();
   ref.current.store.writeGateState(ref.current.packet.runId, {
     runId: ref.current.packet.runId,
-    latched: true,
-    latchReason: "work in progress",
-    firstEditApproved: false,
-    reconciliationRequired: true,
+    phase: { phase: "reconciliation-latched", reason: "work in progress" },
     expectedGlobs: ["src/**"],
     suspiciousGlobs: [],
     baselineDiffStats: {},
@@ -1041,10 +1025,8 @@ test("get_decisions: gate unchanged for stale accepted decision", async () => {
   });
   await handleGetDecisions(ref, {});
   const gateState = ref.current.store.readGateState(ref.current.packet.runId);
-  equal(gateState.latched, true);
-  strictEqual(gateState.latchReason, "work in progress");
-  equal(gateState.firstEditApproved, false);
-  equal(gateState.reconciliationRequired, true);
+  strictEqual(gateState.phase.phase, "reconciliation-latched");
+  strictEqual(gateState.phase.reason, "work in progress");
   strictEqual(gateState.lastAcceptedDecisionAt, "2027-01-01T00:00:00.000Z");
   await cleanTemp(tmp);
 });

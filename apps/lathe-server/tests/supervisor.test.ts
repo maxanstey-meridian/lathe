@@ -404,7 +404,7 @@ test("acceptRun throws NonChainTipError with chainTip for a non-chain-tip run", 
       if (stagedEntries.some(s => s.parentRunId === id)) {
         throw new NonChainTipError(id, childRunId);
       }
-      return 2;
+      return 0;
     },
     rejectRun: () => {},
   };
@@ -441,7 +441,7 @@ test("acceptRun throws NonChainTipError with correct chainTip when multiple chai
       if (stagedEntries.some(s => s.parentRunId === id)) {
         throw new NonChainTipError(id, "b-child-chain");
       }
-      return 2;
+      return 0;
     },
     rejectRun: () => {},
   };

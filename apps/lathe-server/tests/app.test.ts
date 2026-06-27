@@ -1,6 +1,7 @@
 import { equal, ok, strictEqual } from "node:assert";
 import { test } from "node:test";
 
+import { acceptRun as acceptRunUc } from "@lathe/core";
 import type { RunMeta } from "@lathe/core";
 import type { Supervisor } from "../src/supervisor.js";
 import { createApp, createEventBus } from "../src/app.js";
@@ -146,6 +147,45 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
   };
 
   return merged as Supervisor;
+};
+
+const makeAcceptSupervisor = (meta: RunMeta, currentBranch: string, isDirty = false): Supervisor => {
+  const metaStore = new Map<string, RunMeta>([[meta.runId, meta]]);
+  const store = {
+    readMetaIfExists: (runId: string): RunMeta | undefined => metaStore.get(runId),
+    writeMeta: (next: RunMeta): void => {
+      metaStore.set(next.runId, next);
+    },
+  };
+  const repo = {
+    headBranch: (_repoPath: string): string => currentBranch,
+    worktreeIsDirty: (_repoPath: string): boolean => isDirty,
+    isCloneSandbox: () => false,
+    fetchBranchFromClone: () => {},
+    mergeAccept: () => {},
+    removeSandbox: () => {},
+  };
+  const clock = { nowIso: () => new Date().toISOString() };
+
+  return {
+    stop: async () => {},
+    config: defaultConfig,
+    appDeps: {
+      bus: createEventBus(),
+      readEventsSince: (_seq: number): { seq: number; event: LatheEvent }[] => [],
+    },
+    enqueueRun: (_packetPath: string): string => meta.runId,
+    enqueueChain: (_chainDir: string): void => {},
+    listRuns: (): RunMeta[] => Array.from(metaStore.values()),
+    getRun: (runId: string): RunMeta | undefined => metaStore.get(runId),
+    abortRun: (_runId: string): void => {},
+    acceptRun: (runId: string): number =>
+      acceptRunUc(runId, undefined, { store, repo, clock, runsDir: "/tmp/runs" }),
+    rejectRun: (_runId: string, _reason: string): void => {},
+    isChainTip: (_runId: string): boolean => true,
+    lastVerdict: (_runId: string): string | null => null,
+    listStaged: (): Array<{ runId: string; parentRunId: string | undefined }> => [],
+  } satisfies Supervisor;
 };
 
 // ---------------------------------------------------------------------------
@@ -534,15 +574,7 @@ test("AcceptRun on chain tip returns 200", async () => {
     queuedAt: new Date().toISOString(),
   } as RunMeta;
 
-  const supervisor = makeFakeSupervisor({
-    getRun: (id: string) => (id === runId ? meta : undefined),
-    isChainTip: (id: string) => id === runId,
-    acceptRun: (id: string): number => {
-      if (id !== runId) throw new NonChainTipError(id, runId);
-      meta.status = "accepted" as const;
-      return 2;
-    },
-  });
+  const supervisor = makeAcceptSupervisor(meta, "main");
   const app = createApp(supervisor.appDeps, supervisor);
 
   const req = new Request(`http://localhost/runs/${runId}/accept`, { method: "POST" });
@@ -555,10 +587,21 @@ test("AcceptRun on chain tip returns 200", async () => {
 
 test("AcceptRun refusal returns a failing response", async () => {
   const runId = "accept-refused";
-  const supervisor = makeFakeSupervisor({
-    getRun: () => undefined,
-    acceptRun: () => 0,
-  });
+  const meta = {
+    runId,
+    status: "ready_for_review" as const,
+    attempt: 1,
+    repo: "/tmp/test",
+    base: "main",
+    branch: "meridian/accept-refused",
+    worktree: "/tmp/w",
+    stallRetries: 0,
+    reorientRetries: 0,
+    reviewerUnreachable: 0,
+    updatedAt: new Date().toISOString(),
+    queuedAt: new Date().toISOString(),
+  } as RunMeta;
+  const supervisor = makeAcceptSupervisor(meta, "develop");
   const app = createApp(supervisor.appDeps, supervisor);
 
   const req = new Request(`http://localhost/runs/${runId}/accept`, { method: "POST" });

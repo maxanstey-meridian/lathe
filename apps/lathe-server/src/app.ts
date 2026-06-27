@@ -144,17 +144,17 @@ export const createApp = (
           throw err;
         }
         if (result === 0) {
-          throw rivetHttpError(409, {
-            code: "accept_refused",
-            message: `accept ${params.runId} refused`,
-          });
+          const meta = supervisor.getRun(params.runId);
+          if (!meta) {
+            throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+          }
+          const ctx = buildDtoCtx(supervisor, meta);
+          return runToSummary(meta, ctx);
         }
-        const meta = supervisor.getRun(params.runId);
-        if (!meta) {
-          throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
-        }
-        const ctx = buildDtoCtx(supervisor, meta);
-        return runToSummary(meta, ctx);
+        throw rivetHttpError(409, {
+          code: "accept_refused",
+          message: `accept ${params.runId} refused`,
+        });
       },
 
       RejectRun: async ({ params, body }) => {

@@ -37,6 +37,8 @@ Hard rules:
 - Your working directory IS the project root. Write and reference every file with a path relative to it (e.g. \`src/board.ts\`), never an absolute path. An absolute path is outside your change surface and the gate WILL deny it; if a write is blocked as "outside the change surface" and you used an absolute path, drop the prefix and write relative to here.
 - You run in capped turns. A system message like "Maximum steps reached for this agent run" is a normal TURN boundary, not the end of the run and not a hard stop: write a one-line note on where you are and what's next, and stop — the driver continues you in a fresh turn with full state from the durable files. NEVER call meridian-bridge_submit_report because of a step or checkpoint limit. meridian-bridge_submit_report is ONLY for genuinely-finished work (ready_for_review) or a decision only Max can make (blocked) — never to escape a turn boundary.
 - If you notice you are guessing, going in circles, surprised by the codebase, or about to try something speculative "to see if it works" — stop and call meridian-bridge_ask_planner with what you know and what confused you. Uncertainty is a routing signal, not a problem to push through. Asking is cheap; a wrong guess implemented faithfully is expensive.
+- After Daddy's decision arrives, if you are still confused or have follow-up questions, call meridian-bridge_ask_planner again with those follow-ups before editing. Daddy is available repeatedly; do not treat one answer as your only chance to ask.
+- When asking a follow-up about a failed planner instruction, include the exact prior instruction, what you changed, the exact failing command/output, and why that evidence contradicts the instruction.
 - Normal iteration (a red typecheck, a failing test you are driving to green) is yours — keep working. But a SECOND fix attempt for the same bug is not iteration: a bug that survived your fix means your model of the code is wrong somewhere. Stop, take your diagnosis and the failing evidence to meridian-bridge_ask_planner before trying again.
 - If meridian-bridge_ask_planner returns human_required or stop: stop immediately. Do not retry, rephrase, or override.
 - An accepted answer's constraints are your live review obligations; satisfy them in the code.
@@ -383,8 +385,10 @@ ${JSON.stringify({ planner }, null, 2)}
 
 ${
   planner.status === "revise_slice"
-    ? "This is revise_slice: narrow or rework your slice as directed above, then call meridian-bridge_ask_planner again BEFORE editing. Do not implement the original plan."
-    : "Your question is answered and the gate is now clear for this slice. The constraints above are your live review obligations — satisfy them in the code. Proceed with implementation."
+    ? "This is revise_slice: replace your proposed slice with Daddy's corrected slice, whether that narrows or expands the work. If Daddy added owner files, backend seams, or contract work needed to make the packet honest, include them in your revised proposal. Then call meridian-bridge_ask_planner again BEFORE editing. Do not implement the original plan."
+    : planner.status === "promote_run"
+      ? "This is promote_run: the driver is restarting you on the promotion model because Daddy judged the task valid and the executable slice clear, but your prior execution was not reliably applying evidence/instructions or was stuck in tool/harness mechanics. Follow Daddy's safe_next_action cold, then call meridian-bridge_ask_planner before editing if any uncertainty remains."
+      : "Your question is answered and the gate is now clear for this slice. The constraints above are your live review obligations — satisfy them in the code. Proceed with implementation."
 }`;
 
 // Qp-fail — the consult itself failed to reach Daddy (transport, not a stop
@@ -478,22 +482,43 @@ The constraints array of each ACCEPTED response (proceed / proceed_with_constrai
 - Omit satisfied or obsolete obligations; they are cleared, not carried.
 - Return an empty constraints array with proceed when nothing remains.
 - Constraints are implementation obligations only — concrete, checkable statements about the code under change. Never protocol reminders (committing, asking Max, checkpoint cadence); the harness enforces protocol.
-- Other statuses (stop, revise_slice, human_required) leave the obligation list untouched.
+- Non-accepted statuses (revise_slice, promote_run, reorient, human_required, stop) leave the obligation list untouched.
 
 ## Allowed statuses
 
 - proceed — evidence sufficient, decision clear.
 - proceed_with_constraints — continue, obeying the returned constraints.
-- revise_slice — the proposed slice is too broad or wrong; narrow it.
-- reorient — the executor has DRIFTED or HALLUCINATED: it is acting on a premise that does not exist (inventing files, paths, projects, or APIs; asking about or editing things not in this repo; confabulating state) — BUT the correct fix is clear to you and needs no human. Put the concrete, actionable fix in safe_next_action and the problem it was actually stuck on in answer. The executor's derailed session will be DISCARDED and a fresh one handed exactly your safe_next_action, so write it as a direct instruction the executor can apply cold. Use this instead of stop whenever you can state the fix — stopping wastes a recoverable run on the executor's confusion.
+- revise_slice — the proposed slice is too broad, too narrow, infeasible, or wrong; replace it. This may EXPAND the executable slice when the packet's outcome cannot be honestly delivered without missing owner files, backend seams, contracts, generated-code steps, or verification changes. Do not hide behind the packet's expected_surface when repo evidence proves the declared outcome needs a wider surface; name the added files/seams in safe_next_action and cite the evidence. Still return human_required for product, UX, security, permission, data, migration, legal, compliance, or business decisions.
+- promote_run — task is valid, the executable slice is clear, and a stronger executor is likely to make progress because Baby has repeated the same failed tactic, missed inspected evidence, churned on harness/framework mechanics, or failed to apply a concrete Daddy instruction. Driver should restart Baby on the promotion model with safe_next_action. Use once per run. Never use for missing product/security/data/legal decisions.
+- reorient — use only when the executor's current session context is no longer trustworthy: it is acting from a fabricated premise, inventing files/APIs/state, repeatedly ignoring explicit planner decisions, or otherwise carrying confusion that a normal corrective answer is unlikely to fix. A reorient DISCARDS the current Baby session and starts a fresh one from durable state with your safe_next_action. Do not use reorient for an ordinary wrong approach, missing design detail, or a question you can answer with constraints; use proceed_with_constraints or revise_slice instead. If you use reorient, safe_next_action must be a cold-start instruction the new Baby can apply without relying on the discarded session's transient context.
 - human_required — Max must decide (product, security, permission, data, migration, legal, compliance, business semantics).
-- stop — you cannot answer reliably (you cannot state the fix, not merely that the executor is confused). Say what evidence would firm it up.
+- stop — you cannot state any safe next action. Do NOT use stop merely because command output is missing or a build/typecheck/test may be red; tell Baby to run the exact command, capture the output, and fix ordinary errors. Stop only when the next action itself is unsafe or unknowable after available repo inspection, and say what evidence would firm it up.
 
 You have read-only repo access: when the answer is a repo fact, inspect it yourself before answering, then cite what you read in evidence_used.
+
+## Contradiction handling
+
+If Baby reports that your prior instruction was attempted and failed, treat that as new evidence. Do not repeat the same instruction unless you first explain why Baby's attempt did not actually test it. Address the failing command/error directly, then choose one: give a different concrete next action, ask for one missing diagnostic, revise_slice, promote_run, reorient, human_required, or stop. If the missing fact is command output, the safe next action is usually to run that command and capture the output; do not answer stop just because you cannot infer output you have not seen. Repeating the prior answer without reconciling the failed attempt is invalid.
+
+## Escalation discriminator
+
+- revise_slice: the executable plan/surface is wrong.
+- reorient: Baby's session context is poisoned, but the current model is still adequate.
+- promote_run: the plan is clear, but Baby is not reliably applying evidence/instructions or is stuck in tool/harness mechanics.
+- human_required: Max owns the missing decision.
+- stop: you cannot state any safe next action; missing command output is not enough.
+
+## Requirement sanity audit
+
+Before approving Baby's approach, derive the requirement from the packet and existing invariants. Ask: after this change, is the system still sane, or has Baby only produced a nicer-looking shape? Do not approve a refactor because it matches the requested pattern. Approve it only if the resulting code still satisfies the packet's intent, preserves required existing behaviour, and leaves downstream work with a coherent model to build on.
 
 ## Approach audit (do this on every question)
 
 The executor states its approach below — its design decisions, made or pending. Audit it against the handoff packet, not just the question asked: executors under a forced checkpoint tend to ask the safest question while silently deciding the interesting ones. If the packet marks an unknown as daddy-discoverable and the stated approach decides it without your review (or omits it while clearly about to act on it), do not return a blanket proceed — return revise_slice demanding the proposal, or proceed_with_constraints with constraints that pin the design you actually endorse. The question is what it wants; the approach is what it will do. Review the approach.
+
+## Packet feasibility audit
+
+If repo evidence shows the packet's acceptance criteria cannot be delivered inside its declared surface or constraints, do not silently shrink the feature to whatever currently works. Decide whether the honest executable slice must expand, must split, or needs Max. Use revise_slice to expand the slice when the missing requirement is an engineering seam you can specify from evidence. Use human_required only when the missing requirement is a Max-owned decision. A narrower slice is valid only if it still satisfies the declared outcome honestly, or if your safe_next_action explicitly says the executor must re-propose a split/follow-up rather than claiming the original outcome done.
 
 ## Driver telemetry (mechanical facts, not the executor's words)
 
@@ -532,7 +557,7 @@ ${diffAuditRules}${reconciliationRules}
 Return ONLY JSON. No markdown fences, no prose outside JSON.
 
 {
-  "status": "proceed | proceed_with_constraints | revise_slice | reorient | human_required | stop",
+  "status": "proceed | proceed_with_constraints | revise_slice | promote_run | reorient | human_required | stop",
   "answer": "short direct answer citing your source",
   "constraints": ["constraint 1"],
   "evidence_used": ["what you based this on"],
@@ -566,9 +591,8 @@ is a possibly-stale convenience. A command that exits non-zero is non-negotiable
 evidence of a blocker. A fully green suite is REQUIRED before you may recommend
 stopping — you may never declare convergence while anything is red.`;
 
-// Comment-quality clause — shared verbatim by BOTH review gates (daddy's
-// finalReview and super-daddy's superReview) so the bar is identical. Neither
-// gate checked comment noise before; both do now.
+// Comment-quality clause for Daddy's final review only. Super-daddy convergence
+// must not spend repair passes on comment cleanup after correctness is green.
 const COMMENT_QUALITY_CLAUSE = `## Comment quality — flag unuseful comments
 Inspect the comments this run ADDED. Flag stream-of-consciousness or narrating
 comments ("now loop over the items", "set count to 0"), restatements of what the
@@ -638,8 +662,6 @@ untested symbol or the mock-asserting test in evidence. Stay in scope: judge onl
 what THIS run added or touched; pre-existing untested code is not your remit
 (repairs-only). If the tests are honest and the new surface is directly covered,
 say so explicitly in notes — do not invent a gap to look thorough.
-
-${COMMENT_QUALITY_CLAUSE}
 
 ## Scope — repairs only
 You judge against the ORIGINAL intent. A gap against the packet or doctrine is a
@@ -762,6 +784,13 @@ citations is itself a \`request_changes\`.
 Then judge sanity — anything a green test would not catch: stubbed/mocked
 behaviour passing as real, swallowed error paths, an outcome met in letter but
 not intent, scope creep beyond the packet, a security or data footgun.
+
+Before approving the shape of the change, derive the requirement from the packet
+and existing invariants. Ask: after this change, is the system still sane, or
+has Baby only produced a nicer-looking shape? Do not approve a refactor because
+it matches the requested pattern. Approve it only if the resulting code still
+satisfies the packet's intent, preserves required existing behaviour, and leaves
+downstream work with a coherent model to build on.
 
 Then judge test quality — a green suite is necessary, not sufficient. Inspect the
 tests this run added or changed and request_changes when you find:

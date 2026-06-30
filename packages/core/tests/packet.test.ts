@@ -66,7 +66,7 @@ test("parse: missing frontmatter returns error", () => {
   assert.strictEqual(result.ok, false);
   assert(!result.ok);
   assert.strictEqual(result.problems.length, 1);
-  assert(result.problems[0].includes("no YAML frontmatter block"));
+  assert(result.problems[0].includes("no YAML frontmatter opening delimiter"));
 });
 
 test("parse: invalid YAML in frontmatter returns error", () => {

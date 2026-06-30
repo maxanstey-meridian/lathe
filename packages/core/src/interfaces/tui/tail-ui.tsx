@@ -28,6 +28,7 @@ type Subscribe = (
   directory: string,
   onEvent: (event: OpencodeEvent) => void,
 ) => { close: () => void };
+type ReadContextTokens = (sessionId: string) => Promise<number | undefined>;
 
 // daddyDirectory: the planner session's directory (paths.root). Daddy's opencode
 // session is rooted there, NOT in the worktree, so its events arrive on a separate
@@ -36,6 +37,7 @@ export type TailUiDeps = {
   store: Store;
   budget: number;
   subscribe: Subscribe;
+  readContextTokens?: ReadContextTokens;
   runId: string;
   daddyDirectory: string;
   // Model IDs shown in each pane header so the viewer can tell at a glance
@@ -158,7 +160,15 @@ const Pane = ({
   );
 };
 
-const TailApp = ({ store, budget, subscribe, runId, daddyDirectory, models }: TailUiDeps) => {
+const TailApp = ({
+  store,
+  budget,
+  subscribe,
+  readContextTokens,
+  runId,
+  daddyDirectory,
+  models,
+}: TailUiDeps) => {
   const { exit } = useApp();
   const [baby, setBaby] = useState<PaneState>(emptyPane());
   const [daddy, setDaddy] = useState<PaneState>(emptyPane());
@@ -178,6 +188,7 @@ const TailApp = ({ store, budget, subscribe, runId, daddyDirectory, models }: Ta
   const journalIndex = useRef(0);
   const partTypes = useRef(new Map<string, string>());
   const toolSeen = useRef(new Set<string>());
+  const tokenSession = useRef<string | undefined>(undefined);
   const meta = store.readMetaIfExists(runId);
   const startedAt = meta?.startedAt ? Date.parse(meta.startedAt) : Date.now();
   const label = runLabel(runId, meta?.summary);
@@ -192,6 +203,49 @@ const TailApp = ({ store, budget, subscribe, runId, daddyDirectory, models }: Ta
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  // OpenCode has step-level context totals; the Lathe journal only gets a token
+  // fact after the whole driver turn ends. Poll the Baby session so the bar climbs
+  // linearly through multi-step turns, while journal polling remains the fallback.
+  useEffect(() => {
+    if (!readContextTokens) {
+      return;
+    }
+    let cancelled = false;
+    let busy = false;
+    const poll = async (): Promise<void> => {
+      if (busy) {
+        return;
+      }
+      const sessionId = store.readMetaIfExists(runId)?.babySessionId;
+      if (!sessionId) {
+        return;
+      }
+      if (tokenSession.current !== sessionId) {
+        tokenSession.current = sessionId;
+        charsThisTurn.current = 0;
+        setStats((s) => ({ ...s, ctx: 0 }));
+      }
+      busy = true;
+      try {
+        const tokens = await readContextTokens(sessionId);
+        if (!cancelled && typeof tokens === "number") {
+          charsThisTurn.current = 0;
+          setStats((s) => ({ ...s, ctx: tokens }));
+        }
+      } catch {
+        /* tail degrades to journal-only token updates */
+      } finally {
+        busy = false;
+      }
+    };
+    void poll();
+    const timer = setInterval(() => void poll(), 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, []);
 
   // Journal: driver events to the strip, turn/rotation/outcome facts to stats.

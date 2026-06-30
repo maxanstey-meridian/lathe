@@ -8,11 +8,21 @@ import type {
   Packet,
   OutcomeLedger,
   SubmitReport,
+  ReviewState,
+  DriverFacts,
 } from "../../domain/index.js";
+
+export type PlannerConsultContext = {
+  reviewState: ReviewState;
+  facts: DriverFacts;
+};
 
 export type Planner = {
   handshake(seedPrompt: string, directory: string): Promise<string>;
   resumeSession(sessionId: string): Promise<string>;
-  consult(input: AskPlannerInput): Promise<PlannerResponse>;
+  syncMaxDecisions?(
+    decisions: { timestamp: string; question: string; answer: string }[],
+  ): Promise<void>;
+  consult(input: AskPlannerInput, context?: PlannerConsultContext): Promise<PlannerResponse>;
   finalReview(packet: Packet, ledger: OutcomeLedger, report: SubmitReport): Promise<FinalReview>;
 };

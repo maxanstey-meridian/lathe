@@ -15,7 +15,7 @@ import {
   assembleCommitMessage,
   renderNits,
 } from "../src/domain/convergence.js";
-import { parsePacketShape } from "../src/domain/packet.js";
+import { describeFrontmatterProblem, parsePacketShape } from "../src/domain/packet.js";
 import {
   parseFinalReview,
   parsePlannerResponse,
@@ -416,6 +416,31 @@ test("stampFollowupLineage: a repaired outcome is never also a regression guard"
 
 test("stampFollowupLineage: a reply with no frontmatter throws (authoring failure)", () => {
   assert.throws(() => stampFollowupLineage("I could not write a packet.", LINEAGE));
+});
+
+test("stampFollowupLineage: missing closing frontmatter delimiter gives actionable error", () => {
+  const missingClose = `---
+summary: repair build wizard navigation proof
+outcomes:
+  - id: fix-navigation-proof
+    description: Prove navigation through route state
+expected_surface:
+  - apps/ui/tests/nuxt/build.test.ts
+verification:
+  - command: pnpm test
+# Task
+
+Repair it.
+`;
+
+  assert.equal(
+    describeFrontmatterProblem(missingClose),
+    "YAML frontmatter opened with --- but is missing the closing standalone --- before # Task",
+  );
+  assert.throws(
+    () => stampFollowupLineage(missingClose, LINEAGE),
+    /missing the closing standalone --- before # Task/,
+  );
 });
 
 // The cli-cutover scar: super-daddy markdown-escaped a backtick inside a double-quoted

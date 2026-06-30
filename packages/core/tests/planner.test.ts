@@ -61,6 +61,114 @@ const minReport = (): SubmitReport => ({
 
 const modelConfig: ModelConfig = { providerId: "openai", modelId: "gpt-4", agent: "daddy" };
 
+describe("createPlanner.consult", () => {
+  it("renders live review obligations and driver telemetry", async () => {
+    const validJson = JSON.stringify({
+      status: "proceed",
+      answer: "ok",
+      constraints: [],
+      evidence_used: ["prompt context"],
+      safe_next_action: "continue",
+      human_decision_needed: null,
+    });
+    const sent: string[] = [];
+    const mockExecutor = {
+      createSession: async () => "test-session",
+      sendMessage: async (_sessionId: string, prompt: string) => {
+        sent.push(prompt);
+        if (sent.length === 1) {
+          return mockResponse("PLANNER_OK");
+        }
+        return mockResponse(validJson);
+      },
+      listMessages: async () => [],
+      deleteSession: async () => {},
+    } as unknown as Executor;
+
+    const planner = createPlanner(mockExecutor, modelConfig, 30000);
+    await planner.handshake("seed", "test-dir");
+    await planner.consult(minConsult(), {
+      reviewState: {
+        runId: "20260618-070000-test",
+        obligations: ["keep the seam narrow"],
+        updatedAt: "2026-06-18T00:00:00.000Z",
+      },
+      facts: {
+        attempt: 3,
+        rotations: 2,
+        ledgerSummary: "test-outcome: in_progress; evidence=started",
+      },
+    });
+
+    const consultPrompt = sent[1] ?? "";
+    assert.match(consultPrompt, /keep the seam narrow/);
+    assert.match(consultPrompt, /Run attempt: 3/);
+    assert.match(consultPrompt, /Session rotations: 2/);
+    assert.match(consultPrompt, /test-outcome: in_progress; evidence=started/);
+  });
+});
+
+describe("createPlanner.syncMaxDecisions", () => {
+  it("injects Max answers into the Daddy session before later planner work", async () => {
+    const sent: string[] = [];
+    const mockExecutor = {
+      createSession: async () => "test-session",
+      sendMessage: async (_sessionId: string, prompt: string) => {
+        sent.push(prompt);
+        if (sent.length === 1) {
+          return mockResponse("PLANNER_OK");
+        }
+        return mockResponse("DADDY_SYNC_OK");
+      },
+      listMessages: async () => [],
+      deleteSession: async () => {},
+    } as unknown as Executor;
+
+    const planner = createPlanner(mockExecutor, modelConfig, 30000);
+    await planner.handshake("seed", "test-dir");
+    await planner.syncMaxDecisions?.([
+      {
+        timestamp: "2026-06-29T19:30:53.925Z",
+        question: "May I add a test dependency?",
+        answer: "Yes, use userEvent; do not add seams.",
+      },
+    ]);
+
+    assert.equal(sent.length, 2);
+    assert.match(sent[1] ?? "", /DADDY STATE SYNC/);
+    assert.match(sent[1] ?? "", /May I add a test dependency\?/);
+    assert.match(sent[1] ?? "", /Yes, use userEvent; do not add seams\./);
+  });
+
+  it("fails closed when Daddy does not acknowledge the sync", async () => {
+    const mockExecutor = {
+      createSession: async () => "test-session",
+      sendMessage: (() => {
+        let count = 0;
+        return async () => {
+          count++;
+          return count === 1 ? mockResponse("PLANNER_OK") : mockResponse("I ignored that");
+        };
+      })(),
+      listMessages: async () => [],
+      deleteSession: async () => {},
+    } as unknown as Executor;
+
+    const planner = createPlanner(mockExecutor, modelConfig, 30000);
+    await planner.handshake("seed", "test-dir");
+    await assert.rejects(
+      planner.syncMaxDecisions?.([
+        {
+          timestamp: "2026-06-29T19:30:53.925Z",
+          question: "May I add a test dependency?",
+          answer: "Yes.",
+        },
+      ]),
+      /Daddy sync failed/,
+    );
+  });
+});
+
 describe("createPlanner.finalReview", () => {
   it("returns immediately when first response parses as FinalReview", async () => {
     let sendCount = 0;
@@ -217,14 +325,6 @@ describe("createPlanner all-message harvest (fix2)", () => {
     assert.equal(result.status, "proceed", "the buried verdict was harvested, not dropped");
   });
 
-  it("finalReview recovers a verdict that lives only in a non-final message", async () => {
-    const verdict = JSON.stringify({ verdict: "accept", findings: [], notes: "green" });
-    const planner = createPlanner(verdictInEarlierMessage(verdict), modelConfig, 30000);
-    await planner.handshake("seed", "test-dir");
-    const result = await planner.finalReview(minPacket(), minLedger(), minReport());
-    assert.equal(result.verdict, "accept");
-  });
-
   it("consult still fails closed to stop when the reply is genuinely empty", async () => {
     const executor = {
       createSession: async () => "test-session",
@@ -242,5 +342,47 @@ describe("createPlanner all-message harvest (fix2)", () => {
     await planner.handshake("seed", "test-dir");
     const result = await planner.consult(minConsult());
     assert.equal(result.status, "stop");
+  });
+});
+
+describe("createPlanner.finalReview latest-reply harvest", () => {
+  it("does not re-parse a stale final-review JSON object from an earlier Daddy message", async () => {
+    let sendCount = 0;
+    const staleReview = JSON.stringify({
+      verdict: "request_changes",
+      findings: ["stale finding from an earlier final review"],
+      notes: "old review",
+    });
+    const executor = {
+      createSession: async () => "test-session",
+      sendMessage: async () => {
+        sendCount++;
+        if (sendCount === 1) {
+          return mockResponse("PLANNER_OK");
+        }
+        return mockResponse("I inspected the current files but forgot to emit JSON.");
+      },
+      listMessages: async () => [
+        {
+          info: { id: "old", sessionID: "s", role: "assistant" },
+          parts: [{ type: "text", text: staleReview }],
+        },
+        {
+          info: { id: "latest", sessionID: "s", role: "assistant" },
+          parts: [{ type: "text", text: "I inspected the current files but forgot to emit JSON." }],
+        },
+      ],
+      deleteSession: async () => {},
+    } as unknown as Executor;
+
+    const planner = createPlanner(executor, modelConfig, 30000);
+    await planner.handshake("seed", "test-dir");
+    const result = await planner.finalReview(minPacket(), minLedger(), minReport());
+
+    assert.equal(sendCount, 3, "latest unparseable reply should trigger the one allowed re-ask");
+    assert.equal(result.verdict, "request_changes");
+    assert.deepEqual(result.findings, [
+      "Daddy's final-review response was not valid JSON; failing closed to request_changes.",
+    ]);
   });
 });

@@ -490,7 +490,11 @@ export class SqliteStoreAdapter implements Store {
         const runId = f.replace(/\.md$/, "");
         const fullPath = join(this.paths.queueDir, f);
         const mtime = statSync(fullPath).mtime.toISOString();
-        return { runId, admittedAt: mtime, priority: freshQueuePriority(readFileSync(fullPath, "utf-8")) };
+        return {
+          runId,
+          admittedAt: mtime,
+          priority: freshQueuePriority(readFileSync(fullPath, "utf-8")),
+        };
       })
       .filter((e) => !existsSync(this.paths.runDir(e.runId)))
       .sort((a, b) => a.priority - b.priority || a.runId.localeCompare(b.runId))

@@ -6,12 +6,12 @@
 // state. A parse failure stays a reviewed escalate (parseSuperReview fails closed).
 
 import type { Executor, ModelConfig } from "../../application/ports/executor.js";
-import type { TurnResponse } from "../../domain/agent-response.js";
 import type {
   AuthorFollowupOutcome,
   Reviewer,
   SuperReviewOutcome,
 } from "../../application/ports/reviewer.js";
+import type { TurnResponse } from "../../domain/agent-response.js";
 import { parseSuperReview } from "../../domain/convergence.js";
 import type { AuthorFollowupInput, SuperReviewInput } from "../../domain/prompts.js";
 import { renderFollowupAuthoring, renderSuperReview } from "../../domain/prompts.js";

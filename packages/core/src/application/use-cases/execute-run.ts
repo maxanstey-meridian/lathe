@@ -14,6 +14,7 @@
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { TurnResponse } from "../../domain/agent-response.js";
 import { priorReconciliationAccepted, rotationGateState } from "../../domain/gate-decisions.js";
 import { initialGateState } from "../../domain/gate.js";
 import { parsePacketShape } from "../../domain/packet.js";
@@ -48,6 +49,41 @@ export type BridgeBinding<Ref> = {
 };
 
 type RunMetaPaths = { repo: string; worktree: string; base: string; branch: string };
+
+const daddySessionIsStale = async (
+  executor: RunPorts["executor"],
+  sessionId: string,
+): Promise<boolean> => {
+  let messages: TurnResponse[];
+  try {
+    messages = await executor.listMessages(sessionId);
+  } catch {
+    return true;
+  }
+
+  return messages.some((m) => m.info.role === "assistant" && !m.info.error && m.parts.length === 0);
+};
+
+const replaceStaleDaddySession = async (
+  ports: RunPorts,
+  packet: Packet,
+  worktree: string,
+  staleSessionId: string,
+): Promise<string> => {
+  const { executor, planner } = ports;
+  try {
+    await executor.abortSession(staleSessionId);
+  } catch {
+    /* best effort: a stuck or already-dead session should not block recovery */
+  }
+  try {
+    await executor.deleteSession(staleSessionId);
+  } catch {
+    /* best effort: stale session cleanup is not required for correctness */
+  }
+
+  return planner.handshake(renderDaddySeed(packet.raw), worktree);
+};
 
 export const makeExecuteRun =
   <Ref>(ports: RunPorts, bridge: BridgeBinding<Ref>): ExecuteRunCallback<Ref> =>
@@ -124,10 +160,29 @@ export const makeExecuteRun =
 
     // Daddy: ONE session for the run's whole life (M6). The adapter creates a
     // fresh one or resumes the prior session that already holds the packet.
-    const daddySessionId =
-      isResume && priorMeta?.daddySessionId
-        ? await planner.resumeSession(priorMeta.daddySessionId)
-        : await planner.handshake(renderDaddySeed(packet.raw), worktree);
+    let daddySessionId: string;
+    if (isResume && priorMeta?.daddySessionId) {
+      if (await daddySessionIsStale(executor, priorMeta.daddySessionId)) {
+        journal(ports, runId, 0, {
+          event: "driver_note",
+          note: `replacing stale Daddy session ${priorMeta.daddySessionId}`,
+        });
+        daddySessionId = await replaceStaleDaddySession(
+          ports,
+          packet,
+          worktree,
+          priorMeta.daddySessionId,
+        );
+        journal(ports, runId, 0, {
+          event: "driver_note",
+          note: `replacement Daddy session ${daddySessionId}`,
+        });
+      } else {
+        daddySessionId = await planner.resumeSession(priorMeta.daddySessionId);
+      }
+    } else {
+      daddySessionId = await planner.handshake(renderDaddySeed(packet.raw), worktree);
+    }
     const babySessionId = await executor.createSession(`baby:${runId}`, worktree);
 
     store.writeMeta({

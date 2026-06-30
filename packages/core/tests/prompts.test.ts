@@ -110,6 +110,8 @@ describe("prompts — Q-table renderers", () => {
       const prompt = q1InitialSeed(minPacket(), minLedger());
       match(prompt, /meridian-bridge_ask_planner/);
       match(prompt, /## Outcome ledger/);
+      match(prompt, /Daddy is available repeatedly/);
+      match(prompt, /exact prior instruction/);
     });
 
     it("includes sealed-files section when packet has regression_outcomes", () => {
@@ -275,7 +277,23 @@ describe("prompts — Q-table renderers", () => {
       };
       const prompt = qPlannerDecision(p as PlannerResponse);
       match(prompt, /revise_slice/);
-      match(prompt, /narrow or rework your slice/);
+      match(prompt, /narrows or expands/);
+      match(prompt, /owner files/);
+    });
+
+    it("includes promote_run directive when applicable", () => {
+      const p = {
+        status: "promote_run" as const,
+        answer: "same failed tactic twice",
+        constraints: [],
+        evidence_used: ["failing command repeated"],
+        safe_next_action: "inspect the generated Nuxt aliases, then fix the test harness",
+        human_decision_needed: null,
+      };
+      const prompt = qPlannerDecision(p as PlannerResponse);
+      match(prompt, /promote_run/);
+      match(prompt, /restarting you on the promotion model/);
+      match(prompt, /stuck in tool\/harness mechanics/);
     });
   });
 
@@ -305,8 +323,65 @@ describe("prompts — Q-table renderers", () => {
         minReview(),
       );
       match(prompt, /## Review obligation lifecycle/);
+      match(prompt, /## Contradiction handling/);
+      match(prompt, /Repeating the prior answer without reconciling/);
+      match(prompt, /## Escalation discriminator/);
+      match(prompt, /promote_run: the plan is clear/);
       match(prompt, /## Approach audit/);
+      match(prompt, /## Requirement sanity audit/);
+      match(prompt, /has Baby only produced a nicer-looking shape/);
+      match(prompt, /## Packet feasibility audit/);
+      match(prompt, /must expand, must split, or needs Max/);
       match(prompt, /Current slice:/);
+    });
+
+    it("allows revise_slice to expand the executable slice when repo seams require it", () => {
+      const prompt = renderPlannerQuestion(
+        "handoff_interpretation",
+        "UI retry panel",
+        "Do I keep only the currently wired knob?",
+        "I will omit backend render changes and mark retry UI done.",
+        ["renderSegment only accepts takes", "packet requires five retry knobs"],
+        minReview(),
+      );
+
+      match(prompt, /too broad, too narrow, infeasible, or wrong/);
+      match(prompt, /may EXPAND the executable slice/);
+      match(prompt, /Do not hide behind the packet's expected_surface/);
+      match(prompt, /cannot be delivered inside its declared surface or constraints/);
+    });
+
+    it("describes promote_run as evidence-backed executor promotion, not missing requirements", () => {
+      const prompt = renderPlannerQuestion(
+        "other",
+        "Nuxt harness repair",
+        "Should I keep trying the same mock?",
+        "I retried the same vi.mock path after Daddy told me to inspect .nuxt aliases.",
+        ["same failing command twice", "Daddy instruction not applied"],
+        minReview(),
+      );
+
+      match(prompt, /promote_run — task is valid/);
+      match(prompt, /repeated the same failed tactic/);
+      match(prompt, /failed to apply a concrete Daddy instruction/);
+      match(prompt, /Use once per run/);
+      match(prompt, /Never use for missing product\/security\/data\/legal decisions/);
+    });
+
+    it("does not let Daddy stop just because verification output is missing", () => {
+      const prompt = renderPlannerQuestion(
+        "other",
+        "typecheck-and-fix",
+        "What are the exact remaining pnpm typecheck errors?",
+        "The previous turn tried to run typecheck but did not capture the output.",
+        ["pnpm typecheck output was not captured"],
+        minReview(),
+      );
+
+      match(prompt, /Do NOT use stop merely because command output is missing/);
+      match(prompt, /run the exact command, capture the output/);
+      match(prompt, /missing command output is not enough/);
+      match(prompt, /do not answer stop just because you cannot infer output/);
     });
 
     it("makes reconciliation Daddy-owned from driver evidence", () => {
@@ -374,6 +449,8 @@ describe("prompts — Q-table renderers", () => {
       // The reviewer inspects the worktree directly — no diff slice is injected.
       doesNotMatch(prompt, /## Reviewable diff/);
       match(prompt, /full read-only access to this worktree/);
+      match(prompt, /has Baby only produced a nicer-looking shape/);
+      match(prompt, /leaves\s+downstream work with a coherent model to build on/);
     });
 
     it("lists files changed when present", () => {

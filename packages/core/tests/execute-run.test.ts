@@ -115,6 +115,7 @@ const scriptedExecutor = (
       return { info: { id: `m${i}`, sessionID: "s", tokens: {} }, parts: [] };
     },
     listMessages: async () => [],
+    abortSession: async () => {},
     deleteSession: async () => {},
   };
 };
@@ -529,6 +530,137 @@ test("makeExecuteRun: resume → reuses prior Daddy session ID, refreshes gate",
     ]);
     // Prior stallRetries preserved (resume doesn't reset counters).
     equal(meta.stallRetries, 0);
+    await cleanTemp(tmp);
+  })();
+});
+
+test("makeExecuteRun: resume replaces stale Daddy session before reconciliation", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "exec-stale-daddy-"));
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+
+    store.freezePacket(RUN_ID, PACKET_RAW);
+    store.writeMeta({
+      runId: RUN_ID,
+      status: "queued",
+      attempt: 1,
+      repo: "/tmp/test-repo",
+      base: "main",
+      branch: `meridian/${RUN_ID}`,
+      worktree: join(tmp, "runs", RUN_ID, "worktree"),
+      babySessionId: "baby-old",
+      daddySessionId: "daddy-stale",
+      stallRetries: 0,
+      reorientRetries: 0,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    store.writeGateState(
+      RUN_ID,
+      initialGateState(
+        RUN_ID,
+        ["src/index.ts"],
+        [],
+        {
+          checkpointNudgeMs: 1_000_000,
+          checkpointToolCalls: 50,
+          checkpointFiles: 6,
+          checkpointLoc: 80,
+          mutationCommandPatterns: [],
+        },
+        "2026-01-01T00:00:00.000Z",
+      ),
+    );
+    const shape = parsePacketShape(PACKET_RAW, RUN_ID);
+    ok(shape.ok);
+    store.writeLedger(store.initialLedger(shape.packet));
+    store.replaceObligations(RUN_ID, []);
+
+    let resumeCalled = false;
+    let handshakeCalled = false;
+    const planner: Planner = {
+      handshake: async () => {
+        handshakeCalled = true;
+        return "daddy-new";
+      },
+      resumeSession: async () => {
+        resumeCalled = true;
+        return "daddy-stale";
+      },
+      consult: async () => ({
+        status: "proceed",
+        answer: "go",
+        constraints: [],
+        evidence_used: [],
+        safe_next_action: "submit",
+        human_decision_needed: null,
+      }),
+      finalReview: async () => ({
+        verdict: "accept",
+        findings: [],
+        notes: "ok",
+        human_decision_needed: null,
+      }),
+    };
+
+    const channel = emptyChannel();
+    let abortCalled = false;
+    let deleteCalled = false;
+    const executor: Executor = {
+      createSession: async () => "baby-new",
+      sendMessage: async () => {
+        channel.intents.push({
+          kind: "report-accepted",
+          status: "blocked",
+          blockedReason: "stop_condition",
+          blockedQuestion: "done",
+          summary: "resumed",
+        });
+        return { info: { id: "m1", sessionID: "baby-new", tokens: {} }, parts: [] };
+      },
+      listMessages: async (sessionId: string) => {
+        equal(sessionId, "daddy-stale");
+        return [
+          { info: { id: "daddy-msg", sessionID: sessionId, role: "assistant" }, parts: [] },
+          { info: { id: "restarted-prompt", sessionID: sessionId, role: "user" }, parts: [] },
+        ];
+      },
+      abortSession: async (sessionId: string) => {
+        equal(sessionId, "daddy-stale");
+        abortCalled = true;
+      },
+      deleteSession: async (sessionId: string) => {
+        equal(sessionId, "daddy-stale");
+        deleteCalled = true;
+      },
+    };
+    const ports = makePorts(store, fakeRepo(), executor, planner);
+    const bridge: BridgeBinding<unknown> = { beginRun: () => channel, endRun: () => {} };
+
+    const executeRun = makeExecuteRun(ports, bridge);
+    await executeRun(
+      RUN_ID,
+      {
+        repo: "/tmp/test-repo",
+        worktree: join(tmp, "runs", RUN_ID, "worktree"),
+        base: "main",
+        branch: `meridian/${RUN_ID}`,
+      },
+      {},
+      ports.clock,
+    );
+
+    const meta = store.readMeta(RUN_ID);
+    equal(meta.daddySessionId, "daddy-new");
+    equal(resumeCalled, false, "stale Daddy session is not resumed");
+    equal(handshakeCalled, true, "fresh Daddy handshake replaces stale session");
+    equal(abortCalled, true, "stale Daddy session is aborted");
+    equal(deleteCalled, true, "stale Daddy session is deleted");
+    const journal = store.readJournal(RUN_ID);
+    ok(
+      journal.some(
+        (e) => e.event === "driver_note" && e.note === "replacing stale Daddy session daddy-stale",
+      ),
+    );
     await cleanTemp(tmp);
   })();
 });

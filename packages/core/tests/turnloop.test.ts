@@ -1,4 +1,5 @@
 import { equal, ok, deepEqual } from "node:assert";
+import { readFileSync } from "node:fs";
 import { mkdtemp as mkdtempP, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -100,9 +101,12 @@ const ACCEPT_REVIEW: FinalReview = {
   human_decision_needed: null,
 };
 
-const fakePlanner = (over: Partial<Pick<Planner, "consult" | "finalReview">> = {}): Planner => ({
+const fakePlanner = (
+  over: Partial<Pick<Planner, "consult" | "finalReview" | "syncMaxDecisions">> = {},
+): Planner => ({
   handshake: async () => "daddy-session",
   resumeSession: async (sid: string) => sid,
+  ...(over.syncMaxDecisions ? { syncMaxDecisions: over.syncMaxDecisions } : {}),
   consult: over.consult ?? (async () => PROCEED),
   finalReview: over.finalReview ?? (async () => ACCEPT_REVIEW),
 });
@@ -175,6 +179,7 @@ const scriptedExecutor = (
       return response;
     },
     listMessages: async () => [],
+    abortSession: async () => {},
     deleteSession: async () => {},
   };
 };
@@ -186,6 +191,7 @@ const emptyChannel = (): RunChannel => ({
   reportRejectionCount: 0,
   checkpointBounceCount: 0,
   turnComplete: false,
+  awaitingVerification: false,
   turn: 0,
 });
 
@@ -233,6 +239,18 @@ const seedRun = (
     ),
   );
   void gateDiff;
+};
+
+const markLedgerDone = (store: Store): void => {
+  const ledger = store.readLedger(RUN_ID);
+  store.writeLedger({
+    ...ledger,
+    outcomes: ledger.outcomes.map((outcome) => ({
+      ...outcome,
+      status: "done" as const,
+      evidence: outcome.evidence.length > 0 ? outcome.evidence : ["verified in test"],
+    })),
+  });
 };
 
 const makePorts = (
@@ -295,6 +313,210 @@ test("turnLoop: report → final review accept → ready_for_review with render 
     ok(decisions.some((d) => d.questionType === "final_review" && d.status === "accept"));
     const journal = store.readJournal(RUN_ID);
     ok(journal.some((e) => e.event === "report_accepted"));
+    await cleanTemp(tmp);
+  })();
+});
+
+test("turnLoop: ask_planner aborts the active opencode message and resumes same session", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-ask-abort-"));
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+
+    const channel = emptyChannel();
+    const sessions: string[] = [];
+    const aborts: string[] = [];
+    let sends = 0;
+    const executor: Executor = {
+      createSession: async () => "unused-rotation-session",
+      sendMessage: async (sessionId) => {
+        sessions.push(sessionId);
+        sends += 1;
+        if (sends === 1) {
+          channel.pendingConsult = {
+            questionType: "repo_procedure",
+            currentSlice: "abort test",
+            question: "Should I proceed?",
+            approach: "Ask Daddy, then stop.",
+            evidence: ["turnloop.test.ts"],
+          };
+          channel.intents.push({ kind: "consult-requested" });
+          channel.turnComplete = true;
+          await channel.stopTurn?.();
+          return {
+            info: {
+              id: "aborted-1",
+              sessionID: sessionId,
+              error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+            },
+            parts: [],
+          };
+        }
+        channel.intents.push({
+          kind: "report-accepted",
+          status: "failed",
+          summary: "stop after planner answer",
+        });
+        return { info: { id: "m2", sessionID: sessionId, tokens: { input: 1 } }, parts: [] };
+      },
+      listMessages: async () => [],
+      abortSession: async (sessionId) => {
+        aborts.push(sessionId);
+      },
+      deleteSession: async () => {},
+    };
+    const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
+
+    const result = await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    equal(result.outcome.status, "failed");
+    deepEqual(aborts, ["baby-0"]);
+    deepEqual(sessions, ["baby-0", "baby-0"]);
+    const journal = store.readJournal(RUN_ID);
+    ok(journal.some((e) => e.event === "planner_exchange"));
+    ok(
+      journal.some((e) => e.event === "driver_note" && e.note.includes("opencode abort completed")),
+    );
+    ok(!journal.some((e) => e.event === "rotation"));
+    await cleanTemp(tmp);
+  })();
+});
+
+test("turnLoop: syncs Max answers to Daddy once before later planner work", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-max-sync-"));
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+    const meta = store.readMeta(RUN_ID);
+    store.writeMeta({ ...meta, worktree: join(tmp, "worktree") });
+    store.appendDecision(RUN_ID, {
+      timestamp: "2026-01-01T00:00:10.000Z",
+      source: "max",
+      questionType: "stop_condition",
+      question: "May I add the interaction dependency?",
+      evidence: [],
+      status: "proceed",
+      answer: "Yes, use userEvent; do not add seams.",
+      constraints: [],
+    });
+    markLedgerDone(store);
+
+    const channel = emptyChannel();
+    const report = aSubmitReport();
+    const executor = scriptedExecutor(channel, [
+      {
+        intents: [{ kind: "consult-requested" }],
+        toolParts: [toolPart("meridian-bridge_ask_planner")],
+        pendingConsult: {
+          questionType: "other",
+          currentSlice: "test slice",
+          question: "What next?",
+          approach: "Use the approved dependency.",
+          evidence: [],
+        },
+      },
+      {
+        intents: [{ kind: "final-review-requested" }],
+        toolParts: [toolPart("meridian-bridge_submit_report")],
+        pendingFinalReview: report,
+      },
+    ]);
+    const synced: { timestamp: string; question: string; answer: string }[][] = [];
+    const planner = fakePlanner({
+      syncMaxDecisions: async (decisions) => {
+        synced.push(decisions);
+      },
+      consult: async () => PROCEED,
+      finalReview: async () => ACCEPT_REVIEW,
+    });
+
+    const result = await turnLoop(
+      makePorts(store, fakeRepo(), executor, planner),
+      packet,
+      join(tmp, "worktree"),
+      "baby-0",
+      channel,
+      { name: "Q1", text: "start" },
+      FAR_FUTURE,
+    );
+
+    equal(result.outcome.status, "ready_for_review");
+    equal(synced.length, 1);
+    equal(synced[0]?.[0]?.answer, "Yes, use userEvent; do not add seams.");
+    const syncState = JSON.parse(readFileSync(join(tmp, "daddy-sync.json"), "utf-8")) as {
+      lastSyncedMaxDecisionAt: string;
+    };
+    equal(syncState.lastSyncedMaxDecisionAt, "2026-01-01T00:00:10.000Z");
+    await cleanTemp(tmp);
+  })();
+});
+
+test("turnLoop: submit_report aborts the active opencode message before final review", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-report-abort-"));
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+
+    const channel = emptyChannel();
+    const report = aSubmitReport();
+    const aborts: string[] = [];
+    const sessions: string[] = [];
+    const executor: Executor = {
+      createSession: async () => "unused-rotation-session",
+      sendMessage: async (sessionId) => {
+        sessions.push(sessionId);
+        channel.pendingFinalReview = report;
+        channel.intents.push({ kind: "final-review-requested" });
+        channel.turnComplete = true;
+        await channel.stopTurn?.();
+        return {
+          info: {
+            id: "aborted-report",
+            sessionID: sessionId,
+            error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+          },
+          parts: [],
+        };
+      },
+      listMessages: async () => [],
+      abortSession: async (sessionId) => {
+        aborts.push(sessionId);
+      },
+      deleteSession: async () => {},
+    };
+    const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
+
+    const result = await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    equal(result.outcome.status, "ready_for_review");
+    deepEqual(aborts, ["baby-0"]);
+    deepEqual(sessions, ["baby-0"]);
+    equal(result.finalReview?.verdict, "accept");
+    const journal = store.readJournal(RUN_ID);
+    ok(journal.some((e) => e.event === "final_review"));
+    ok(
+      journal.some((e) => e.event === "driver_note" && e.note.includes("opencode abort completed")),
+    );
+    ok(!journal.some((e) => e.event === "rotation"));
     await cleanTemp(tmp);
   })();
 });
@@ -725,6 +947,7 @@ test("turnLoop: consult round-trip — accepted decision clears the gate", () =>
         reason: "first edit of the run requires an accepted planner decision",
       },
     });
+    store.replaceObligations(RUN_ID, ["existing obligation"]);
 
     const channel = emptyChannel();
     const submission: AskPlannerInput = {
@@ -749,11 +972,17 @@ test("turnLoop: consult round-trip — accepted decision clears the gate", () =>
         ],
       },
     ]);
+    let capturedContext: Parameters<Planner["consult"]>[1];
     const ports = makePorts(
       store,
       fakeRepo({ "src/index.ts": { added: 3, removed: 0 } }),
       executor,
-      fakePlanner(),
+      fakePlanner({
+        consult: async (_input, context) => {
+          capturedContext = context;
+          return PROCEED;
+        },
+      }),
     );
 
     const result = await turnLoop(
@@ -774,6 +1003,10 @@ test("turnLoop: consult round-trip — accepted decision clears the gate", () =>
     const decisions = store.readDecisions(RUN_ID);
     ok(decisions.some((d) => d.status === "proceed"));
     deepEqual(store.readReviewState(RUN_ID).obligations, ["keep the seam narrow"]);
+    deepEqual(capturedContext?.reviewState.obligations, ["existing obligation"]);
+    equal(capturedContext?.facts.attempt, 1);
+    equal(capturedContext?.facts.rotations, 0);
+    ok(/test-outcome: not_started/.test(capturedContext?.facts.ledgerSummary ?? ""));
     await cleanTemp(tmp);
   })();
 });
@@ -1249,6 +1482,107 @@ test("turnLoop: report rejected at the cap → terminal failed", () => {
   })();
 });
 
+test("turnLoop: final-review nit cap at completed final step → ready_for_review for convergence", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-final-nit-cap-"));
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+    markLedgerDone(store);
+
+    const channel = emptyChannel();
+    const report = aSubmitReport();
+    const executor = scriptedExecutor(channel, [
+      { intents: [{ kind: "final-review-requested" }], pendingFinalReview: report },
+      { intents: [{ kind: "final-review-requested" }], pendingFinalReview: report },
+      { intents: [{ kind: "final-review-requested" }], pendingFinalReview: report },
+    ]);
+    const planner = fakePlanner({
+      finalReview: async () => ({
+        verdict: "request_changes",
+        findings: ["nit: rename the local mock variable"],
+        notes: "nit only",
+        human_decision_needed: null,
+      }),
+    });
+    const ports = makePorts(
+      store,
+      fakeRepo(),
+      executor,
+      planner,
+      Config.parse({ thresholds: { promoteAtCap: false } }),
+    );
+
+    const result = await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    equal(result.outcome.status, "ready_for_review");
+    equal(result.finalReview?.verdict, "request_changes");
+    ok(result.acceptedReport);
+    const journal = store.readJournal(RUN_ID);
+    ok(
+      journal.some(
+        (entry) =>
+          entry.event === "driver_note" &&
+          entry.note.includes("sending to convergence instead of failing baby"),
+      ),
+    );
+    await cleanTemp(tmp);
+  })();
+});
+
+test("turnLoop: final-review cap with incomplete ledger still fails", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-final-incomplete-cap-"));
+    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+
+    const channel = emptyChannel();
+    const report = aSubmitReport();
+    const executor = scriptedExecutor(channel, [
+      { intents: [{ kind: "final-review-requested" }], pendingFinalReview: report },
+      { intents: [{ kind: "final-review-requested" }], pendingFinalReview: report },
+      { intents: [{ kind: "final-review-requested" }], pendingFinalReview: report },
+    ]);
+    const planner = fakePlanner({
+      finalReview: async () => ({
+        verdict: "request_changes",
+        findings: ["outcome is not actually complete"],
+        notes: "real blocker",
+        human_decision_needed: null,
+      }),
+    });
+    const ports = makePorts(
+      store,
+      fakeRepo(),
+      executor,
+      planner,
+      Config.parse({ thresholds: { promoteAtCap: false } }),
+    );
+
+    const result = await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    equal(result.outcome.status, "failed");
+    await cleanTemp(tmp);
+  })();
+});
+
 // ---------------------------------------------------------------------------
 // watchdog
 
@@ -1430,6 +1764,85 @@ test("turnLoop: consult reorient → session replaced, Q9 reseed, then terminal"
     equal(prompts.length, 2);
     equal(prompts[1].promptName, "Q9");
     equal(store.readMeta(RUN_ID).babySessionId, "baby-r1");
+    await cleanTemp(tmp);
+  })();
+});
+
+test("turnLoop: consult promote_run → promotes model, rotates session, then continues", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-promote-run-"));
+    const store = StoreAdapter.create(
+      makePaths(tmp),
+      fakeRepo({ "src/index.ts": { added: 3, removed: 0 } }),
+      fixedClock(),
+    );
+    const packet = parseFixture();
+    seedRun(store, packet);
+
+    const channel = emptyChannel();
+    const submission: AskPlannerInput = {
+      questionType: "other",
+      currentSlice: "harness repair",
+      question: "Should I keep trying?",
+      approach: "I repeated the same failed tactic.",
+      evidence: ["same failure twice"],
+    };
+    const promote: PlannerResponse = {
+      status: "promote_run",
+      answer: "task is valid, Baby is stuck in harness mechanics",
+      constraints: ["inspect generated aliases before editing"],
+      evidence_used: ["same failing command repeated"],
+      safe_next_action: "inspect generated aliases, then fix the harness once",
+      human_decision_needed: null,
+    };
+    const planner = fakePlanner({ consult: async () => promote });
+    const modelsUsed: string[] = [];
+    const executor = scriptedExecutor(
+      channel,
+      [
+        { intents: [{ kind: "consult-requested" }], pendingConsult: submission },
+        { intents: [{ kind: "report-accepted", status: "failed", summary: "after promote" }] },
+      ],
+      ["baby-promoted"],
+      modelsUsed,
+    );
+    const config = Config.parse({
+      baby: {
+        providerId: "local",
+        modelId: "small",
+        promoteTo: { providerId: "openai", modelId: "gpt" },
+      },
+    });
+    const ports = makePorts(
+      store,
+      fakeRepo({ "src/index.ts": { added: 3, removed: 0 } }),
+      executor,
+      planner,
+      config,
+    );
+
+    const result = await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    equal(result.outcome.status, "failed");
+    equal(store.readMeta(RUN_ID).promoted, true);
+    equal(store.readMeta(RUN_ID).babySessionId, "baby-promoted");
+    deepEqual(modelsUsed, ["local/small", "openai/gpt"]);
+    const journal = store.readJournal(RUN_ID);
+    ok(journal.some((e) => e.event === "model_promoted"));
+    ok(journal.some((e) => e.event === "rotation"));
+    const prompts = journal.filter((e) => e.event === "prompt_sent");
+    equal(prompts.length, 2);
+    equal(prompts[1].promptName, "Qp-promote");
+    const decisions = store.readDecisions(RUN_ID);
+    ok(decisions.some((d) => d.status === "promote_run"));
     await cleanTemp(tmp);
   })();
 });

@@ -62,8 +62,10 @@ export type ActiveRunRef = {
   store: Store;
   turn: number;
   // Set to true the instant a stop-and-wait intent is recorded. All subsequent
-  // tool calls return an "End your turn" error so Baby winds down cooperatively.
+  // tool calls return an "End your turn" error; stopTurn asks opencode to
+  // interrupt the active message in this same session.
   turnComplete: boolean;
+  stopTurn?: () => Promise<void>;
   // While true, only verify_handoff is accepted — blocks all other tool calls
   // until the predecessor's handoff has been verified. Cleared by verify_handoff.
   awaitingVerification: boolean;
@@ -294,6 +296,14 @@ const turnCompleteError = () =>
     }),
   );
 
+const completeTurn = (ctx: ActiveRunRef): void => {
+  ctx.turnComplete = true;
+  void ctx.stopTurn?.().catch((err) => {
+    const detail = err instanceof Error ? err.message : String(err);
+    journal(ctx, { event: "driver_note", note: `opencode abort failed: ${detail}` });
+  });
+};
+
 export const handleAskPlanner = async (ref: RunRef, input: AskPlannerInput) => {
   const ctx = ref.current;
   if (!ctx) {
@@ -338,7 +348,7 @@ export const handleAskPlanner = async (ref: RunRef, input: AskPlannerInput) => {
   // the consult here: it records the submission and returns at once.
   if (ctx.pendingConsult) {
     ctx.intents.push({ kind: "consult-requested" });
-    ctx.turnComplete = true;
+    completeTurn(ctx);
     return text(
       JSON.stringify({
         status: "already_submitted",
@@ -359,11 +369,11 @@ export const handleAskPlanner = async (ref: RunRef, input: AskPlannerInput) => {
 
   // Record the intent for the turn loop to evaluate.
   ctx.intents.push({ kind: "consult-requested" });
-  ctx.turnComplete = true;
   journal(ctx, {
     event: "driver_note",
     note: `ask_planner submitted (${input.questionType}) — consult deferred to the driver`,
   });
+  completeTurn(ctx);
 
   return text(
     JSON.stringify({
@@ -531,7 +541,7 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
   // submit_report so the trigger tracks the sticky state.
   if (ctx.pendingFinalReview) {
     ctx.intents.push({ kind: "final-review-requested" });
-    ctx.turnComplete = true;
+    completeTurn(ctx);
     return text(
       JSON.stringify({
         status: "review_pending",
@@ -648,7 +658,7 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
     // driver-side runner when the review completes. The report_submitted
     // event above is already sufficient tracking.
     ctx.intents.push({ kind: "final-review-requested" });
-    ctx.turnComplete = true;
+    completeTurn(ctx);
     return text(
       JSON.stringify({
         status: "review_pending",
@@ -667,7 +677,7 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
     blockedQuestion: report.blockedQuestion,
     summary: report.summary,
   });
-  ctx.turnComplete = true;
+  completeTurn(ctx);
   return text(
     JSON.stringify({
       ok: true,

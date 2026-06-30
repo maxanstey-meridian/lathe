@@ -23,6 +23,7 @@ const _executorContract: Executor = {
   createSession: async () => "fake-session-id",
   sendMessage: async () => ({ info: { id: "msg", sessionID: "sid" }, parts: [] }),
   listMessages: async () => [],
+  abortSession: async () => {},
   deleteSession: async () => {},
 };
 

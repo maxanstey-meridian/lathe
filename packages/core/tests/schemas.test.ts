@@ -131,6 +131,10 @@ test("review-convergence: PlannerResponse round-trips", () => {
   assert.strictEqual(result.human_decision_needed, null);
 });
 
+test("review-convergence: PlannerStatus accepts promote_run", () => {
+  assert.strictEqual(PlannerStatus.parse("promote_run"), "promote_run");
+});
+
 test("review-convergence: Finding rejects invalid kebab id", () => {
   const validObject = {
     id: "CamelCase_Id",

@@ -1,6 +1,6 @@
 // Executor adapter: thin HTTP client over the opencode API.
 // sendMessage uses node:http.request (NOT fetch — the >300s turn-death scar).
-// createSession/listMessages/deleteSession use fetch (short calls only).
+// createSession/listMessages/abortSession/deleteSession use fetch (short calls only).
 
 import { request as httpRequest } from "node:http";
 import type { Executor, ModelConfig } from "../../application/ports/executor.js";
@@ -170,9 +170,16 @@ export const createOpencodeClient = (config: Config): Executor => {
     return (await res.json()) as TurnResponse[];
   };
 
+  const abortSession = async (sessionId: string): Promise<void> => {
+    const res = await fetch(`${base}/session/${sessionId}/abort`, { method: "POST" });
+    if (!res.ok) {
+      throw new Error(`session abort failed: ${res.status} ${await res.text()}`);
+    }
+  };
+
   const deleteSession = async (sessionId: string): Promise<void> => {
     await fetch(`${base}/session/${sessionId}`, { method: "DELETE" });
   };
 
-  return { createSession, sendMessage, listMessages, deleteSession };
+  return { createSession, sendMessage, listMessages, abortSession, deleteSession };
 };

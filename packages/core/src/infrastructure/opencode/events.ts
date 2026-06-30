@@ -7,6 +7,42 @@ import { request as httpRequest } from "node:http";
 import type { Events, OpencodeEvent, EventSubscription } from "../../application/ports/events.js";
 import type { Config } from "../../config/schemas.js";
 
+type OpenCodeMessage = {
+  info?: {
+    role?: string;
+    tokens?: {
+      total?: number;
+    };
+  };
+  parts?: Array<{
+    type?: string;
+    tokens?: {
+      total?: number;
+    };
+  }>;
+};
+
+const latestAssistantContextTokens = (messages: OpenCodeMessage[]): number | undefined => {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message?.info?.role !== "assistant") {
+      continue;
+    }
+    const infoTotal = message.info.tokens?.total;
+    if (typeof infoTotal === "number") {
+      return infoTotal;
+    }
+    const finishTotal = [...(message.parts ?? [])]
+      .reverse()
+      .find((part) => part.type === "step-finish" && typeof part.tokens?.total === "number")
+      ?.tokens?.total;
+    if (typeof finishTotal === "number") {
+      return finishTotal;
+    }
+  }
+  return undefined;
+};
+
 export const createEvents = (config: Config): Events => ({
   subscribe: (directory: string, onEvent: (event: OpencodeEvent) => void): EventSubscription => {
     // The feed is per-instance, scoped by directory exactly like sessions — an
@@ -38,3 +74,14 @@ export const createEvents = (config: Config): Events => ({
     return { close: () => req.destroy() };
   },
 });
+
+export const createContextTokenReader = (config: Config) => {
+  const base = `http://127.0.0.1:${config.opencode.port}`;
+  return async (sessionId: string): Promise<number | undefined> => {
+    const res = await fetch(`${base}/session/${sessionId}/message`);
+    if (!res.ok) {
+      return undefined;
+    }
+    return latestAssistantContextTokens((await res.json()) as OpenCodeMessage[]);
+  };
+};

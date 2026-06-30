@@ -8,6 +8,7 @@ export const PlannerStatus = z.enum([
   "proceed",
   "proceed_with_constraints",
   "revise_slice",
+  "promote_run",
   // Baby has drifted/hallucinated (inventing files, paths, or projects that
   // don't exist; acting on a confabulated premise) but the correct fix is clear
   // and needs no human. The driver discards Baby's session and reseeds a fresh

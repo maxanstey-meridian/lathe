@@ -104,7 +104,11 @@ const cleanTemp = async (dir: string) => {
   }
 };
 
-const makeRef = (overrides?: { packet?: Packet; awaitingVerification?: boolean }) => {
+const makeRef = (overrides?: {
+  packet?: Packet;
+  awaitingVerification?: boolean;
+  stopTurn?: () => Promise<void>;
+}) => {
   const tmp = join(tmpdir(), `bridge-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const clock = fixedClock();
   const packet = overrides?.packet ?? makeTestPacket();
@@ -117,6 +121,7 @@ const makeRef = (overrides?: { packet?: Packet; awaitingVerification?: boolean }
     reportRejectionCount: 0,
     checkpointBounceCount: 0,
     turnComplete: false,
+    ...(overrides?.stopTurn ? { stopTurn: overrides.stopTurn } : {}),
     awaitingVerification: overrides?.awaitingVerification ?? false,
     config: {
       thresholds: {
@@ -154,6 +159,7 @@ const makeRef = (overrides?: { packet?: Packet; awaitingVerification?: boolean }
       createSession: async () => "session",
       sendMessage: async () => ({ info: { tokens: {} }, parts: [{ type: "text", text: "ok" }] }),
       listMessages: async () => [],
+      abortSession: async () => {},
       deleteSession: async () => {},
     },
     verifyModel: { providerId: "test", modelId: "test", agent: "test" },
@@ -204,7 +210,12 @@ test("buildMcpServer: exposes five tools", () => {
 // ===========================================================================
 
 test("ask_planner: records consult-requested intent on valid call", async () => {
-  const { ref, tmp } = makeRef();
+  let stopCalls = 0;
+  const { ref, tmp } = makeRef({
+    stopTurn: async () => {
+      stopCalls += 1;
+    },
+  });
   const result = await handleAskPlanner(ref, {
     questionType: "repo_procedure",
     currentSlice: "tests/bridge.test.ts",
@@ -217,6 +228,8 @@ test("ask_planner: records consult-requested intent on valid call", async () => 
   equal(body.status, "submitted");
   strictEqual(ref.current.intents.length, 1);
   equal(ref.current.intents[0].kind, "consult-requested");
+  strictEqual(ref.current.turnComplete, true);
+  strictEqual(stopCalls, 1);
   deepStrictEqual(ref.current.pendingConsult, {
     questionType: "repo_procedure",
     currentSlice: "tests/bridge.test.ts",
@@ -535,7 +548,12 @@ test("submit_report: failed records report-accepted intent", async () => {
 // ===========================================================================
 
 test("submit_report: sets final-review-requested intent when ready_for_review succeeds", async () => {
-  const { ref, tmp } = makeRef();
+  let stopCalls = 0;
+  const { ref, tmp } = makeRef({
+    stopTurn: async () => {
+      stopCalls += 1;
+    },
+  });
   // Mark outcome done, gate clear (initial phase by default), verification green (echo ok passes)
   await handleUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
@@ -554,6 +572,8 @@ test("submit_report: sets final-review-requested intent when ready_for_review su
   equal(ref.current.intents[0].kind, "outcomes-updated");
   equal(ref.current.intents[ref.current.intents.length - 1].kind, "final-review-requested");
   strictEqual(ref.current.pendingFinalReview !== null, true);
+  strictEqual(ref.current.turnComplete, true);
+  strictEqual(stopCalls, 1);
   await cleanTemp(tmp);
 });
 

@@ -53,9 +53,10 @@ export type RunChannel = {
   turn: number;
   // Set to true by the bridge the instant it records a stop-and-wait intent
   // (ask_planner / submit_report). All subsequent bridge tool calls return an
-  // "End your turn" error so Baby winds down cooperatively rather than the driver
-  // destroying the in-flight HTTP connection.
+  // "End your turn" error; stopTurn asks opencode to interrupt the active
+  // message in the same session so the driver can run the deferred intent.
   turnComplete: boolean;
+  stopTurn?: () => Promise<void>;
   // While true, only verify_handoff is accepted — blocks all other tool calls
   // until the predecessor's handoff has been verified. Cleared by verify_handoff.
   awaitingVerification: boolean;

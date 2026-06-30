@@ -9,7 +9,7 @@
 // effects. Reads top-to-bottom as the per-turn lifecycle it owns.
 // ---------------------------------------------------------------------------
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { babyContextBudget } from "../../config/config.js";
 import type { Config } from "../../config/schemas.js";
@@ -32,6 +32,7 @@ import {
 } from "../../domain/gate-decisions.js";
 import { isLatched, gateReason } from "../../domain/gate.js";
 import { checkReorientBound } from "../../domain/liveness.js";
+import type { OutcomeLedger } from "../../domain/outcomes.js";
 import type { Packet } from "../../domain/packet.js";
 import {
   q2RotationSeed,
@@ -52,6 +53,7 @@ import {
   buildReconciliationEvidence,
   renderReconciliationEvidence,
   lastAcceptedReconciliation,
+  summarizeLedger,
 } from "../../domain/reconciliation.js";
 import type { SubmitReport } from "../../domain/report.js";
 import { ACCEPTED_STATUSES } from "../../domain/review.js";
@@ -89,6 +91,69 @@ type TurnPartHarvest = {
   listStart?: number;
   listPartCount?: number;
   listError?: string;
+};
+
+const isCompleteFinalStepLedger = (ledger: OutcomeLedger): boolean =>
+  ledger.outcomes.length > 0 && ledger.outcomes.every((outcome) => outcome.status === "done");
+
+const finalReviewWasUnavailable = (review: FinalReview): boolean =>
+  review.findings.some((finding) => finding.startsWith("final review unavailable:"));
+
+type DaddySyncState = {
+  lastSyncedMaxDecisionAt?: string;
+};
+
+const daddySyncFile = (worktree: string): string => join(dirname(worktree), "daddy-sync.json");
+
+const readDaddySyncState = (worktree: string): DaddySyncState => {
+  const path = daddySyncFile(worktree);
+  if (!existsSync(path)) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf-8")) as Partial<DaddySyncState>;
+    return typeof parsed.lastSyncedMaxDecisionAt === "string"
+      ? { lastSyncedMaxDecisionAt: parsed.lastSyncedMaxDecisionAt }
+      : {};
+  } catch {
+    return {};
+  }
+};
+
+const writeDaddySyncState = (worktree: string, state: DaddySyncState): void => {
+  writeFileSync(daddySyncFile(worktree), `${JSON.stringify(state, null, 2)}\n`, "utf-8");
+};
+
+const syncPendingMaxDecisionsToDaddy = async (
+  ports: RunPorts,
+  runId: string,
+  worktree: string,
+  turn: number,
+): Promise<void> => {
+  if (!ports.planner.syncMaxDecisions) {
+    return;
+  }
+  const state = readDaddySyncState(worktree);
+  const pending = ports.store
+    .readDecisions(runId)
+    .filter((d) => d.source === "max")
+    .filter((d) => !state.lastSyncedMaxDecisionAt || d.timestamp > state.lastSyncedMaxDecisionAt)
+    .map((d) => ({ timestamp: d.timestamp, question: d.question, answer: d.answer }));
+
+  if (pending.length === 0) {
+    return;
+  }
+
+  await ports.planner.syncMaxDecisions(pending);
+  const last = pending.at(-1);
+  if (!last) {
+    return;
+  }
+  writeDaddySyncState(worktree, { lastSyncedMaxDecisionAt: last.timestamp });
+  journal(ports, runId, turn, {
+    event: "driver_note",
+    note: `synced ${pending.length} Max decision(s) to Daddy through ${last.timestamp}`,
+  });
 };
 
 // opencode's POST /message returns only the FINAL assistant message's parts, so
@@ -332,6 +397,25 @@ const buildDriverReconciliation = (
   });
 };
 
+const buildPlannerConsultContext = (
+  ports: RunPorts,
+  runId: string,
+): Parameters<RunPorts["planner"]["consult"]>[1] => {
+  const meta = ports.store.readMeta(runId);
+  const ledger = ports.store.readLedger(runId);
+  const rotations =
+    (meta.crashRetries ?? 0) + (meta.stallRetries ?? 0) + (meta.reorientRetries ?? 0);
+
+  return {
+    reviewState: ports.store.readReviewState(runId),
+    facts: {
+      attempt: meta.attempt,
+      rotations,
+      ledgerSummary: summarizeLedger(ledger),
+    },
+  };
+};
+
 // ---------------------------------------------------------------------------
 // turnLoop — run one attempt to a terminal outcome.
 //
@@ -413,6 +497,26 @@ export const turnLoop = async (
     });
 
     channel.turnComplete = false;
+    let stopRequested = false;
+    let stopResult: Promise<void> | undefined;
+    channel.stopTurn = (): Promise<void> => {
+      if (stopResult) {
+        return stopResult;
+      }
+      stopRequested = true;
+      stopResult = (async () => {
+        journal(ports, runId, turn, {
+          event: "driver_note",
+          note: `opencode abort requested for session ${sessionId}`,
+        });
+        await executor.abortSession(sessionId);
+        journal(ports, runId, turn, {
+          event: "driver_note",
+          note: `opencode abort completed for session ${sessionId}`,
+        });
+      })();
+      return stopResult;
+    };
 
     let response: TurnResponse;
     try {
@@ -425,47 +529,70 @@ export const turnLoop = async (
       );
       sendFailures = 0;
     } catch (err) {
-      // Signal-aborted by caller (supervisor.abortRun) — terminate the run
-      // immediately, NOT as a dead-session failure (the opencode adapter fires
-      // req.destroy with a plain Error, not AbortError).
-      if (signal?.aborted) {
-        return finish({ status: "aborted" });
+      delete channel.stopTurn;
+      let bridgeStopCompleted = false;
+      if (stopRequested && channel.turnComplete && stopResult) {
+        try {
+          await stopResult;
+          bridgeStopCompleted = true;
+        } catch {
+          bridgeStopCompleted = false;
+        }
       }
-      // A dead/timed-out turn is the crash path (R10): rotate to a fresh session
-      // via reconciliation (O6) once; a second consecutive failure parks wedged.
-      sendFailures += 1;
-      const detail = err instanceof Error ? err.message : String(err);
-      journal(ports, runId, turn, {
-        event: "driver_note",
-        note: `turn send failed (${sendFailures}): ${detail}`,
-      });
-      if (sendFailures >= 2) {
-        return finish({
-          status: "blocked",
-          reason: "wedged",
-          question:
-            "Two consecutive executor turns failed to complete (model/session failure). See journal.",
+      if (bridgeStopCompleted) {
+        response = {
+          info: {
+            id: `bridge-stop-${turn}`,
+            sessionID: sessionId,
+            error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+          },
+          parts: [],
+        };
+        sendFailures = 0;
+      } else {
+        // Signal-aborted by caller (supervisor.abortRun) — terminate the run
+        // immediately, NOT as a dead-session failure (the opencode adapter fires
+        // req.destroy with a plain Error, not AbortError).
+        if (signal?.aborted) {
+          return finish({ status: "aborted" });
+        }
+        // A dead/timed-out turn is the crash path (R10): rotate to a fresh session
+        // via reconciliation (O6) once; a second consecutive failure parks wedged.
+        sendFailures += 1;
+        const detail = err instanceof Error ? err.message : String(err);
+        journal(ports, runId, turn, {
+          event: "driver_note",
+          note: `turn send failed (${sendFailures}): ${detail}`,
         });
+        if (sendFailures >= 2) {
+          return finish({
+            status: "blocked",
+            reason: "wedged",
+            question:
+              "Two consecutive executor turns failed to complete (model/session failure). See journal.",
+          });
+        }
+        const {
+          seed: reseed,
+          needsReconciliation,
+          handoffInjected,
+        } = reseedFromCheckpoint(ports, packet, worktree);
+        sessionId = await rotateSession(
+          ports,
+          packet,
+          worktree,
+          sessionId,
+          turn,
+          needsReconciliation,
+        );
+        next = reseed;
+        if (handoffInjected) {
+          channel.awaitingVerification = true;
+        }
+        continue;
       }
-      const {
-        seed: reseed,
-        needsReconciliation,
-        handoffInjected,
-      } = reseedFromCheckpoint(ports, packet, worktree);
-      sessionId = await rotateSession(
-        ports,
-        packet,
-        worktree,
-        sessionId,
-        turn,
-        needsReconciliation,
-      );
-      next = reseed;
-      if (handoffInjected) {
-        channel.awaitingVerification = true;
-      }
-      continue;
     }
+    delete channel.stopTurn;
 
     // --- gather --------------------------------------------------------------
     const turnParts = await collectTurnParts(ports, sessionId, lastSeenMessageId, response);
@@ -587,6 +714,7 @@ export const turnLoop = async (
         let reconciliationReused = false;
         let plannerResponse: PlannerResponse;
         try {
+          await syncPendingMaxDecisionsToDaddy(ports, runId, worktree, turn);
           if (submission.questionType === "reconciliation") {
             reconciliation = buildDriverReconciliation(ports, packet, worktree);
             const prior = lastAcceptedReconciliation(store.readDecisions(runId));
@@ -613,10 +741,16 @@ export const turnLoop = async (
                   "Driver-owned reconciliation. Baby only triggered this request; do not treat Baby prose as state reconstruction.",
                 evidence: renderReconciliationEvidence(reconciliation),
               };
-              plannerResponse = await planner.consult(effectiveSubmission);
+              plannerResponse = await planner.consult(
+                effectiveSubmission,
+                buildPlannerConsultContext(ports, runId),
+              );
             }
           } else {
-            plannerResponse = await planner.consult(effectiveSubmission);
+            plannerResponse = await planner.consult(
+              effectiveSubmission,
+              buildPlannerConsultContext(ports, runId),
+            );
           }
         } catch (err) {
           const detail = err instanceof Error ? err.message : String(err);
@@ -690,6 +824,29 @@ export const turnLoop = async (
           continue;
         }
 
+        if (plannerResponse.status === "promote_run") {
+          const meta = store.readMeta(runId);
+          if (promoted || meta.promoted) {
+            return finish({
+              status: "blocked",
+              reason: "human_decision",
+              question: `Daddy requested promote_run after this run was already promoted — needs Max. Requested next action: ${plannerResponse.safe_next_action}`,
+            });
+          }
+
+          promoted = true;
+          babyModel = promotedModelConfig(config);
+          store.writeMeta({ ...meta, promoted: true, updatedAt: clock.nowIso() });
+          journal(ports, runId, turn, {
+            event: "model_promoted",
+            from: `${config.baby.providerId}/${config.baby.modelId}`,
+            to: promotedModelLabel(config),
+          });
+          sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, false);
+          next = { name: "Qp-promote", text: qPlannerDecision(plannerResponse) };
+          continue;
+        }
+
         if (plannerResponse.status === "reorient") {
           const meta = store.readMeta(runId);
           const used = meta.reorientRetries ?? 0;
@@ -742,6 +899,7 @@ export const turnLoop = async (
         const ledger = store.readLedger(runId);
         let review: FinalReview;
         try {
+          await syncPendingMaxDecisionsToDaddy(ports, runId, worktree, turn);
           review = await planner.finalReview(packet, ledger, report);
         } catch (err) {
           const detail = err instanceof Error ? err.message : String(err);
@@ -820,6 +978,15 @@ export const turnLoop = async (
                 channel.awaitingVerification = true;
               }
               continue;
+            }
+            if (isCompleteFinalStepLedger(ledger) && !finalReviewWasUnavailable(review)) {
+              acceptedReport = report;
+              finalReview = review;
+              journal(ports, runId, turn, {
+                event: "driver_note",
+                note: `final review rejected ${channel.reportRejectionCount} times at the completed final step; sending to convergence instead of failing baby`,
+              });
+              return finish({ status: "ready_for_review" });
             }
             return finish({
               status: "failed",

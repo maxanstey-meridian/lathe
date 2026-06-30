@@ -140,6 +140,23 @@ export const extractFrontmatter = (raw: string): FrontmatterParts | undefined =>
   return { yaml: match[1], body: match[2] ?? "" };
 };
 
+export const describeFrontmatterProblem = (raw: string): string => {
+  const normalized = normalizeForFrontmatter(raw);
+  const lines = normalized.split("\n");
+  const open = lines.findIndex((line) => line.trim() === "---");
+  if (open === -1) {
+    return "no YAML frontmatter opening delimiter (---) found";
+  }
+  const close = lines.findIndex((line, index) => index > open && line.trim() === "---");
+  if (close === -1) {
+    const firstBodyLine = lines.find((line, index) => index > open && line.trim().startsWith("#"));
+    return firstBodyLine
+      ? `YAML frontmatter opened with --- but is missing the closing standalone --- before ${firstBodyLine.trim()}`
+      : "YAML frontmatter opened with --- but is missing the closing standalone --- before the markdown body";
+  }
+  return "no YAML frontmatter block (--- ... ---) at top of packet";
+};
+
 // ---------------------------------------------------------------------------
 // parsePacketShape — pure parse, no fs, no child_process (CONTRACT K3, D5)
 
@@ -148,7 +165,7 @@ export const parsePacketShape = (raw: string, runId?: string): AdmissionResult =
 
   const parts = extractFrontmatter(raw);
   if (!parts) {
-    return { ok: false, problems: ["no YAML frontmatter block (--- ... ---) at top of packet"] };
+    return { ok: false, problems: [describeFrontmatterProblem(raw)] };
   }
 
   let yamlValue: unknown;

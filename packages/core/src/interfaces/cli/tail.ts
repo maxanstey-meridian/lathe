@@ -11,7 +11,7 @@ import { babyContextBudget } from "../../config/config.js";
 import type { Paths } from "../../config/paths.js";
 import type { Config } from "../../config/schemas.js";
 import { systemClock } from "../../infrastructure/clock.js";
-import { createEvents } from "../../infrastructure/opencode/events.js";
+import { createContextTokenReader, createEvents } from "../../infrastructure/opencode/events.js";
 import { StoreAdapter } from "../../infrastructure/store.js";
 import { runTailUi } from "../tui/tail-ui.js";
 import { buildRepo } from "./composition.js";
@@ -26,10 +26,12 @@ export const openTail = (
   const repo = buildRepo();
   const store = StoreAdapter.create(paths, repo, clock);
   const events = createEvents(config);
+  const readContextTokens = createContextTokenReader(config);
   runTailUi({
     store,
     budget: babyContextBudget(config),
     subscribe: events.subscribe,
+    readContextTokens,
     runId,
     daddyDirectory: paths.root,
     autoAdvance,

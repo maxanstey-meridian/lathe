@@ -16,7 +16,7 @@ import {
   parseFinalReview,
   tryParseFinalReview,
 } from "../../domain/review.js";
-import { harvestReply } from "./harvest.js";
+import { harvestLatestReply, harvestReply } from "./harvest.js";
 
 // ---------------------------------------------------------------------------
 // Planner adapter implementation
@@ -46,9 +46,37 @@ export const createPlanner = (
     return daddySessionId;
   };
 
+  const syncMaxDecisions = async (
+    decisions: { timestamp: string; question: string; answer: string }[],
+  ): Promise<void> => {
+    if (!daddySessionId) {
+      throw new Error("handshake must be called before syncMaxDecisions");
+    }
+    if (decisions.length === 0) {
+      return;
+    }
+
+    const body = decisions
+      .map(
+        (d) =>
+          `- at: ${d.timestamp}\n  blocked question: ${d.question}\n  Max's authoritative answer: ${d.answer}`,
+      )
+      .join("\n");
+    const prompt = `DADDY STATE SYNC — Max answered parked-run question(s). Treat these as authoritative run state for all later planning and final review. Do not rely on any older contrary premise from this session. Absorb this state and reply exactly DADDY_SYNC_OK.\n\n${body}`;
+
+    const response = await executor.sendMessage(daddySessionId, prompt, daddyModel, daddyTimeoutMs);
+    const text = extractText(response).trim();
+    if (!text.includes("DADDY_SYNC_OK")) {
+      throw new Error(`Daddy sync failed: expected DADDY_SYNC_OK, got: ${text.slice(0, 200)}`);
+    }
+  };
+
   // M4: the re-ask loop — tryParse → on null, diagnose → jsonReaskNudge → retry → tryParse → on null, fail-closed.
   // Port contract: returns PlannerResponse directly (NOT { planner } — that's the bridge's internal shape).
-  const consult = async (input: Parameters<Planner["consult"]>[0]): Promise<PlannerResponse> => {
+  const consult = async (
+    input: Parameters<Planner["consult"]>[0],
+    context?: Parameters<Planner["consult"]>[1],
+  ): Promise<PlannerResponse> => {
     if (!daddySessionId) {
       throw new Error("handshake must be called before consult");
     }
@@ -58,8 +86,8 @@ export const createPlanner = (
       input.question,
       input.approach,
       input.evidence,
-      undefined, // reviewState — port doesn't carry it; the driver adds it
-      undefined, // facts — port doesn't carry it; the driver adds it
+      context?.reviewState,
+      context?.facts,
     );
 
     const response = await executor.sendMessage(daddySessionId, prompt, daddyModel, daddyTimeoutMs);
@@ -104,7 +132,7 @@ export const createPlanner = (
         daddyModel,
         daddyTimeoutMs,
       );
-      const { text: raw } = await harvestReply(executor, daddySessionId, response);
+      const { text: raw } = await harvestLatestReply(executor, daddySessionId, response);
       const parsed = tryParseFinalReview(raw);
       if (parsed) {
         return parsed;
@@ -114,7 +142,7 @@ export const createPlanner = (
       const reason = diagnosePlannerParse(raw);
       const nudge = jsonReaskNudge(reason);
       const retry = await executor.sendMessage(daddySessionId, nudge, daddyModel, daddyTimeoutMs);
-      const { text: retryText } = await harvestReply(executor, daddySessionId, retry);
+      const { text: retryText } = await harvestLatestReply(executor, daddySessionId, retry);
       const retryParsed = tryParseFinalReview(retryText);
       if (retryParsed) {
         return retryParsed;
@@ -133,5 +161,5 @@ export const createPlanner = (
     }
   };
 
-  return { handshake, resumeSession, consult, finalReview };
+  return { handshake, resumeSession, syncMaxDecisions, consult, finalReview };
 };

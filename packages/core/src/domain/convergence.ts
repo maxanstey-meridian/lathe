@@ -1,6 +1,11 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
-import { extractFrontmatter, normalizeForFrontmatter, type OutcomeDef } from "./packet.js";
+import {
+  describeFrontmatterProblem,
+  extractFrontmatter,
+  normalizeForFrontmatter,
+  type OutcomeDef,
+} from "./packet.js";
 import { FinalReviewVerdict } from "./review.js";
 import { balancedObjects, repairYamlEscapes } from "./structured-extraction.js";
 
@@ -243,7 +248,7 @@ export type FollowupLineage = {
 export const stampFollowupLineage = (authoredRaw: string, lineage: FollowupLineage): string => {
   const parts = extractFrontmatter(authoredRaw);
   if (!parts) {
-    throw new Error("stampFollowupLineage: authored reply has no YAML frontmatter block");
+    throw new Error(`stampFollowupLineage: ${describeFrontmatterProblem(authoredRaw)}`);
   }
 
   // Salvage mirrors the JSON candidate approach: on a parse failure, repair the known

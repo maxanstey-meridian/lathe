@@ -306,9 +306,8 @@ export const stampFollowupLineage = (authoredRaw: string, lineage: FollowupLinea
     pass: lineage.pass,
     regression_outcomes: regression,
     // Infra, never authored: a model cannot promote its own follow-up onto Daddy's
-    // model. Coerce so a lineage that omits it (legacy callers) stamps an explicit
-    // false rather than a YAML `null`.
-    promoted: lineage.promoted === true,
+    // model.
+    promoted: lineage.promoted,
   };
 
   const body = parts.body.trim();

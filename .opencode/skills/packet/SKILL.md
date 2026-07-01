@@ -86,6 +86,7 @@ Normal `/packet` invocations author these fields:
 ---
 repo: "/absolute/path/to/repo"
 summary: "short tail label"
+compare_commit: "main"
 outcomes:
   - id: short-stable-id
     description: "observable behaviour that must be true after completion"
@@ -105,6 +106,10 @@ Field rules:
   a tail status label, not a sentence.
 - `base` is normally omitted. Admission stamps the repo's current branch. Add it
   only for an intentional branch override, and only if the branch exists.
+- `compare_commit` is required. It sets the cumulative review scope: super-daddy
+  diffs the run's final state against this ref (branch, tag, or SHA). Use the
+  integration branch the run should be measured against, typically the same as
+  `base`. For staged chain children, Lathe inherits it from the parent.
 - `outcomes` is the progress ledger. Every outcome needs a unique kebab-case id
   and an independently observable description. Prefer 3-6 outcomes. If there are
   more than about 6, split the packet unless the outcomes are mechanical
@@ -126,8 +131,8 @@ Field rules:
   every `expected_surface` entry as shell-escaped arguments. Only use commands
   that accept file/glob arguments at the end.
 - `parent_run_id` is only for explicitly staged chain packets. Do not author
-  `campaign_id`, `pass`, `regression_outcomes`, or `promoted`; Lathe owns those
-  infra fields.
+  `campaign_id`, `pass`, `compare_commit` (children inherit it), `regression_outcomes`,
+  or `promoted`; Lathe owns those infra fields.
 
 Quote every string that may contain punctuation. YAML colons in unquoted strings
 are a common admission failure.
@@ -198,7 +203,7 @@ interpretive.
 Super-daddy also receives this skill when Lathe asks it to author an automatic
 repair packet after a convergence review. In that context, the surrounding prompt
 overrides file/admission details: it replies with packet markdown instead of
-writing a file, and Lathe stamps repo/base/campaign lineage. Follow those explicit
+writing a file, and Lathe stamps repo/base/compare_commit/campaign lineage.
 adaptations when present.
 
 ## Finish

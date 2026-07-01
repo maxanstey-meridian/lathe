@@ -14,7 +14,6 @@ export type Paths = {
   serveLogFile: string;
   runDir: (runId: string) => string;
   packetFile: (runId: string) => string;
-  journalFile: (runId: string) => string;
 };
 
 export const makePaths = (stateRoot: string): Paths => {
@@ -31,6 +30,5 @@ export const makePaths = (stateRoot: string): Paths => {
     serveLogFile: join(root, "opencode-serve.log"),
     runDir,
     packetFile: (runId) => join(runDir(runId), "packet.md"),
-    journalFile: (runId) => join(runDir(runId), "journal.jsonl"),
   };
 };

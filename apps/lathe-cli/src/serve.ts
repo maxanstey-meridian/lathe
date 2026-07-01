@@ -26,6 +26,7 @@ import {
 import { getRequestListener } from "@hono/node-server";
 import type { Server } from "node:http";
 import { join } from "node:path";
+import { mkdirSync } from "node:fs";
 
 type SignalName = "SIGINT" | "SIGTERM";
 type LockHandle = { server: Server; release: () => void };
@@ -50,6 +51,9 @@ export const startDaemon = async (deps?: DaemonDeps, userPort?: number): Promise
   const paths = cfg.paths;
   const port = userPort ?? config.daemon.port;
   const host = config.daemon.host;
+
+  // 0. Ensure state root exists (fresh install — lock + SQLite both need it).
+  mkdirSync(paths.root, { recursive: true });
 
   // 1. Acquire the held socket lock.
   const lockPath = join(paths.root, "lathe.lock");

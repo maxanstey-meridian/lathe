@@ -15,8 +15,8 @@ Lathe's lifecycle is owned by domain/application use cases and persisted state. 
 
 - Default state root is `~/.meridian/v3`.
 - Config is loaded from `config.json` inside the state root.
-- Structured state lives in SQLite (`lathe.db`): runs (meta, queue, rejected), staged registry, campaigns, decisions, checkpoints, gate state, review state, outcome ledger, convergence log, reports, nits, and active run/convergence pointers.
-- Only `runs/<runId>/packet.md` (the live editable packet) and `runs/<runId>/journal.jsonl` (the event journal) are file-backed.
+- Structured state lives in SQLite (`lathe.db`): runs (meta, queue, rejected), staged registry, campaigns, decisions, checkpoints, gate state, review state, outcome ledger, convergence log, reports, nits, journal/events, and active run/convergence pointers.
+- Only `runs/<runId>/packet.md` (the live editable packet) is file-backed.
 - Always inspect the actual state root before making claims.
 
 ## Packet Invariants
@@ -126,7 +126,7 @@ Lathe's lifecycle is owned by domain/application use cases and persisted state. 
 ## Store Invariants
 
 - `SqliteStoreAdapter` is the sole `Store` implementation. The file-based store has been removed.
-- The live packet (`runs/<runId>/packet.md`) and event journal (`runs/<runId>/journal.jsonl`) remain file-backed. Everything else — meta, queue, rejected, staged, campaigns, decisions, checkpoints, gate state, review state, outcome ledger, convergence log, reports, nits, and active pointers — is in `lathe.db`.
+- The live packet (`runs/<runId>/packet.md`) remains file-backed. Everything else — meta, queue, rejected, staged, campaigns, decisions, checkpoints, gate state, review state, outcome ledger, convergence log, reports, nits, journal/events, and active pointers — is in `lathe.db`.
 - The daemon is the single owner of run state. CLI commands proxy to it over HTTP.
 
 ## Inspection Checklist

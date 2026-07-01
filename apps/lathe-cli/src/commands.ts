@@ -760,7 +760,7 @@ export const runCommand = async (env: CliEnv, command: string, args: string[]): 
     case "accept":
       return cmdAccept(env, args[0] ?? "");
     case "reject":
-      return cmdReject(env, args[0] ?? "", args[1] ?? "");
+      return cmdReject(env, args[0] ?? "", args.slice(1).join(" "));
     case "status":
       return cmdStatus(env);
     case "review":

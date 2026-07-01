@@ -8,7 +8,7 @@ import type { Repo } from "../src/application/ports/repo.js";
 import { promoteStaged } from "../src/application/use-cases/chain-promotion.js";
 import { makePaths } from "../src/config/paths.js";
 import { Campaign, CampaignStatus } from "../src/domain/campaign.js";
-import { StoreAdapter } from "../src/infrastructure/store.js";
+import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -165,7 +165,7 @@ test("promoteStaged: no parent → promote-now", () => {
     const tmp = await mkdtempP(join(tmpdir(), "chain-promo-pnow-"));
     const clock = fixedClock();
     const repo = fakeRepo();
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
     store.writeStaged("20260101-000000-child", stagedChildPacket);
 
@@ -188,7 +188,7 @@ test("promoteStaged: parent converged → promote-with-base", () => {
     const clock = fixedClock();
     const fetchOpts = { fetchBranchFromCloneCalled: false };
     const repo = fakeRepo(fetchOpts);
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
     const childPacket = `---
 repo: /tmp/repo
@@ -238,7 +238,7 @@ test("promoteStaged: tip already accepted → base off acceptedInto, no fetch", 
     const clock = fixedClock();
     const fetchOpts = { fetchBranchFromCloneCalled: false };
     const repo = fakeRepo(fetchOpts);
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
     const childPacket = `---
 repo: /tmp/repo
@@ -288,7 +288,7 @@ test("promoteStaged: parent needs_max → hold", () => {
     const tmp = await mkdtempP(join(tmpdir(), "chain-promo-hold-"));
     const clock = fixedClock();
     const repo = fakeRepo();
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
     const childPacket = `---
 repo: /tmp/repo
@@ -325,7 +325,7 @@ test("promoteStaged: parent not converged → wait", () => {
     const tmp = await mkdtempP(join(tmpdir(), "chain-promo-wait-"));
     const clock = fixedClock();
     const repo = fakeRepo();
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
     const childPacket = `---
 repo: /tmp/repo
@@ -362,7 +362,7 @@ test("promoteStaged: parent campaign not found → wait", () => {
     const tmp = await mkdtempP(join(tmpdir(), "chain-promo-wait-nocamp-"));
     const clock = fixedClock();
     const repo = fakeRepo();
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
     const childPacket = `---
 repo: /tmp/repo
@@ -398,7 +398,7 @@ test("promoteStaged: staged child not found → skip", () => {
     const tmp = await mkdtempP(join(tmpdir(), "chain-promo-skip-"));
     const clock = fixedClock();
     const repo = fakeRepo();
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
     // Write campaign but no staged child — promoteStaged reads staged, finds nothing.
     store.writeCampaign(parentCampaignConverged("20260101-000000-tip"));
@@ -418,7 +418,7 @@ test("promoteStaged: multiple staged → mixed decisions", () => {
     const tmp = await mkdtempP(join(tmpdir(), "chain-promo-multi-"));
     const clock = fixedClock();
     const repo = fakeRepo();
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
     // Child without parent → promote-now
     store.writeStaged("20260101-000000-no-parent", stagedChildPacket);

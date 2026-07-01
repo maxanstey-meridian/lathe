@@ -1,6 +1,5 @@
 import { equal, strictEqual, ok, throws, deepStrictEqual } from "node:assert";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
-import { readdirSync, writeFileSync as writeFileSyncSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -46,7 +45,7 @@ const fakeRepo = (_opts?: {
 const makeTestPaths = async (base?: string): Promise<Paths & { teardown: () => Promise<void> }> => {
   const root = base ?? await mkdtemp(join(tmpdir(), "lathe-supervisor-"));
   const paths = makePaths(root);
-  const dirs = [paths.root, paths.queueDir, paths.rejectedDir, paths.stagedDir, paths.runsDir, paths.campaignsDir];
+  const dirs = [paths.root, paths.runsDir];
   await Promise.all(dirs.map(d => mkdir(d, { recursive: true })));
   return { ...paths, teardown: async () => rm(root, { recursive: true, force: true }) };
 };
@@ -66,17 +65,19 @@ const makeTestMeta = (partial: Partial<RunMeta>): RunMeta => ({
   ...partial,
 });
 
-const makeTestPacket = (override?: Record<string, unknown>): string => {
-  const defaults = {
-    repo: "/tmp/test-repo",
-    outcomes: [{ id: "test", type: "string" }],
-  };
-  const fm = { ...defaults, ...override };
+const makeTestPacket = (): string => {
   return `---
 repo: /tmp/test-repo
+base: main
+compare_commit: main
+summary: test packet
 outcomes:
   - id: test
-    type: string
+    description: A test outcome
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
 ---
 
 test body
@@ -155,55 +156,25 @@ test("abortRun throws TerminalRunError for a terminal run", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// abortRun — queued run (in queue only, no meta)
-
-test("abortRun archives a queued run found in the queue (no meta)", async () => {
-  await withSupervisor(async (supervisor, paths) => {
-    const repo = fakeRepo();
-    const store = SqliteStoreAdapter.create(paths, repo, systemClock);
-
-    const runId = "queued-no-meta";
-    const packet = makeTestPacket();
-    writeFileSyncSync(join(paths.queueDir, `${runId}.md`), packet);
-
-    const queue = store.listQueue();
-    equal(queue.length, 1);
-    equal(queue[0].runId, runId);
-
-    equal(store.readMetaIfExists(runId), undefined);
-
-    // No exception means success.
-    supervisor.abortRun(runId);
-
-    // Queue file should be moved to rejectedDir (archiveQueue moves it).
-    equal(readdirSync(paths.queueDir).filter(f => f.endsWith(".md")).length, 0);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// abortRun — queued run (has meta with status "queued")
+// abortRun — queued run (admitted, has meta with status "queued")
 
 test("abortRun archives a queued run (meta status queued)", async () => {
   await withSupervisor(async (supervisor, paths) => {
     const repo = fakeRepo();
     const store = SqliteStoreAdapter.create(paths, repo, systemClock);
 
-    const runId = "queued-with-meta";
+    const runId = "20260101-000000-queued-meta";
     const packet = makeTestPacket();
-    writeFileSyncSync(join(paths.queueDir, `${runId}.md`), packet);
+    store.admitQueue(runId, packet);
 
-    store.writeMeta(makeTestMeta({
-      runId,
-      status: "queued",
-      queuedAt: systemClock.nowIso(),
-      updatedAt: systemClock.nowIso(),
-    }));
+    ok(store.readMetaIfExists(runId), "admitQueue should have written meta");
+    ok(store.listQueue().some(q => q.runId === runId), "run should be in the queue");
 
     // No exception means success.
     supervisor.abortRun(runId);
 
-    // Queue file should be moved to rejectedDir.
-    equal(readdirSync(paths.queueDir).filter(f => f.endsWith(".md")).length, 0);
+    // Run should no longer be in the queue (status flipped to aborted).
+    equal(store.listQueue().some(q => q.runId === runId), false);
   });
 });
 
@@ -354,19 +325,19 @@ test("readEventsSince returns projected events from the journal", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// rejectRun — queued run (no meta) — archives via queue check
+// rejectRun — queued run — archives via queue check
 
-test("rejectRun archives a queued run found in the queue (no meta)", async () => {
+test("rejectRun archives a queued run (admitted)", async () => {
   await withSupervisor(async (supervisor, paths) => {
-    const runId = "reject-queued";
-    writeFileSyncSync(join(paths.queueDir, `${runId}.md`), makeTestPacket());
+    const runId = "20260101-000100-reject-queued";
+    const store = createStore(paths);
+    store.admitQueue(runId, makeTestPacket());
 
-    equal(readdirSync(paths.queueDir).filter(f => f.endsWith(".md")).length, 1);
-    equal(createStore(paths).readMetaIfExists(runId), undefined);
+    ok(store.listQueue().some(q => q.runId === runId), "run should be in the queue");
 
     supervisor.rejectRun(runId, "not needed");
 
-    equal(readdirSync(paths.queueDir).filter(f => f.endsWith(".md")).length, 0);
+    equal(store.listQueue().some(q => q.runId === runId), false);
   });
 });
 

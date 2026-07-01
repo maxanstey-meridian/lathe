@@ -1,6 +1,5 @@
 import { equal, strictEqual, ok, match, rejects } from "node:assert";
-import { readFileSync, existsSync } from "node:fs";
-import { mkdtemp, writeFile, mkdir, rm, readdir } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -8,10 +7,10 @@ import { test } from "node:test";
 import type { Clock } from "../src/application/ports/clock.js";
 import type { Repo } from "../src/application/ports/repo.js";
 import type { ConvergenceLogEntry } from "../src/application/ports/store.js";
+import type { Store } from "../src/application/ports/store.js";
 import { makePaths } from "../src/config/paths.js";
 import type { Packet } from "../src/domain/packet.js";
 import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
-import { StoreAdapter } from "../src/infrastructure/store.js";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -136,7 +135,7 @@ const cleanTemp = async (dir: string) => {
 test("store: meta round-trip", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-meta-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   const meta = {
     runId: "20260101-000000-meta",
     status: "queued" as const,
@@ -157,7 +156,7 @@ test("store: meta round-trip", async () => {
 
 test("store: readMetaIfExists returns undefined for absent run", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-meta-if-"));
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
   equal(store.readMetaIfExists("20990101-000000-absent"), undefined);
   await cleanTemp(tmp);
 });
@@ -165,7 +164,7 @@ test("store: readMetaIfExists returns undefined for absent run", async () => {
 test("store: listRunIds returns sorted ids", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-list-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   strictEqual(store.listRunIds().length, 0);
   const meta1 = {
     runId: "20260101-000000-z",
@@ -196,21 +195,13 @@ test("store: listRunIds returns sorted ids", async () => {
   await cleanTemp(tmp);
 });
 
-test("store: listRunIds excludes dirs without meta", async () => {
-  const tmp = await mkdtemp(join(tmpdir(), "store-list-x-"));
-  await mkdir(join(tmp, "20260101-000000-no-meta"), { recursive: true });
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
-  strictEqual(store.listRunIds().length, 0);
-  await cleanTemp(tmp);
-});
-
 // ---------------------------------------------------------------------------
 // Outcome ledger
 
 test("store: initialLedger creates from packet outcomes", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-ledger-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   const packet = makeTestPacket();
   const ledger = store.initialLedger(packet);
   equal(ledger.runId, "20260101-000000-test");
@@ -223,7 +214,7 @@ test("store: initialLedger creates from packet outcomes", async () => {
 test("store: ledger round-trip", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-ledger2-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   const ledger = {
     runId: "20260101-000000-test",
     outcomes: [
@@ -251,7 +242,7 @@ test("store: ledger round-trip", async () => {
 test("store: review state round-trip", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-review-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   const initial = store.initialReviewState("20260101-000000-test");
   equal(initial.runId, "20260101-000000-test");
   strictEqual(initial.obligations.length, 0);
@@ -269,7 +260,7 @@ test("store: review state round-trip", async () => {
 test("store: decisions append and read", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-dec-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   const d1 = {
     timestamp: "2026-01-01T00:00:00.000Z",
     source: "daddy" as const,
@@ -304,7 +295,7 @@ test("store: decisions append and read", async () => {
 test("store: checkpoints", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-ckp-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   equal(store.nextCheckpointNumber("20260101-000000-test"), 1);
   const c1 = {
     number: 1,
@@ -336,7 +327,7 @@ test("store: checkpoints", async () => {
 test("store: gate state round-trip", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-gate-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   const state = {
     runId: "20260101-000000-test",
     phase: { phase: "cleared" } as const,
@@ -359,7 +350,7 @@ test("store: gate state round-trip", async () => {
 test("store: report read/write", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-rep-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   const report = {
     status: "ready_for_review" as const,
     summary: "done",
@@ -379,7 +370,7 @@ test("store: report read/write", async () => {
 
 test("store: nits read/write", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-nits-"));
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
   store.writeNits("20260101-000000-test", "# Nits\n\nnone");
   equal(store.readNits("20260101-000000-test"), "# Nits\n\nnone");
   equal(store.readNits("nonexistent"), "");
@@ -391,7 +382,7 @@ test("store: nits read/write", async () => {
 
 test("store: convergence round-trip", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-conv-"));
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
   const entry = makeValidConvergenceEntry();
   store.appendConvergence(entry.runId, entry);
   const entries = store.readConvergence(entry.runId);
@@ -402,24 +393,13 @@ test("store: convergence round-trip", async () => {
   await cleanTemp(tmp);
 });
 
-test("store: convergence rejects bad schema", async () => {
-  const tmp = await mkdtemp(join(tmpdir(), "store-conv-bad"));
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
-  // Override primary to a non-object (string) which will fail the SuperReview schema.
-  const reallyBad = makeValidConvergenceEntry({ primary: "not-a-review" as any });
-  await rejects(async () => store.appendConvergence("20260101-000000-test", reallyBad), {
-    message: /refusing to append/,
-  });
-  await cleanTemp(tmp);
-});
-
 // ---------------------------------------------------------------------------
 // Active run
 
 test("store: active run lifecycle", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-active-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   equal(store.readActiveRun(), undefined);
   const run = {
     runId: "20260101-000000-test",
@@ -440,7 +420,7 @@ test("store: active run lifecycle", async () => {
 test("store: active convergence lifecycle", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-active-convergence-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   equal(store.readActiveConvergence(), undefined);
   const convergence = {
     runId: "20260101-000000-test",
@@ -461,7 +441,7 @@ test("store: active convergence lifecycle", async () => {
 test("store: campaign round-trip", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-camp-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   equal(store.readCampaign("test-campaign"), undefined);
   const campaign = {
     campaignId: "test-campaign",
@@ -485,14 +465,14 @@ test("store: campaign round-trip", async () => {
 
 test("store: listQueue empty", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-qlist-"));
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
   strictEqual(store.listQueue().length, 0);
   await cleanTemp(tmp);
 });
 
 test("store: listQueue returns fresh packets", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-qlist2-"));
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
   const packet1 = `---
 repo: /tmp/repo
 base: main
@@ -521,9 +501,8 @@ verification:
   - command: echo ok
 ---
 `;
-  await mkdir(join(tmp, "queue"), { recursive: true });
-  await writeFile(join(tmp, "queue", "20260101-000000-b.md"), packet2);
-  await writeFile(join(tmp, "queue", "20260101-000000-a.md"), packet1);
+  store.admitQueue("20260101-000000-b", packet2);
+  store.admitQueue("20260101-000000-a", packet1);
   const entries = store.listQueue();
   strictEqual(entries.length, 2);
   equal(entries[0].runId, "20260101-000000-a");
@@ -531,10 +510,10 @@ verification:
   await cleanTemp(tmp);
 });
 
-test("store: listQueue requeued runs come before fresh", async () => {
+test("store: listQueue returns all queued runs in lexical order", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-qlist3-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   // Create a run dir with meta.status = "queued"
   const runId = "20260101-000000-requeued";
   const meta = {
@@ -548,8 +527,7 @@ test("store: listQueue requeued runs come before fresh", async () => {
     updatedAt: clock.nowIso(),
   };
   store.writeMeta(meta);
-  await mkdir(join(tmp, "queue"), { recursive: true });
-  // Write a fresh packet too
+  // Admit a fresh packet too
   const packet = `---
 repo: /tmp/repo
 base: main
@@ -564,12 +542,13 @@ verification:
   - command: echo ok
 ---
 `;
-  await writeFile(join(tmp, "queue", "20260101-000000-fresh.md"), packet);
+  store.admitQueue("20260101-000000-fresh", packet);
   const entries = store.listQueue();
   strictEqual(entries.length, 2);
-  equal(entries[0].runId, runId);
+  // Lexical order: 'f' < 'r'
+  equal(entries[0].runId, "20260101-000000-fresh");
   ok(entries[0].admittedAt);
-  equal(entries[1].runId, "20260101-000000-fresh");
+  equal(entries[1].runId, runId);
   await cleanTemp(tmp);
 });
 
@@ -579,7 +558,7 @@ verification:
 test("store: admitQueue rejects packet with no repo in frontmatter", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-adm-no-repo-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   const packet = `---
 base: main
 compare_commit: main
@@ -594,16 +573,12 @@ verification:
 ---
 `;
   store.admitQueue("20260101-000000-test", packet);
-  // Should be archived with .problems.txt sidecar
-  ok(existsSync(join(tmp, "rejected", "20260101-000000-test.md")), "archived packet should exist");
-  const problems = readFileSync(
-    join(tmp, "rejected", "20260101-000000-test.md.problems.txt"),
-    "utf-8",
-  );
-  match(problems, /no repo/);
+  // Should be archived in the rejected table
+  const rejected = store.readRejected("20260101-000000-test");
+  ok(rejected, "archived packet should exist");
+  match(rejected!.problems ?? "", /no repo/);
   // Nothing in queue
-  const queueFiles = await readdir(join(tmp, "queue"));
-  strictEqual(queueFiles.length, 0);
+  strictEqual(store.listQueue().length, 0);
   await cleanTemp(tmp);
 });
 
@@ -611,7 +586,7 @@ test("store: admitQueue with explicit base — headBranch NOT called", async () 
   const tmp = await mkdtemp(join(tmpdir(), "store-adm-explicit-"));
   const clock = fixedClock();
   const repo = fakeRepo({ headBranch: "develop", branchExists: true });
-  const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
   const packet = `---
 repo: ${tmp}/test-repo
 base: stable-branch
@@ -628,9 +603,7 @@ verification:
 `;
   store.admitQueue("20260101-000000-test", packet);
   strictEqual(repo.headBranchCallCount, 0, "headBranch should not be called when base is explicit");
-  const queueFiles = await readdir(join(tmp, "queue"));
-  strictEqual(queueFiles.length, 1);
-  const admittedRaw = readFileSync(join(tmp, "queue", "20260101-000000-test.md"), "utf-8");
+  const admittedRaw = store.readQueuePacket("20260101-000000-test");
   match(admittedRaw, /base: stable-branch/);
   await cleanTemp(tmp);
 });
@@ -639,7 +612,7 @@ test("store: admitQueue without base — headBranch called and stamped", async (
   const tmp = await mkdtemp(join(tmpdir(), "store-adm-nobase-"));
   const clock = fixedClock();
   const repo = fakeRepo({ headBranch: "develop", branchExists: true });
-  const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
   const packet = `---
 repo: ${tmp}/test-repo
 compare_commit: main
@@ -655,9 +628,7 @@ verification:
 `;
   store.admitQueue("20260101-000000-test", packet);
   strictEqual(repo.headBranchCallCount, 1, "headBranch should be called when base is absent");
-  const queueFiles = await readdir(join(tmp, "queue"));
-  strictEqual(queueFiles.length, 1);
-  const admittedRaw = readFileSync(join(tmp, "queue", "20260101-000000-test.md"), "utf-8");
+  const admittedRaw = store.readQueuePacket("20260101-000000-test");
   match(admittedRaw, /base: develop/);
   await cleanTemp(tmp);
 });
@@ -666,7 +637,7 @@ test("store: admitQueue rejects when headBranch throws", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-adm-throw-"));
   const clock = fixedClock();
   const repo = fakeRepo({ headBranchThrows: true });
-  const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
   const packet = `---
 repo: /tmp/nowhere
 compare_commit: main
@@ -682,19 +653,16 @@ verification:
 `;
   store.admitQueue("20260101-000000-test", packet);
   strictEqual(repo.headBranchCallCount, 1, "headBranch should have been called");
-  ok(existsSync(join(tmp, "rejected", "20260101-000000-test.md")), "archived packet should exist");
-  const problems = readFileSync(
-    join(tmp, "rejected", "20260101-000000-test.md.problems.txt"),
-    "utf-8",
-  );
-  match(problems, /headBranch failed/);
+  const rejected = store.readRejected("20260101-000000-test");
+  ok(rejected, "archived packet should exist");
+  match(rejected!.problems ?? "", /headBranch failed/);
   await cleanTemp(tmp);
 });
 
 test("store: admitQueue rejects invalid packet shape", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-adm-badfm-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   const packet = `---
 repo: /tmp/test-repo
 base: main
@@ -707,12 +675,9 @@ verification:
 ---
 `;
   store.admitQueue("20260101-000000-test", packet);
-  ok(existsSync(join(tmp, "rejected", "20260101-000000-test.md")), "archived packet should exist");
-  const problems = readFileSync(
-    join(tmp, "rejected", "20260101-000000-test.md.problems.txt"),
-    "utf-8",
-  );
-  match(problems, /outcomes/);
+  const rejected = store.readRejected("20260101-000000-test");
+  ok(rejected, "archived packet should exist");
+  match(rejected!.problems ?? "", /outcomes/);
   await cleanTemp(tmp);
 });
 
@@ -720,7 +685,7 @@ test("store: admitQueue rejects when repoValid returns false", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-adm-repoval-"));
   const clock = fixedClock();
   const repo = fakeRepo({ repoValid: false });
-  const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
   const packet = `---
 repo: ${tmp}/test-repo
 base: main
@@ -736,21 +701,17 @@ verification:
 ---
 `;
   store.admitQueue("20260101-000000-test", packet);
-  ok(existsSync(join(tmp, "rejected", "20260101-000000-test.md")), "archived packet should exist");
-  const problems = readFileSync(
-    join(tmp, "rejected", "20260101-000000-test.md.problems.txt"),
-    "utf-8",
-  );
-  match(problems, /not a valid git repository/);
-  const queueFiles = await readdir(join(tmp, "queue"));
-  strictEqual(queueFiles.length, 0);
+  const rejected = store.readRejected("20260101-000000-test");
+  ok(rejected, "archived packet should exist");
+  match(rejected!.problems ?? "", /not a valid git repository/);
+  strictEqual(store.listQueue().length, 0);
   await cleanTemp(tmp);
 });
 
-test("store: archiveQueue moves packet to rejected", async () => {
+test("store: archiveQueue marks run aborted in SQLite", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-arch-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   const packet = `---
 repo: /tmp/test-repo
 base: main
@@ -765,17 +726,25 @@ verification:
   - command: echo ok
 ---
 `;
-  await mkdir(join(tmp, "queue"), { recursive: true });
-  await writeFile(join(tmp, "queue", "20260101-000000-test.md"), packet);
+  store.admitQueue("20260101-000000-test", packet);
+  ok(
+    store.listQueue().some((q) => q.runId === "20260101-000000-test"),
+    "should be queued after admit",
+  );
   store.archiveQueue("20260101-000000-test");
-  strictEqual((await readdir(join(tmp, "queue"))).length, 0);
-  ok(existsSync(join(tmp, "rejected", "20260101-000000-test.md")), "should be in rejected/");
+  equal(
+    store.listQueue().some((q) => q.runId === "20260101-000000-test"),
+    false,
+    "should not be queued after archive",
+  );
+  const meta = store.readMetaIfExists("20260101-000000-test");
+  equal(meta?.status, "aborted");
   await cleanTemp(tmp);
 });
 
 test("store: archiveQueue is no-op when file absent", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-arch-noop-"));
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
   store.archiveQueue("nonexistent");
   await cleanTemp(tmp);
 });
@@ -785,7 +754,7 @@ test("store: archiveQueue is no-op when file absent", async () => {
 
 test("store: staged write/read/list/remove", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-staged-"));
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
   const packet = `---
 repo: /tmp/test-repo
 compare_commit: main
@@ -821,7 +790,7 @@ verification:
 test("store: journal append and read", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-jrnl-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   const event = {
     at: clock.nowIso(),
     event: "run_started" as const,
@@ -836,44 +805,13 @@ test("store: journal append and read", async () => {
   await cleanTemp(tmp);
 });
 
-test("store: journal skips invalid lines (J3)", async () => {
-  const tmp = await mkdtemp(join(tmpdir(), "store-jrnl-bad-"));
-  const journalPath = join(tmp, "runs/20260101-000000-test/journal.jsonl");
-  await mkdir(join(tmp, "runs/20260101-000000-test"), { recursive: true });
-  // Plant a valid line, then a bad line, then another valid line
-  const valid1 =
-    JSON.stringify({
-      at: "2026-01-01T00:00:00.000Z",
-      event: "run_started",
-      runId: "20260101-000000-test",
-      attempt: 1,
-    }) + "\n";
-  const badLine = "this is not json\n";
-  const valid2 =
-    JSON.stringify({
-      at: "2026-01-01T00:00:01.000Z",
-      event: "turn_ended",
-      messageId: "m1",
-      tokens: { input: 100, output: 50, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-      contextTokens: 150,
-      text: "hello",
-    }) + "\n";
-  await writeFile(journalPath, valid1 + badLine + valid2);
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
-  const events = store.readJournal("20260101-000000-test");
-  strictEqual(events.length, 2);
-  equal(events[0].event, "run_started");
-  equal(events[1].event, "turn_ended");
-  await cleanTemp(tmp);
-});
-
 // ---------------------------------------------------------------------------
-// Parity: contract tests over both adapters
+// Parity: contract tests over the SQLite adapter
 // ---------------------------------------------------------------------------
 
 const runContractTests = async (
   label: string,
-  createStore: (tmp: string, repo: Repo, clock: Clock) => typeof StoreAdapter,
+  createStore: (tmp: string, repo: Repo, clock: Clock) => Store,
 ) => {
   // Meta round-trip
   {
@@ -1191,82 +1129,15 @@ verification:
     store.writeMeta(zMeta);
     store.writeMeta(aMeta);
     store.writeMeta(bMeta);
-    await mkdir(join(tmp, "queue"), { recursive: true });
-    // Write a fresh packet (not consumed into a run dir)
-    await writeFile(join(tmp, "queue", "20260101-000000-fresh.md"), packet);
+    // Admit a fresh packet (goes through validation, writes meta + live packet)
+    store.admitQueue("20260101-000000-fresh", packet);
     const entries = store.listQueue();
     strictEqual(entries.length, 4);
-    // Requeued runs come first, in lexical order: a, b, z
+    // All queued runs in lexical order: a, b, fresh, z
     equal(entries[0].runId, "20260101-000000-a");
     equal(entries[1].runId, "20260101-000000-b");
-    equal(entries[2].runId, "20260101-000000-z");
-    // Fresh packets come after requeued
-    equal(entries[3].runId, "20260101-000000-fresh");
-    await cleanTemp(tmp);
-  }
-
-  // Queue — fresh packets sort by lifecycle priority, not just filename
-  {
-    const tmp = await mkdtemp(join(tmpdir(), `${label}-qlist-priority-`));
-    const store = createStore(tmp, fakeRepo(), fixedClock());
-    await mkdir(join(tmp, "queue"), { recursive: true });
-
-    const unrelated = `---
-repo: /tmp/test-repo
-base: main
-compare_commit: main
-summary: unrelated packet
-outcomes:
-  - id: unrelated
-    description: unrelated outcome
-expected_surface:
-  - src/index.ts
-verification:
-  - command: echo ok
----
-`;
-    const chainChild = `---
-repo: /tmp/test-repo
-base: main
-compare_commit: main
-parent_run_id: 20260101-000000-parent
-summary: dependent chain packet
-outcomes:
-  - id: chain
-    description: chain outcome
-expected_surface:
-  - src/index.ts
-verification:
-  - command: echo ok
----
-`;
-    const repair = `---
-repo: /tmp/test-repo
-base: meridian/20260101-000000-parent
-compare_commit: main
-campaign_id: 20260101-000000-parent
-parent_run_id: 20260101-000000-parent
-pass: 2
-summary: repair packet
-outcomes:
-  - id: repair
-    description: repair outcome
-expected_surface:
-  - src/index.ts
-verification:
-  - command: echo ok
----
-`;
-
-    await writeFile(join(tmp, "queue", "20260101-000000-a-unrelated.md"), unrelated);
-    await writeFile(join(tmp, "queue", "20260101-000000-b-chain.md"), chainChild);
-    await writeFile(join(tmp, "queue", "20260101-000000-c-repair.md"), repair);
-
-    const entries = store.listQueue();
-    strictEqual(entries.length, 3);
-    equal(entries[0].runId, "20260101-000000-c-repair");
-    equal(entries[1].runId, "20260101-000000-b-chain");
-    equal(entries[2].runId, "20260101-000000-a-unrelated");
+    equal(entries[2].runId, "20260101-000000-fresh");
+    equal(entries[3].runId, "20260101-000000-z");
     await cleanTemp(tmp);
   }
 
@@ -1290,8 +1161,9 @@ verification:
 ---
 `;
     store.admitQueue("20260101-000000-test", packet);
-    const queueFiles = await readdir(join(tmp, "queue"));
-    strictEqual(queueFiles.length, 1);
+    const entries = store.listQueue();
+    strictEqual(entries.length, 1);
+    equal(entries[0].runId, "20260101-000000-test");
     await cleanTemp(tmp);
   }
 
@@ -1314,11 +1186,15 @@ verification:
   - command: echo ok
 ---
 `;
-    await mkdir(join(tmp, "queue"), { recursive: true });
-    await writeFile(join(tmp, "queue", "20260101-000000-test.md"), packet);
+    store.admitQueue("20260101-000000-test", packet);
+    ok(store.listQueue().some((q) => q.runId === "20260101-000000-test"));
     store.archiveQueue("20260101-000000-test");
-    strictEqual((await readdir(join(tmp, "queue"))).length, 0);
-    ok(existsSync(join(tmp, "rejected", "20260101-000000-test.md")));
+    equal(
+      store.listQueue().some((q) => q.runId === "20260101-000000-test"),
+      false,
+    );
+    const meta = store.readMetaIfExists("20260101-000000-test");
+    equal(meta?.status, "aborted");
     await cleanTemp(tmp);
   }
 
@@ -1414,14 +1290,7 @@ verification:
   }
 };
 
-// Run contract tests against file adapter
-test("store: parity — file adapter", async () => {
-  await runContractTests("file", (tmp, repo, clock) =>
-    StoreAdapter.create(makePaths(tmp), repo, clock),
-  );
-});
-
-// Run contract tests against SQLite adapter
+// Run contract tests against the SQLite adapter
 test("store: parity — sqlite adapter", async () => {
   await runContractTests("sqlite", (tmp, repo, clock) =>
     SqliteStoreAdapter.create(makePaths(tmp), repo, clock),

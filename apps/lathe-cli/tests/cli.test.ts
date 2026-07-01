@@ -1,5 +1,5 @@
 import { deepEqual, equal, ok } from "node:assert";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,10 @@ import {
   cmdAnswer,
   cmdEnqueue,
   cmdReject,
+  cmdGet,
+  cmdQueue,
+  cmdReview,
+  cmdStatus,
   cmdTail,
   runCommand,
   type CliEnv,
@@ -73,6 +77,32 @@ const summary = (runId: string, status: string) => ({
   isChainTip: true,
   startedAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
+});
+
+const statusSnapshot = () => ({
+  activeRun: {
+    runId: "active-run",
+    outcomes: "1/2 done, 1 in progress",
+    gateLatched: null,
+    recentEvents: [{ at: "2026-01-01T12:34:56Z", event: "thinking" }],
+  },
+  queued: [{ runId: "queued-run" }],
+  parked: [],
+  campaigns: [],
+  staged: [],
+});
+
+const detail = (runId: string) => ({
+  ...summary(runId, "paused"),
+  base: "main",
+  branch: `meridian/${runId}`,
+  worktreePath: `/tmp/${runId}`,
+  parentRunId: null,
+  expectedSurface: [],
+  lastVerdict: null,
+  outcomes: "0/1 done, 1 blocked",
+  blockedReason: "human_decision",
+  blockedQuestion: "Which target branch?",
 });
 
 const withTempFile = (fn: (path: string) => Promise<void>): Promise<void> => {
@@ -256,102 +286,88 @@ test("checkDaemon: true on 200, false on a non-2xx, false when fetch rejects", a
   equal(await checkDaemon(refused), false);
 });
 
+test("cmdStatus: reads status through the daemon", async () => {
+  const h = harness((req) => {
+    if (new URL(req.url).pathname === "/status") {
+      return jsonResponse(200, statusSnapshot());
+    }
+    return jsonResponse(200, { models: {}, thresholds: {} });
+  });
+  const code = await cmdStatus(h.env);
+  equal(code, 0);
+  ok(h.paths.includes("/status"), "hit GET /status");
+  ok(h.logs.some((line) => line.includes("ACTIVE: active-run")), h.logs.join("|"));
+  ok(h.logs.some((line) => line.includes("queued: queued-run")), h.logs.join("|"));
+});
+
+test("cmdReview: reads review through the daemon", async () => {
+  const h = harness((req) => {
+    if (new URL(req.url).pathname === "/review") {
+      return jsonResponse(200, {
+        runs: [{
+          runId: "ready-run",
+          status: "ready_for_review",
+          outcomes: "2/2 done",
+          branch: "meridian/ready-run",
+          repo: "/repo",
+          base: "main",
+          blockedQuestion: null,
+        }],
+      });
+    }
+    return jsonResponse(200, { models: {}, thresholds: {} });
+  });
+  const code = await cmdReview(h.env);
+  equal(code, 0);
+  ok(h.paths.includes("/review"), "hit GET /review");
+  ok(h.logs.some((line) => line.includes("ready-run")), h.logs.join("|"));
+});
+
+test("cmdQueue: lists queue through the daemon", async () => {
+  const h = harness((req) => {
+    if (new URL(req.url).pathname === "/status") {
+      return jsonResponse(200, statusSnapshot());
+    }
+    return jsonResponse(200, { models: {}, thresholds: {} });
+  });
+  const code = await cmdQueue(h.env, []);
+  equal(code, 0);
+  ok(h.paths.includes("/status"), "queue list hit GET /status");
+  ok(h.logs.some((line) => line.includes("1. queued-run")), h.logs.join("|"));
+});
+
+test("cmdGet: reads run details through the daemon", async () => {
+  const h = harness((req) => {
+    if (new URL(req.url).pathname === "/runs/run-detail") {
+      return jsonResponse(200, detail("run-detail"));
+    }
+    return jsonResponse(200, { models: {}, thresholds: {} });
+  });
+  const code = await cmdGet(h.env, "run-detail");
+  equal(code, 0);
+  ok(h.paths.includes("/runs/run-detail"), "hit GET /runs/{runId}");
+  ok(h.logs.some((line) => line.includes("run: run-detail")), h.logs.join("|"));
+  ok(h.logs.some((line) => line.includes("outcomes: 0/1 done")), h.logs.join("|"));
+  ok(h.logs.some((line) => line.includes("question: Which target branch?")), h.logs.join("|"));
+});
+
+test("cmdGet: a 404 reports the run as not found", async () => {
+  const h = harness((req) => {
+    if (new URL(req.url).pathname === "/runs/missing") {
+      return jsonResponse(404, { code: "not_found", message: "missing" });
+    }
+    return jsonResponse(200, { models: {}, thresholds: {} });
+  });
+  const code = await cmdGet(h.env, "missing");
+  equal(code, 1);
+  ok(h.errs.some((line) => line.includes("run missing not found")), h.errs.join("|"));
+});
+
 test("runCommand: --help prints usage and exits 0", async () => {
   const h = harness(() => jsonResponse(200, { models: {}, thresholds: {} }));
   const code = await runCommand(h.env, "--help", []);
   equal(code, 0);
   ok(h.logs.some((line) => line.includes("lathe — sequential overnight executor")), h.logs.join("|"));
-});
-
-test("cmdTail: no-arg tail waits for the next active run", async () => {
-  const home = mkdtempSync(join(tmpdir(), "lathe-home-"));
-  const stateRoot = join(home, "state");
-  const configDir = join(home, ".meridian", "v3");
-  const configFile = join(configDir, "config.json");
-  mkdirSync(configDir, { recursive: true });
-  mkdirSync(stateRoot, { recursive: true });
-  writeFileSync(configFile, JSON.stringify({ stateRoot }));
-
-  const originalHome = process.env.HOME;
-  const originalExit = process.exit;
-  const originalOn = process.on.bind(process);
-  const originalSetInterval = globalThis.setInterval.bind(globalThis);
-  const originalClearInterval = globalThis.clearInterval.bind(globalThis);
-  const logs: string[] = [];
-  let sigintHandler: (() => void | Promise<void>) | undefined;
-
-  class TailExit extends Error {
-    constructor(readonly code: number) {
-      super(`exit(${code})`);
-      this.name = "TailExit";
-    }
-  }
-
-  try {
-    process.env.HOME = home;
-    process.exit = ((code = 0) => {
-      throw new TailExit(code);
-    }) as never;
-    process.on = ((event: string, listener: never) => {
-      if (event === "SIGINT") {
-        sigintHandler = listener as () => void | Promise<void>;
-        return process;
-      }
-      return originalOn(event as NodeJS.Signals, listener as never);
-    }) as typeof process.on;
-    globalThis.setInterval = ((handler: TimerHandler, _timeout?: number, ...args: never[]) =>
-      originalSetInterval(handler, 10, ...args)) as typeof setInterval;
-    globalThis.clearInterval = ((handle: number | NodeJS.Timeout | undefined) =>
-      originalClearInterval(handle)) as typeof clearInterval;
-
-    const { cmdTail } = await import("../src/commands.js");
-    const { activeRunFile } = makePaths(stateRoot);
-
-    cmdTail(
-      {
-        client: stubClient(() => jsonResponse(200, { models: {}, thresholds: {} })),
-        isDaemonUp: () => Promise.resolve(true),
-        log: (line) => logs.push(line),
-        err: (line) => logs.push(`ERR:${line}`),
-      },
-      [],
-    );
-
-    ok(logs.some((line) => line.includes("waiting for one to start")), logs.join("|"));
-
-    writeFileSync(
-      activeRunFile,
-      JSON.stringify({
-        runId: "20260101-000000-waiting",
-        runDir: join(stateRoot, "runs", "20260101-000000-waiting"),
-        worktree: join(stateRoot, "worktree", "20260101-000000-waiting"),
-        babySessionId: "baby-1",
-        startedAt: "2026-01-01T00:00:00.000Z",
-      }),
-    );
-
-    await new Promise((resolve) => setTimeout(resolve, 40));
-
-    ok(logs.some((line) => line.includes("became active — tailing")), logs.join("|"));
-    ok(
-      logs.some((line) => line.includes(`run 20260101-000000-waiting has not started — waiting for its journal`)),
-      logs.join("|"),
-    );
-
-    try {
-      await sigintHandler?.();
-    } catch (err) {
-      if (!(err instanceof TailExit)) throw err;
-      equal(err.code, 0);
-    }
-  } finally {
-    process.env.HOME = originalHome;
-    process.exit = originalExit;
-    process.on = originalOn;
-    globalThis.setInterval = originalSetInterval;
-    globalThis.clearInterval = originalClearInterval;
-    rmSync(home, { recursive: true, force: true });
-  }
 });
 
 // ---------------------------------------------------------------------------
@@ -549,6 +565,9 @@ const fakeSupervisor = (order: string[], config = ConfigSchema.parse({})): Super
   isChainTip: () => true,
   lastVerdict: () => null,
   listStaged: () => [],
+  outcomes: () => "",
+  getStatus: () => ({ activeRun: null, queued: [], parked: [], campaigns: [], staged: [] }),
+  getReview: () => ({ runs: [] }),
 });
 
 test("startDaemon: shutdown fires server.close → supervisor.stop → releaseLock → exit(0)", async () => {

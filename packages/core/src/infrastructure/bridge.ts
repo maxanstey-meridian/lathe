@@ -33,7 +33,6 @@ import {
 import { JournalEvent } from "../domain/journal.js";
 import { isTestPath } from "../domain/report.js";
 import type { QuestionType } from "../domain/review.js";
-import { nowIso } from "./fsio.js";
 import { readDiffStats } from "./git.js";
 import { handleWriteHandoff, handleVerifyHandoff } from "./opencode/baby-tools.js";
 
@@ -92,7 +91,7 @@ type Without<T, K extends keyof T> = {
 const journal = (ctx: ActiveRunRef, event: Without<JournalEvent, "at" | "turn">): void => {
   ctx.store.appendJournal(ctx.packet.runId, {
     ...event,
-    at: nowIso(),
+    at: new Date().toISOString(),
     turn: (event as Without<JournalEvent, "at" | "turn"> & { turn?: number }).turn ?? ctx.turn,
   } as JournalEvent);
 };
@@ -104,9 +103,10 @@ const journal = (ctx: ActiveRunRef, event: Without<JournalEvent, "at" | "turn">)
 const clearGate = (ctx: ActiveRunRef): void => {
   const gateState = ctx.store.readGateState(ctx.packet.runId);
   const baselineDiffStats = readDiffStats(ctx.worktree);
-  const cleared = clearedGateState(gateState, baselineDiffStats, nowIso());
+  const now = new Date().toISOString();
+  const cleared = clearedGateState(gateState, baselineDiffStats, now);
   ctx.store.writeGateState(ctx.packet.runId, cleared);
-  journal(ctx, { event: "gate_cleared", decisionAt: nowIso() });
+  journal(ctx, { event: "gate_cleared", decisionAt: now });
 };
 
 // ---------------------------------------------------------------------------
@@ -425,7 +425,7 @@ export const handleUpdateOutcomes = async (ref: RunRef, input: UpdateOutcomesInp
     if (update.nextAction !== undefined) {
       entry.nextAction = update.nextAction;
     }
-    entry.updatedAt = nowIso();
+    entry.updatedAt = new Date().toISOString();
   }
 
   if (problems.length > 0) {
@@ -482,7 +482,7 @@ export const handleWriteCheckpoint = async (ref: RunRef, input: WriteCheckpointI
       .map((path) => ({ path })),
     filesInspected: [],
     uncertainties: input.uncertainties ?? [],
-    writtenAt: nowIso(),
+    writtenAt: new Date().toISOString(),
   } as Checkpoint;
 
   const problems = checkpointProblems(checkpoint, ctx.packet);

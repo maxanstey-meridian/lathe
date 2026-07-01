@@ -2,12 +2,11 @@
 // Baby tools — write_handoff and verify_handoff (verify-handoff protocol)
 // ---------------------------------------------------------------------------
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { HandoffArtifact } from "../../domain/handoff.js";
 import { HandoffArtifact as HandoffArtifactSchema } from "../../domain/handoff.js";
 import type { RunRef } from "../bridge.js";
-import { writeAtomic, nowIso, readValidatedIfExists } from "../fsio.js";
 import { runVerify } from "./daddy-verify.js";
 
 // ---------------------------------------------------------------------------
@@ -79,7 +78,7 @@ export const handleWriteHandoff = async (ref: RunRef, input: WriteHandoffInput) 
   // Validate and construct the artifact.
   const artifact: HandoffArtifact = {
     runId,
-    timestamp: nowIso(),
+    timestamp: new Date().toISOString(),
     completedSteps: input.completedSteps.map((s) => ({
       description: s.description,
       files: s.files ?? [],
@@ -102,7 +101,9 @@ export const handleWriteHandoff = async (ref: RunRef, input: WriteHandoffInput) 
 
   // Write atomically: temp file + rename.
   try {
-    writeAtomic(handoffPath, JSON.stringify(validated.data, null, 2));
+    const tmp = `${handoffPath}.tmp`;
+    writeFileSync(tmp, JSON.stringify(validated.data, null, 2), "utf-8");
+    renameSync(tmp, handoffPath);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     return errorText(JSON.stringify({ error: `write_handoff failed to persist: ${detail}` }));
@@ -139,7 +140,13 @@ export const handleVerifyHandoff = async (ref: RunRef, input: VerifyHandoffInput
   const handoffPath = join(runDir, "handoff.json");
   let handoff: HandoffArtifact;
   try {
-    const parsed = readValidatedIfExists(handoffPath, HandoffArtifactSchema);
+    let parsed: HandoffArtifact | undefined;
+    if (existsSync(handoffPath)) {
+      const result = HandoffArtifactSchema.safeParse(
+        JSON.parse(readFileSync(handoffPath, "utf-8")),
+      );
+      parsed = result.success ? result.data : undefined;
+    }
     if (!parsed) {
       return errorText(
         JSON.stringify({

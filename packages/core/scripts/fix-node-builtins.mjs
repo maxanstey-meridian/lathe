@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -15,10 +15,14 @@ export const fixNodeBuiltins = (distDir = resolve(fileURLToPath(new URL("../dist
     throw new Error(`missing bundled output: ${bundlePath}`);
   }
 
-  const original = readFileSync(bundlePath, "utf8");
-  const rewritten = rewriteSpecifiers(original);
-  if (rewritten !== original) {
-    writeFileSync(bundlePath, rewritten);
+  for (const file of readdirSync(distDir)) {
+    if (!file.endsWith(".js")) continue;
+    const filePath = resolve(distDir, file);
+    const original = readFileSync(filePath, "utf8");
+    const rewritten = rewriteSpecifiers(original);
+    if (rewritten !== original) {
+      writeFileSync(filePath, rewritten);
+    }
   }
 };
 

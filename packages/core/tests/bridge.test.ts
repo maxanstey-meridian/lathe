@@ -1,8 +1,9 @@
 // Tests for the MCP bridge tool handlers (CONTRACT §9, §8 O2/O4).
-// Uses real StoreAdapter with temp dirs — matches store.test.ts pattern.
+// Uses real SqliteStoreAdapter with temp dirs — matches store.test.ts pattern.
 
 import { execSync } from "child_process";
 import { equal, strictEqual, ok, deepStrictEqual, match, rejects } from "node:assert";
+import { mkdirSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -21,7 +22,7 @@ import {
   startBridgeServer,
   listenBridge,
 } from "../src/infrastructure/bridge.js";
-import { StoreAdapter } from "../src/infrastructure/store.js";
+import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 
 // ===========================================================================
 // Test helpers
@@ -112,10 +113,11 @@ const makeRef = (overrides?: {
   stopTurn?: () => Promise<void>;
 }) => {
   const tmp = join(tmpdir(), `bridge-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  mkdirSync(tmp, { recursive: true });
   const clock = fixedClock();
   const packet = overrides?.packet ?? makeTestPacket();
   const paths = makePaths(tmp);
-  const store = StoreAdapter.create(paths, fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), clock);
   const ctx = {
     intents: [] as any[],
     pendingConsult: null,

@@ -183,6 +183,7 @@ const makeFakePorts = (
       clearActiveConvergence: () => {
         activeConvergence = undefined;
       },
+      readReport: () => "",
     } as unknown as Store,
     repo: {
       reviewableDiffAgainst: () => "diff",
@@ -1082,7 +1083,7 @@ test("convergeRun: escalate at the cap when ALREADY promoted → parks (no secon
   const thresholds = ports.config.thresholds as { maxPasses: number; promoteAtCap: boolean };
   thresholds.maxPasses = 1;
   thresholds.promoteAtCap = true;
-  // This run IS the promoted pass — its frozen packet carries promoted: true.
+  // This run IS the promoted pass — its live packet carries promoted: true.
   ports.store.readQueuePacket = () => PACKET_RAW.replace("pass: 1", "pass: 1\npromoted: true");
 
   const runner = convergeRun({
@@ -1167,7 +1168,8 @@ test("convergeRun: stop with meta already ready_for_review — no unnecessary wr
       admitQueue: () => {},
       appendConvergence: () => {},
       appendJournal: () => {},
-      writeNits: () => {},
+      writeNits: () => "",
+      readReport: () => "",
       readActiveConvergence: () => undefined,
       writeActiveConvergence: () => {},
       clearActiveConvergence: () => {},
@@ -1540,7 +1542,8 @@ test("convergeRun: records reviewerSessionId from the real adapter and preserves
       admitQueue: () => {},
       appendConvergence: () => {},
       appendJournal: () => {},
-      writeNits: () => {},
+      writeNits: () => "",
+      readReport: () => "",
       readActiveConvergence: () => undefined,
       writeActiveConvergence: () => {},
       clearActiveConvergence: () => {},

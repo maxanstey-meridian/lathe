@@ -148,8 +148,8 @@ export type Decision = z.infer<typeof Decision>;
 // ---------------------------------------------------------------------------
 // Run start decision — fresh vs resume (CONTRACT §3, §5 R10 sibling)
 //
-// Pure function, no I/O. The queue dir is the single live source of truth —
-// if a dev edits the packet between runs, the next run picks it up. Rules:
+// Pure function, no I/O. Session state decides fresh vs resume; packet content
+// is read separately from the live run packet. Rules:
 //   - no prior meta or no babySessionId → fresh (nothing to resume)
 //   - otherwise → resume (live session exists)
 // ---------------------------------------------------------------------------

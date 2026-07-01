@@ -1,32 +1,20 @@
 // SqliteStoreAdapter: durable SQLite IO behind the Store port.
 // Implements the Store port over node:sqlite DatabaseSync (WAL mode).
-// Blobs (report, nits, frozen packet), checkpoints, staged registry,
-// and queue packets stay file-backed via injected Paths — parity with
-// the file adapter's behaviour.
+// Structured state and non-packet artifacts live in SQLite. Packet markdown
+// remains the live editable run packet at paths.packetFile(runId).
 //
 // Constraints:
 // - Injected Ports: Paths (layout), Repo (git-backed admission), Clock.
 //   Never imports from src/config/.
 // - Synchronous only: node:sqlite DatabaseSync is sync.
 // - JSON-through-Zod: row payloads stored as JSON text, parsed through
-//   the EXACT same Zod schemas the file adapter uses.
-// - Clock-stamping happens BEFORE JSON.stringify, identical to StoreAdapter.
-// - PRAGMA user_version for schema versioning (no parallel table).
-// - Queue: file inbox stays external; listQueue scans queueDir for fresh
-//   packets + queries runs table for requeued (replicates StoreAdapter.listQueue).
-// - Staged: file-backed (paths.stagedDir + fsio writeAtomic), identical to StoreAdapter.
+//   the domain Zod schemas.
+// - Clock-stamping happens BEFORE JSON.stringify.
+// - PRAGMA user_version for schema versioning.
+// - Queue: unified into runs table — status = 'queued' IS the queue.
 
-import {
-  existsSync,
-  readFileSync,
-  mkdirSync,
-  readdirSync,
-  statSync,
-  unlinkSync,
-  renameSync,
-  rmSync,
-} from "node:fs";
-import { join, dirname, basename } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import type { Clock } from "../application/ports/clock.js";
@@ -59,14 +47,12 @@ import {
   stampBase,
   extractRepoFromYaml,
   extractBaseFromYaml,
-  freshQueuePriority,
 } from "../domain/packet.js";
 import { RunMeta as RunMetaSchema } from "../domain/run.js";
 import { ReviewState as ReviewStateSchema } from "../domain/run.js";
 import { Decision as DecisionSchema } from "../domain/run.js";
 import { ActiveRun as ActiveRunSchema } from "../domain/run.js";
 import { ActiveConvergence as ActiveConvergenceSchema } from "../domain/run.js";
-import { writeAtomic, writeValidated } from "../infrastructure/fsio.js";
 
 // ---------------------------------------------------------------------------
 // Convergence log entry schema — local, matching the port's ConvergenceLogEntry
@@ -121,29 +107,19 @@ const ConvergenceLogEntrySchema = z.union([
 ]);
 
 // ---------------------------------------------------------------------------
-// Archive helper — collision-safe with numeric suffix and .problems.txt sidecar
-
-const archivePacket = (paths: Paths, packetPath: string, problems?: string[]): string => {
-  mkdirSync(paths.rejectedDir, { recursive: true });
-  const base = basename(packetPath);
-  let dest = join(paths.rejectedDir, base);
-  for (let n = 1; existsSync(dest); n++) {
-    dest = join(paths.rejectedDir, base.replace(/\.md$/, `.${n}.md`));
-  }
-  renameSync(packetPath, dest);
-  if (problems && problems.length > 0) {
-    writeAtomic(`${dest}.problems.txt`, `${problems.join("\n")}\n`);
-  }
-  return dest;
-};
-
-// ---------------------------------------------------------------------------
 // SQLite helpers
 
 type JsonRow = Record<string, unknown>;
 
 const jsonParse = (value: string): JsonRow => JSON.parse(value);
 const jsonStringify = (value: unknown): string => JSON.stringify(value);
+
+const writeTextAtomic = (path: string, content: string): void => {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, content, "utf-8");
+  renameSync(tmp, path);
+};
 
 // ---------------------------------------------------------------------------
 // SqliteStoreAdapter
@@ -156,7 +132,7 @@ export class SqliteStoreAdapter implements Store {
     private readonly clock: Clock,
   ) {}
 
-  static create(paths: Paths, repo: Repo, clock: Clock): Store {
+  static create(paths: Paths, repo: Repo, clock: Clock): SqliteStoreAdapter {
     const db = new DatabaseSync(paths.dbFile);
 
     // WAL mode for concurrent reads during writes
@@ -170,7 +146,10 @@ export class SqliteStoreAdapter implements Store {
     const version = row?.user_version ?? 0;
     if (version === 0) {
       createSchema(db);
-      db.exec("PRAGMA user_version = 1;");
+      db.exec("PRAGMA user_version = 2;");
+    } else if (version === 1) {
+      migrateV1toV2(db);
+      db.exec("PRAGMA user_version = 2;");
     }
 
     return new SqliteStoreAdapter(db, paths, repo, clock);
@@ -206,6 +185,9 @@ export class SqliteStoreAdapter implements Store {
       ...meta,
       updatedAt: this.clock.nowIso(),
     };
+    // Ensure the run directory exists for live packet markdown, sandbox/worktree,
+    // and handoff runtime artifacts that still live on the filesystem.
+    mkdirSync(this.paths.runDir(meta.runId), { recursive: true });
     this.db
       .prepare("INSERT OR REPLACE INTO runs (run_id, meta) VALUES (?, ?)")
       .run(meta.runId, jsonStringify(stamped));
@@ -326,33 +308,35 @@ export class SqliteStoreAdapter implements Store {
   }
 
   // ---------------------------------------------------------------------------
-  // Report (markdown — prose, not schema-validated)
+  // Report (markdown — prose, stored as TEXT in SQLite)
 
   readReport(runId: string): string {
-    if (!existsSync(this.paths.reportFile(runId))) {
-      return "";
-    }
-    return readFileSync(this.paths.reportFile(runId), "utf-8");
+    const row = this.db.prepare("SELECT markdown FROM reports WHERE run_id = ?").get(runId) as
+      | { markdown: string }
+      | undefined;
+    return row?.markdown ?? "";
   }
 
   writeReport(runId: string, report: SubmitReport, markdown: string): void {
-    mkdirSync(dirname(this.paths.reportFile(runId)), { recursive: true });
-    writeAtomic(this.paths.reportFile(runId), markdown);
+    this.db
+      .prepare("INSERT OR REPLACE INTO reports (run_id, markdown) VALUES (?, ?)")
+      .run(runId, markdown);
   }
 
   // ---------------------------------------------------------------------------
-  // Nits (markdown — prose)
+  // Nits (markdown — prose, stored as TEXT in SQLite)
 
   readNits(runId: string): string {
-    if (!existsSync(this.paths.nitsFile(runId))) {
-      return "";
-    }
-    return readFileSync(this.paths.nitsFile(runId), "utf-8");
+    const row = this.db.prepare("SELECT markdown FROM nits WHERE run_id = ?").get(runId) as
+      | { markdown: string }
+      | undefined;
+    return row?.markdown ?? "";
   }
 
   writeNits(runId: string, markdown: string): void {
-    mkdirSync(dirname(this.paths.nitsFile(runId)), { recursive: true });
-    writeAtomic(this.paths.nitsFile(runId), markdown);
+    this.db
+      .prepare("INSERT OR REPLACE INTO nits (run_id, markdown) VALUES (?, ?)")
+      .run(runId, markdown);
   }
 
   // ---------------------------------------------------------------------------
@@ -437,54 +421,24 @@ export class SqliteStoreAdapter implements Store {
   }
 
   // ---------------------------------------------------------------------------
-  // Queue — file inbox (NOT a SQLite index)
+  // Queue — unified into the runs table (no queueDir)
   //
-  // The queue dir is an EXTERNAL inbox: `meridian plan` tells /packet skill to
-  // write .md files directly to queueDir. A SQLite index would miss every
-  // packet written externally. listQueue MUST replicate StoreAdapter.listQueue:
-  //   requeued = query runs table WHERE status='queued'
-  //   fresh = readdirSync(queueDir), filter .md, .sort() lexical, map with
-  //           statSync mtime, filter !existsSync(runDir)
-  //
-  // admitQueue and archiveQueue operate on the filesystem (same as StoreAdapter).
+  // A queued run IS the queue: a run row with status = 'queued'. Admission
+  // validates the packet, writes the live run packet file, and stamps meta
+  // with status = 'queued'. listQueue is a SQL query. archiveQueue marks
+  // the run aborted. readQueuePacket reads the current live packet file.
   // ---------------------------------------------------------------------------
 
   listQueue(): QueueEntry[] {
-    mkdirSync(this.paths.queueDir, { recursive: true });
-
-    // Requeued runs: meta.status === "queued", listed first (F2).
-    // Query runs table instead of scanning meta.json files.
-    const requeued: QueueEntry[] = this.db
-      .prepare("SELECT meta FROM runs ORDER BY run_id")
+    return this.db
+      .prepare(
+        "SELECT run_id, meta FROM runs WHERE json_extract(meta, '$.status') = 'queued' ORDER BY run_id",
+      )
       .all()
       .map((r) => {
         const meta = RunMetaSchema.parse(JSON.parse(String(r.meta)));
-        if (meta.status === "queued") {
-          return { runId: meta.runId, admittedAt: meta.updatedAt };
-        }
-        return null;
-      })
-      .filter((e): e is QueueEntry => e !== null);
-
-    // Fresh packets in queue dir, lifecycle-priority sorted, excluding consumed runs.
-    const fresh: QueueEntry[] = readdirSync(this.paths.queueDir)
-      .filter((f) => f.endsWith(".md"))
-      .sort()
-      .map((f) => {
-        const runId = f.replace(/\.md$/, "");
-        const fullPath = join(this.paths.queueDir, f);
-        const mtime = statSync(fullPath).mtime.toISOString();
-        return {
-          runId,
-          admittedAt: mtime,
-          priority: freshQueuePriority(readFileSync(fullPath, "utf-8")),
-        };
-      })
-      .filter((e) => !existsSync(this.paths.runDir(e.runId)))
-      .sort((a, b) => a.priority - b.priority || a.runId.localeCompare(b.runId))
-      .map(({ runId, admittedAt }) => ({ runId, admittedAt }));
-
-    return [...requeued, ...fresh];
+        return { runId: meta.runId, admittedAt: meta.updatedAt };
+      });
   }
 
   admitQueue(runId: string, raw: string): void {
@@ -499,8 +453,7 @@ export class SqliteStoreAdapter implements Store {
       return;
     }
 
-    // (b) headBranch via Repo port — only when base is absent (K1: explicit base
-    // is a deliberate override; stampBase no-ops on explicit base).
+    // (b) headBranch via Repo port — only when base is absent.
     let headBranch: string = "";
     if (!baseInFm) {
       try {
@@ -537,29 +490,53 @@ export class SqliteStoreAdapter implements Store {
       return;
     }
 
-    // (f) On success, write to queue dir (file-backed, same as StoreAdapter).
-    mkdirSync(this.paths.queueDir, { recursive: true });
-    writeAtomic(join(this.paths.queueDir, `${runId}.md`), stamped);
+    // (f) On success: write the live editable run packet + write meta as queued.
+    mkdirSync(this.paths.runDir(runId), { recursive: true });
+    writeTextAtomic(this.paths.packetFile(runId), stamped);
+    this.writeMeta({
+      runId,
+      status: "queued",
+      attempt: 1,
+      repo: repoPath,
+      base,
+      branch: `meridian/${runId}`,
+      worktree: join(this.paths.runDir(runId), "worktree"),
+      stallRetries: 0,
+      crashRetries: 0,
+      reorientRetries: 0,
+      reviewerUnreachable: 0,
+      promoted: false,
+      updatedAt: this.clock.nowIso(),
+    });
   }
 
   archiveQueue(runId: string): void {
-    // Archive the queue file if it exists, else no-op (mirror dropFromQueue).
-    const file = join(this.paths.queueDir, `${runId}.md`);
-    if (!existsSync(file)) {
-      return;
+    // Mark the run aborted in SQLite. The live packet file stays in the run
+    // dir (harmless; the run is terminal).
+    const meta = this.readMetaIfExists(runId);
+    if (meta) {
+      this.writeMeta({ ...meta, status: "aborted", updatedAt: this.clock.nowIso() });
     }
-    archivePacket(this.paths, file);
   }
 
   // ---------------------------------------------------------------------------
-  // Queue packet read — fresh-run source (file-backed)
+  // Live packet read — admission writes the initial run packet here, and resume
+  // re-reads the current content so dev edits are observed.
 
   readQueuePacket(runId: string): string | undefined {
-    const file = join(this.paths.queueDir, `${runId}.md`);
+    const file = this.paths.packetFile(runId);
     if (!existsSync(file)) {
       return undefined;
     }
     return readFileSync(file, "utf-8");
+  }
+
+  /** Read rejected packet for inspection. */
+  readRejected(runId: string): { raw: string; problems: string | null } | undefined {
+    const row = this.db
+      .prepare("SELECT raw, problems FROM rejected WHERE run_id = ?")
+      .get(runId) as { raw: string; problems: string | null } | undefined;
+    return row;
   }
 
   // ---------------------------------------------------------------------------
@@ -616,103 +593,72 @@ export class SqliteStoreAdapter implements Store {
   }
 
   // ---------------------------------------------------------------------------
-  // Checkpoints (file-backed — checkpoints dir, numbered .json files)
+  // Checkpoints (stored in SQLite checkpoints table)
 
   latestCheckpoint(runId: string): Checkpoint | undefined {
-    const dir = this.paths.checkpointsDir(runId);
-    if (!existsSync(dir)) {
-      return undefined;
-    }
-    const files = readdirSync(dir)
-      .filter((f) => f.endsWith(".json"))
-      .sort();
-    const last = files[files.length - 1];
-    return last
-      ? CheckpointSchema.parse(JSON.parse(readFileSync(join(dir, last), "utf-8")))
-      : undefined;
+    const row = this.db
+      .prepare("SELECT data FROM checkpoints WHERE run_id = ? ORDER BY number DESC LIMIT 1")
+      .get(runId) as { data: string } | undefined;
+    return row ? CheckpointSchema.parse(jsonParse(row.data)) : undefined;
   }
 
   writeCheckpoint(runId: string, checkpoint: Checkpoint): void {
-    const dir = this.paths.checkpointsDir(runId);
-    mkdirSync(dir, { recursive: true });
-    writeValidated(
-      join(dir, `${String(checkpoint.number).padStart(4, "0")}.json`),
-      CheckpointSchema,
-      checkpoint,
-    );
+    const validated = CheckpointSchema.parse(checkpoint);
+    this.db
+      .prepare("INSERT OR REPLACE INTO checkpoints (run_id, number, data) VALUES (?, ?, ?)")
+      .run(runId, validated.number, jsonStringify(validated));
   }
 
   nextCheckpointNumber(runId: string): number {
-    const dir = this.paths.checkpointsDir(runId);
-    if (!existsSync(dir)) {
-      return 1;
-    }
-    return readdirSync(dir).filter((f) => f.endsWith(".json")).length + 1;
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS count FROM checkpoints WHERE run_id = ?")
+      .get(runId) as { count: number };
+    return row.count + 1;
   }
 
   // ---------------------------------------------------------------------------
-  // Staged-chain registry (file-backed — raw markdown, parsed by parseStaged)
-  // Same filesystem pattern as StoreAdapter.listStaged/readStaged/writeStaged/removeStaged.
-  // ---------------------------------------------------------------------------
+  // Staged-chain registry (stored in SQLite staged table)
 
   listStaged(): { runId: string; parentRunId: string | undefined; repo: string }[] {
-    const stagedDir = this.paths.stagedDir;
-    if (!existsSync(stagedDir)) {
-      return [];
-    }
-    return readdirSync(stagedDir)
-      .sort()
-      .filter((f) => f.endsWith(".md"))
-      .flatMap((f) => {
-        const filePath = join(stagedDir, f);
-        const raw = readFileSync(filePath, "utf-8");
-        const result = parseStaged(raw, filePath);
-        if (result.ok) {
-          return [
-            {
-              runId: result.info.runId,
-              parentRunId: result.info.parentRunId,
-              repo: result.info.repo,
-            },
-          ];
-        }
-        return [];
-      });
+    const rows = this.db
+      .prepare("SELECT run_id, parent_run_id, repo FROM staged ORDER BY run_id")
+      .all() as { run_id: string; parent_run_id: string | null; repo: string }[];
+    return rows.map((r) => ({
+      runId: r.run_id,
+      parentRunId: r.parent_run_id ?? undefined,
+      repo: r.repo,
+    }));
   }
 
   readStaged(runId: string): string | undefined {
-    const file = this.paths.stagedFile(runId);
-    if (!existsSync(file)) {
-      return undefined;
-    }
-    return readFileSync(file, "utf-8");
+    const row = this.db.prepare("SELECT raw FROM staged WHERE run_id = ?").get(runId) as
+      | { raw: string }
+      | undefined;
+    return row?.raw;
   }
 
   writeStaged(runId: string, raw: string): void {
-    const dir = dirname(this.paths.stagedFile(runId));
-    mkdirSync(dir, { recursive: true });
-    writeAtomic(this.paths.stagedFile(runId), raw);
+    const parsed = parseStaged(raw, `${runId}.md`);
+    if (!parsed.ok) {
+      return;
+    }
+    this.db
+      .prepare(
+        "INSERT OR REPLACE INTO staged (run_id, raw, parent_run_id, repo) VALUES (?, ?, ?, ?)",
+      )
+      .run(runId, raw, parsed.info.parentRunId ?? null, parsed.info.repo);
   }
 
   removeStaged(runId: string): void {
-    const file = this.paths.stagedFile(runId);
-    if (existsSync(file)) {
-      unlinkSync(file);
-    }
+    this.db.prepare("DELETE FROM staged WHERE run_id = ?").run(runId);
   }
 
   // ---------------------------------------------------------------------------
   // Fresh-start resume-artifact cleanup
 
   clearResumeArtifacts(runId: string): void {
-    // Checkpoints (file-backed numbered .json files)
-    const checkpointDir = this.paths.checkpointsDir(runId);
-    if (existsSync(checkpointDir)) {
-      rmSync(checkpointDir, { recursive: true, force: true });
-    }
-    // Decisions (SQLite row)
+    this.db.prepare("DELETE FROM checkpoints WHERE run_id = ?").run(runId);
     this.db.prepare("DELETE FROM decisions WHERE run_id = ?").run(runId);
-    // Review state (SQLite row)
     this.db.prepare("DELETE FROM review_state WHERE run_id = ?").run(runId);
   }
 
@@ -751,19 +697,16 @@ export class SqliteStoreAdapter implements Store {
   // Internal helpers
 
   private archiveAndFail(runId: string, raw: string, problems: string[]): void {
-    mkdirSync(this.paths.queueDir, { recursive: true });
-    const tempPath = join(this.paths.queueDir, `${runId}.md`);
-    writeAtomic(tempPath, raw);
-    archivePacket(this.paths, tempPath, problems);
+    this.db
+      .prepare("INSERT OR REPLACE INTO rejected (run_id, raw, problems) VALUES (?, ?, ?)")
+      .run(runId, raw, problems.length > 0 ? problems.join("\n") : null);
   }
 }
 
 // ---------------------------------------------------------------------------
 // Schema creation (runs, events, decisions, convergence, outcome_ledger,
-// review_state, gate_state, active_run, campaigns).
-//
-// NO queue_index table: the queue dir is an external inbox.
-// NO staged table: staged registry stays file-backed.
+// review_state, gate_state, active_run, campaigns, reports, nits,
+// checkpoints, staged, rejected).
 // ---------------------------------------------------------------------------
 
 function createSchema(db: DatabaseSync): void {
@@ -819,6 +762,70 @@ function createSchema(db: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS campaigns(
       campaign_id TEXT PRIMARY KEY,
       campaign TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS reports(
+      run_id TEXT PRIMARY KEY,
+      markdown TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS nits(
+      run_id TEXT PRIMARY KEY,
+      markdown TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS checkpoints(
+      run_id TEXT NOT NULL,
+      number INTEGER NOT NULL,
+      data TEXT NOT NULL,
+      PRIMARY KEY(run_id, number)
+    );
+
+    CREATE TABLE IF NOT EXISTS staged(
+      run_id TEXT PRIMARY KEY,
+      raw TEXT NOT NULL,
+      parent_run_id TEXT,
+      repo TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS rejected(
+      run_id TEXT PRIMARY KEY,
+      raw TEXT NOT NULL,
+      problems TEXT
+    );
+  `);
+}
+
+function migrateV1toV2(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS reports(
+      run_id TEXT PRIMARY KEY,
+      markdown TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS nits(
+      run_id TEXT PRIMARY KEY,
+      markdown TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS checkpoints(
+      run_id TEXT NOT NULL,
+      number INTEGER NOT NULL,
+      data TEXT NOT NULL,
+      PRIMARY KEY(run_id, number)
+    );
+
+    CREATE TABLE IF NOT EXISTS staged(
+      run_id TEXT PRIMARY KEY,
+      raw TEXT NOT NULL,
+      parent_run_id TEXT,
+      repo TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS rejected(
+      run_id TEXT PRIMARY KEY,
+      raw TEXT NOT NULL,
+      problems TEXT
     );
   `);
 }

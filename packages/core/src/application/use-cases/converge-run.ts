@@ -6,7 +6,7 @@
 // with all bookkeeping. This is the always-on post-run step the run loop calls.
 // ---------------------------------------------------------------------------
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import type { Paths } from "../../config/paths.js";
 import { expandHome } from "../../config/paths.js";
 import type { Config } from "../../config/schemas.js";
@@ -132,7 +132,7 @@ const slugFromRunId = (runId: string, pass: number): string => {
 // Main entry point — matches `ConvergeCallback = (runId: string) => Promise<void>`
 
 export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<void>) => {
-  const { store, repo, reviewer, verify, clock, config, paths } = deps;
+  const { store, repo, reviewer, verify, clock, config } = deps;
 
   return async (runId: string): Promise<void> => {
     store.writeActiveConvergence({ runId, startedAt: clock.nowIso() });
@@ -194,9 +194,7 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
         // 3. Super-daddy review — ONE reviewer, trusted (S2/S4). The reviewer's
         // cwd IS the worktree; it inspects the tree directly (git diff HEAD, rg,
         // read) rather than being handed a diff slice.
-        const reportText = existsSync(paths.reportFile(runId))
-          ? readFileSync(paths.reportFile(runId), "utf-8")
-          : "";
+        const reportText = store.readReport(runId);
         const skillPath = expandHome(config.superdaddy.skillPath);
         const skillText = readFileSync(skillPath, "utf-8");
 

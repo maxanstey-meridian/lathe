@@ -18,7 +18,7 @@ import { initialGateState } from "../src/domain/gate.js";
 import { parsePacketShape, type Packet } from "../src/domain/packet.js";
 import { decideRunStart } from "../src/domain/run.js";
 import type { BridgeIntent } from "../src/domain/turn.js";
-import { StoreAdapter } from "../src/infrastructure/store.js";
+import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 
 const RUN_ID = "20260101-000000-execrun";
 
@@ -163,7 +163,7 @@ test("decideRunStart: prior meta with babySessionId → resume", () => {
 test("rotateSession: replaces the session, updates meta, latches first-edit (with checkpoint)", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "rot-cp-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     store.writeMeta({
       runId: RUN_ID,
@@ -211,7 +211,7 @@ test("rotateSession: replaces the session, updates meta, latches first-edit (wit
 test("rotateSession: no checkpoint stacks reconciliation (O6)", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "rot-nocp-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     store.writeMeta({
       runId: RUN_ID,
@@ -263,7 +263,7 @@ test("rotateSession: no checkpoint stacks reconciliation (O6)", () => {
 test("makeExecuteRun: fresh run → init state → terminal status in meta", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "exec-fresh-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     store.admitQueue(RUN_ID, PACKET_RAW);
 
     const channel = emptyChannel();
@@ -313,14 +313,15 @@ test("makeExecuteRun: fresh run → init state → terminal status in meta", () 
   })();
 });
 
-test("makeExecuteRun: real fresh queue path — reads packet from queue dir", () => {
+test("makeExecuteRun: real fresh queue path — reads the live run packet", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "exec-fresh-queue-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
 
-    // Write the packet directly to the queue dir.
-    mkdirSync(join(tmp, "queue"), { recursive: true });
-    writeFileSync(join(tmp, "queue", `${RUN_ID}.md`), PACKET_RAW);
+    // Write the live packet directly (admitQueue writes it here).
+    const paths = makePaths(tmp);
+    mkdirSync(paths.runDir(RUN_ID), { recursive: true });
+    writeFileSync(paths.packetFile(RUN_ID), PACKET_RAW);
 
     // Simulate what run-loop does: initMetaFromQueue → writeMeta as running.
     const meta = store.initMetaFromQueue(RUN_ID);
@@ -377,7 +378,7 @@ test("makeExecuteRun: real fresh queue path — reads packet from queue dir", ()
 test("makeExecuteRun: resume → reuses prior Daddy session ID, refreshes gate", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "exec-resume-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     store.admitQueue(RUN_ID, PACKET_RAW);
 
     // Prior meta from the previous run session.
@@ -501,7 +502,7 @@ test("makeExecuteRun: resume → reuses prior Daddy session ID, refreshes gate",
 test("makeExecuteRun: resume replaces stale Daddy session before reconciliation", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "exec-stale-daddy-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     store.admitQueue(RUN_ID, PACKET_RAW);
 
     store.writeMeta({
@@ -632,7 +633,7 @@ test("makeExecuteRun: resume replaces stale Daddy session before reconciliation"
 test("makeExecuteRun: resume without checkpoint but prior accepted reconciliation → Q8b, gate re-latched for first-edit only", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "exec-recon-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     store.admitQueue(RUN_ID, PACKET_RAW);
 
     store.writeMeta({
@@ -752,9 +753,10 @@ test("makeExecuteRun: resume without checkpoint but prior accepted reconciliatio
 test("makeExecuteRun: invalid queue packet → meta failed, no throw", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "exec-bad-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
-    mkdirSync(join(tmp, "queue"), { recursive: true });
-    writeFileSync(join(tmp, "queue", `${RUN_ID}.md`), "not a packet");
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const paths = makePaths(tmp);
+    mkdirSync(paths.runDir(RUN_ID), { recursive: true });
+    writeFileSync(paths.packetFile(RUN_ID), "not a packet");
     store.writeMeta({
       runId: RUN_ID,
       status: "running",
@@ -792,7 +794,7 @@ test("makeExecuteRun: invalid queue packet → meta failed, no throw", () => {
 test("makeExecuteRun: run with prior meta but no baby session → fresh", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "exec-fresh-no-baby-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     store.admitQueue(RUN_ID, PACKET_RAW);
 
     // Prior meta WITHOUT a babySessionId (e.g. a crashed run where baby session was lost).
@@ -858,7 +860,7 @@ test("makeExecuteRun: fresh start clears stale checkpoint/decision/review state"
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "exec-fresh-clears-stale-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     // Seed stale checkpoint.
     const c1 = {
@@ -904,8 +906,10 @@ verification:
 
 new body
 `;
-    mkdirSync(join(tmp, "queue"), { recursive: true });
-    writeFileSync(join(tmp, "queue", `${RUN_ID}.md`), newPacketRaw);
+    // Overwrite the live packet with a new version (simulates resume with changed packet).
+    const paths = makePaths(tmp);
+    mkdirSync(paths.runDir(RUN_ID), { recursive: true });
+    writeFileSync(paths.packetFile(RUN_ID), newPacketRaw);
 
     store.writeMeta({
       runId: RUN_ID,
@@ -972,7 +976,7 @@ test("makeExecuteRun: fresh start clears stale checkpoint so unchanged-packet re
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "exec-fresh-resume-q8-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     // Phase 1: seed a prior session's checkpoint, decisions, review state.
     store.writeCheckpoint(RUN_ID, {
@@ -1000,8 +1004,9 @@ verification:
 
 new body
 `;
-    mkdirSync(join(tmp, "queue"), { recursive: true });
-    writeFileSync(join(tmp, "queue", `${RUN_ID}.md`), newPacketRaw);
+    const paths2 = makePaths(tmp);
+    mkdirSync(paths2.runDir(RUN_ID), { recursive: true });
+    writeFileSync(paths2.packetFile(RUN_ID), newPacketRaw);
 
     store.writeMeta({
       runId: RUN_ID,

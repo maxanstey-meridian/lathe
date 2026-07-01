@@ -66,7 +66,7 @@ export const createApp = (
   registerRivetHonoRoutes<LatheContract>(app, contract, {
     group: "lathe",
     handlers: {
-      EnqueueRun: async ({ body }) => {
+      enqueueRun: async ({ body }) => {
         let runId: string;
         try {
           runId = supervisor.enqueueRun(body.packetPath);
@@ -81,7 +81,7 @@ export const createApp = (
         return runToSummary(meta, ctx);
       },
 
-      EnqueueChain: async ({ body }) => {
+      enqueueChain: async ({ body }) => {
         const before = new Set(supervisor.listRuns().map(r => r.runId));
         supervisor.enqueueChain(body.chainDir);
         const runs = supervisor.listRuns();
@@ -95,7 +95,7 @@ export const createApp = (
         return summaries;
       },
 
-      ListRuns: async () => {
+      listRuns: async () => {
         const runs = supervisor.listRuns();
         const summaries = runs.map((meta) => {
           const ctx = buildDtoCtx(supervisor, meta);
@@ -104,7 +104,7 @@ export const createApp = (
         return summaries;
       },
 
-      GetRun: async ({ params }) => {
+      getRun: async ({ params }) => {
         const meta = supervisor.getRun(params.runId);
         if (!meta) {
           throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
@@ -113,7 +113,15 @@ export const createApp = (
         return runToDetail(meta, ctx);
       },
 
-      AbortRun: async ({ params }) => {
+      getStatus: async () => {
+        return supervisor.getStatus();
+      },
+
+      getReview: async () => {
+        return supervisor.getReview();
+      },
+
+      abortRun: async ({ params }) => {
         try {
           supervisor.abortRun(params.runId);
         } catch (err) {
@@ -130,7 +138,7 @@ export const createApp = (
         return runToSummary(meta, ctx);
       },
 
-      AnswerRun: async ({ params, body }) => {
+      answerRun: async ({ params, body }) => {
         const answer = (body as AnswerRunRequest).answer;
         try {
           supervisor.answerRun(params.runId, answer);
@@ -151,7 +159,7 @@ export const createApp = (
         return runToSummary(meta, ctx);
       },
 
-      AcceptRun: async ({ params }) => {
+      acceptRun: async ({ params }) => {
         let result: number;
         try {
           result = supervisor.acceptRun(params.runId);
@@ -178,7 +186,7 @@ export const createApp = (
         });
       },
 
-      RejectRun: async ({ params, body }) => {
+      rejectRun: async ({ params, body }) => {
         const reason = (body as RejectRunRequest).reason ?? "rejected";
         try {
           supervisor.rejectRun(params.runId, reason);
@@ -196,7 +204,7 @@ export const createApp = (
         return runToSummary(meta, ctx);
       },
 
-      GetConfig: async () => {
+      getConfig: async () => {
         return configToDto(supervisor.config);
       },
     },
@@ -271,6 +279,7 @@ const buildDtoCtx = (sup: Supervisor, meta: RunMeta): RunDtoCtx => ({
   isChainTip: sup.isChainTip(meta.runId),
   contextWindow: sup.config.baby.contextWindow,
   lastVerdict: sup.lastVerdict(meta.runId),
+  outcomes: sup.outcomes(meta.runId),
 });
 
 const mutationSummary = (runId: string, status: "aborted" | "paused"): RunSummaryDto => ({

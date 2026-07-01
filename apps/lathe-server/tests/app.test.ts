@@ -107,6 +107,36 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
     listStaged: (): Array<{ runId: string; parentRunId: string }> => stagedEntries,
 
     lastVerdict: (_runId: string): string | null => "approved",
+    outcomes: (_runId: string): string => "",
+    getStatus: () => ({
+      activeRun: null,
+      queued: Array.from(metaStore.values())
+        .filter((meta) => meta.status === "queued")
+        .map((meta) => ({ runId: meta.runId })),
+      parked: Array.from(metaStore.values())
+        .filter((meta) => meta.status === "blocked")
+        .map((meta) => ({
+          runId: meta.runId,
+          blockedReason: meta.blockedReason ?? null,
+          blockedQuestion: meta.blockedQuestion ?? null,
+          stallRetries: meta.stallRetries,
+        })),
+      campaigns: [],
+      staged: stagedEntries.map((entry) => ({ runId: entry.runId, parentRunId: entry.parentRunId ?? null })),
+    }),
+    getReview: () => ({
+      runs: Array.from(metaStore.values())
+        .filter((meta) => meta.status !== "running" && meta.status !== "queued")
+        .map((meta) => ({
+          runId: meta.runId,
+          status: meta.status,
+          outcomes: "",
+          branch: meta.branch,
+          repo: meta.repo,
+          base: meta.base,
+          blockedQuestion: meta.blockedQuestion ?? null,
+        })),
+    }),
   };
 
   // Apply overrides: they replace base methods. To keep CRUD methods working
@@ -199,6 +229,9 @@ const makeAcceptSupervisor = (meta: RunMeta, currentBranch: string, isDirty = fa
     rejectRun: (_runId: string, _reason: string): void => {},
     isChainTip: (_runId: string): boolean => true,
     lastVerdict: (_runId: string): string | null => null,
+    outcomes: (_runId: string): string => "",
+    getStatus: () => ({ activeRun: null, queued: [], parked: [], campaigns: [], staged: [] }),
+    getReview: () => ({ runs: [] }),
     listStaged: (): Array<{ runId: string; parentRunId: string | undefined }> => [],
   } satisfies Supervisor;
 };
@@ -322,17 +355,63 @@ test("GetRun returns RunDetailDto for known run", async () => {
     getRun: (id: string) => (id === runId ? meta : undefined),
     listRuns: () => [meta],
     isChainTip: () => true,
+    outcomes: () => "1/2 done, 1 in progress",
   });
   const app2 = createApp(supWithMeta.appDeps, supWithMeta);
 
   const req = new Request(`http://localhost/runs/${runId}`);
   const res = await app2.request(req);
   equal(res.status, 200);
-  const body = await res.json() as { runId: string; status: string; isChainTip: boolean; base: string; branch: string };
+  const body = await res.json() as { runId: string; status: string; isChainTip: boolean; base: string; branch: string; outcomes: string; blockedReason: string | null; blockedQuestion: string | null };
   equal(body.runId, runId);
   equal(body.status, "running");
   equal(body.base, "main");
   equal(body.branch, "meridian/test");
+  equal(body.outcomes, "1/2 done, 1 in progress");
+  equal(body.blockedReason, null);
+  equal(body.blockedQuestion, null);
+});
+
+test("GetStatus returns daemon status snapshot", async () => {
+  const supervisor = makeFakeSupervisor({
+    getStatus: () => ({
+      activeRun: { runId: "active", outcomes: "1/1 done", gateLatched: null, recentEvents: [] },
+      queued: [{ runId: "queued" }],
+      parked: [],
+      campaigns: [],
+      staged: [],
+    }),
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request(new Request("http://localhost/status"));
+  equal(res.status, 200);
+  const body = await res.json() as { activeRun: { runId: string } | null; queued: Array<{ runId: string }> };
+  equal(body.activeRun?.runId, "active");
+  equal(body.queued[0]?.runId, "queued");
+});
+
+test("GetReview returns daemon review snapshot", async () => {
+  const supervisor = makeFakeSupervisor({
+    getReview: () => ({
+      runs: [{
+        runId: "review-me",
+        status: "ready_for_review",
+        outcomes: "2/2 done",
+        branch: "meridian/review-me",
+        repo: "/repo",
+        base: "main",
+        blockedQuestion: null,
+      }],
+    }),
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request(new Request("http://localhost/review"));
+  equal(res.status, 200);
+  const body = await res.json() as { runs: Array<{ runId: string; outcomes: string }> };
+  equal(body.runs[0]?.runId, "review-me");
+  equal(body.runs[0]?.outcomes, "2/2 done");
 });
 
 test("ListRuns returns array of RunSummaryDto", async () => {

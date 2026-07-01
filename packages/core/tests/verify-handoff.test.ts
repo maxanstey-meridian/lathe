@@ -3,7 +3,7 @@
 // Mocks executor at the boundary; no live opencode session.
 
 import { strictEqual, equal, ok, deepStrictEqual, match } from "node:assert";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,7 +20,7 @@ import {
   handleVerifyHandoff,
 } from "../src/infrastructure/opencode/baby-tools.js";
 import { runVerify, buildVerifyPrompt } from "../src/infrastructure/opencode/daddy-verify.js";
-import { StoreAdapter } from "../src/infrastructure/store.js";
+import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 
 // ===========================================================================
 // Test helpers
@@ -104,10 +104,11 @@ const makeRef = (overrides?: {
   awaitingVerification?: boolean;
 }) => {
   const tmp = join(tmpdir(), `handoff-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  mkdirSync(tmp, { recursive: true });
   const clock = fixedClock();
   const packet = overrides?.packet ?? makeTestPacket();
   const paths = makePaths(tmp);
-  const store = StoreAdapter.create(paths, fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), clock);
   const ctx = {
     intents: [] as any[],
     pendingConsult: null,

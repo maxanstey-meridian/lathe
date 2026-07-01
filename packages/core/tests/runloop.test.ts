@@ -19,7 +19,7 @@ import { makePaths } from "../src/config/paths.js";
 import { Config } from "../src/config/schemas.js";
 import { decideCrashRecovery } from "../src/domain/liveness.js";
 import type { RunMeta } from "../src/domain/run.js";
-import { StoreAdapter } from "../src/infrastructure/store.js";
+import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -82,7 +82,7 @@ test("recoverOrphanedRuns: running run → queued + wip commit", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-orphan-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     const meta = makeMeta({ runId: "20260101-000000-orphan", status: "running" as const });
     store.writeMeta(meta);
@@ -100,7 +100,7 @@ test("recoverOrphanedRuns: multiple running runs → all queued", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-orphan2-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     store.writeMeta(makeMeta({ runId: "20260101-000000-a", status: "running" as const }));
     store.writeMeta(makeMeta({ runId: "20260101-000000-b", status: "running" as const }));
@@ -119,7 +119,7 @@ test("recoverOrphanedRuns: non-running runs left alone", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-orphan3-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     store.writeMeta(
       makeMeta({
@@ -153,7 +153,7 @@ test("recoverStalledRun: wedged with retries below cap → requeued", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-stall-1-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     store.writeMeta(
       makeMeta({
@@ -179,7 +179,7 @@ test("recoverStalledRun: wedged at cap (not yet promoted) → promote + requeue"
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-stall-2-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     store.writeMeta(
       makeMeta({
@@ -207,7 +207,7 @@ test("recoverStalledRun: wedged at cap AFTER promotion → escalate to human_dec
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-stall-2b-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     store.writeMeta(
       makeMeta({
@@ -235,7 +235,7 @@ test("recoverStalledRun: crashed run → left alone", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-stall-3-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     store.writeMeta(
       makeMeta({
@@ -259,7 +259,7 @@ test("recoverStalledRun: queued run → left alone", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-stall-4-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     store.writeMeta(makeMeta({ runId: "20260101-000000-queued", status: "queued" as const }));
 
@@ -275,7 +275,7 @@ test("recoverStalledRun: run with human_decision → left alone", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-stall-5-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     store.writeMeta(
       makeMeta({
@@ -299,7 +299,7 @@ test("recoverStalledRun: absent run → no-op", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-stall-6-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     // Should not throw
     recoverStalledRun(store, "20260101-000000-absent", 2, clock);
@@ -314,7 +314,7 @@ test("recoverStalledRunsAtStartup: wedged below cap → requeued", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-startup-1-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     store.writeMeta(
       makeMeta({
@@ -349,7 +349,7 @@ test("recoverStalledRunsAtStartup: wedged at cap (not yet promoted) → promote 
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-startup-2-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     store.writeMeta(
       makeMeta({
@@ -374,7 +374,7 @@ test("recoverStalledRunsAtStartup: wedged at cap AFTER promotion → escalate", 
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-startup-2b-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     store.writeMeta(
       makeMeta({
@@ -400,7 +400,7 @@ test("recoverStalledRunsAtStartup: crashed runs left alone", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-startup-3-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     store.writeMeta(
       makeMeta({
@@ -424,7 +424,7 @@ test("recoverStalledRunsAtStartup: no wedged runs → no-op", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-startup-4-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     store.writeMeta(makeMeta({ runId: "20260101-000000-ok", status: "queued" as const }));
     store.writeMeta(makeMeta({ runId: "20260101-000000-running", status: "running" as const }));
@@ -444,7 +444,7 @@ test("recoverOrphanedRuns + recoverStalledRunsAtStartup: mixed states at startup
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-combined-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     // Orphaned: running
     store.writeMeta(makeMeta({ runId: "20260101-000000-orphan", status: "running" as const }));
@@ -487,7 +487,7 @@ test("recoverStalledRun: maxStallRetries=0 + promoteAtCap disabled → escalate 
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-no-retry-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     store.writeMeta(
       makeMeta({
@@ -513,7 +513,7 @@ test("recoverStalledRun: maxStallRetries=0 with promoteAtCap → promote once be
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-no-retry-promote-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     store.writeMeta(
       makeMeta({
@@ -541,7 +541,7 @@ test("runLoop: drain queue before waiting", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-lifecycle-drain-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     // Seed 2 queued runs.
     store.writeMeta(makeMeta({ runId: "20260101-000000-a", status: "queued" as const }));
@@ -592,7 +592,7 @@ test("runLoop: wedged run → recoverStalledRun → requeued", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-lifecycle-wedged-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     // Seed a queued run.
     store.writeMeta(
@@ -657,7 +657,7 @@ test("runLoop crash branch: decideCrashRecovery requeue under cap → queued", (
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-crash-retry-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
     store.writeMeta(
       makeMeta({
@@ -734,7 +734,7 @@ test("runLoop crash branch: thrown executeRun requeues crashed run under cap", (
       repoValid: () => true,
       mergeAccept: () => undefined,
     };
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
     const runId = "20260101-000000-crash-queue";
     store.writeMeta(
       makeMeta({
@@ -804,7 +804,7 @@ test("runLoop crash branch: thrown executeRun escalates crashed run at cap", () 
       repoValid: () => true,
       mergeAccept: () => undefined,
     };
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
     const runId = "20260101-000000-crash-block";
     store.writeMeta(
       makeMeta({

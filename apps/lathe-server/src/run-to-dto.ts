@@ -47,6 +47,7 @@ export interface RunDtoCtx {
   isChainTip: boolean;
   contextWindow: number;
   lastVerdict: string | null;
+  outcomes: string;
 }
 
 /**
@@ -83,4 +84,7 @@ export const runToDetail = (
   parentRunId: null, // GAP: RunMeta has no parentRunId field
   expectedSurface: [], // GAP: RunMeta has no expectedSurface field
   lastVerdict: ctx.lastVerdict,
+  outcomes: ctx.outcomes,
+  blockedReason: meta.blockedReason ?? null,
+  blockedQuestion: meta.blockedQuestion ?? null,
 });

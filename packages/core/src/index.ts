@@ -7,13 +7,6 @@
 // ---------------------------------------------------------------------------
 
 export { JournalEvent, renderJournalEvent } from "./domain/journal.js";
-export {
-  renderStatus,
-  renderReview,
-  renderQueue,
-  renderJournalReplay,
-  fmtOutcomes,
-} from "./interfaces/tui/render.js";
 export { Config } from "./config/schemas.js";
 export { loadConfig } from "./config/config.js";
 export { makePaths, expandHome } from "./config/paths.js";
@@ -31,7 +24,6 @@ export type { Store } from "./application/ports/store.js";
 // Infrastructure (concrete adapters consumed by the server)
 // ---------------------------------------------------------------------------
 
-export { StoreAdapter } from "./infrastructure/store.js";
 export { SqliteStoreAdapter } from "./infrastructure/sqlite-store.js";
 export { systemClock } from "./infrastructure/clock.js";
 
@@ -66,5 +58,6 @@ export type {
 // ---------------------------------------------------------------------------
 
 export { parseStaged } from "./domain/chain.js";
+export { isLatched, gateReason } from "./domain/gate.js";
 export type { StagedInfo } from "./domain/chain.js";
 export type { RunMeta } from "./domain/run.js";

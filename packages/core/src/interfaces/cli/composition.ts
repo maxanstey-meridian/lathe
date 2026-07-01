@@ -3,17 +3,16 @@
 //
 // The ONE place adapters are constructed and injected into the use cases. Every
 // other module depends on ports; this file knows the concretes. It owns the
-// driver lifecycle (`meridian run`) and the two manual reviewer commands
-// (converge / super-review), both of which bring the opencode serve substrate up
-// behind the single-driver lock and tear it down on exit.
+// driver lifecycle (`runDriver`), which brings the opencode serve substrate up
+// behind the single-driver lock and tears it down on exit.
 // ---------------------------------------------------------------------------
 
-import { spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, watch } from "node:fs";
+import { type ChildProcess } from "node:child_process";
 import type { Server } from "node:http";
 import type { BridgePort } from "../../application/ports/bridge.js";
 import type { ModelConfig } from "../../application/ports/executor.js";
 import type { Repo } from "../../application/ports/repo.js";
+import type { Store } from "../../application/ports/store.js";
 import { convergeRun } from "../../application/use-cases/converge-run.js";
 import { makeExecuteRun, type BridgeBinding } from "../../application/use-cases/execute-run.js";
 import {
@@ -22,10 +21,8 @@ import {
   type RunLoopSeams,
 } from "../../application/use-cases/run-loop.js";
 import type { RunPorts } from "../../application/use-cases/run-runtime.js";
-import { expandHome, type Paths } from "../../config/paths.js";
+import type { Paths } from "../../config/paths.js";
 import type { Config } from "../../config/schemas.js";
-import { campaignIdForRun } from "../../domain/campaign.js";
-import { parsePacketShape } from "../../domain/packet.js";
 import {
   startBridgeServer,
   listenBridge,
@@ -62,7 +59,6 @@ import {
 import { createOpencodeClient } from "../../infrastructure/opencode/executor.js";
 import { createPlanner } from "../../infrastructure/opencode/planner.js";
 import { createReviewer } from "../../infrastructure/opencode/reviewer.js";
-import { StoreAdapter } from "../../infrastructure/store.js";
 import { createVerify } from "../../infrastructure/verify.js";
 
 // ---------------------------------------------------------------------------
@@ -127,18 +123,16 @@ const stopServe = (serve: Serve): void => {
 // `meridian run`: the always-on driver. Constructs every adapter, wires the run
 // loop, and hands it the bridge lock (which doubles as the serve-substrate
 // lifecycle) plus the executeRun / convergeStep / waitForWork callbacks.
+// ---------------------------------------------------------------------------
 
 export const runDriver = async (
   config: Config,
   paths: Paths,
+  store: Store,
   seams?: RunLoopSeams,
 ): Promise<void> => {
-  mkdirSync(paths.queueDir, { recursive: true });
-  mkdirSync(paths.runsDir, { recursive: true });
-
   const clock = systemClock;
   const repo = buildRepo();
-  const store = StoreAdapter.create(paths, repo, clock);
   const executor = createOpencodeClient(config);
   // Daddy's session roots in the run's worktree (passed to handshake per-run, not
   // fixed here) so the planner can read the actual code when a question can't be
@@ -224,12 +218,11 @@ export const runDriver = async (
   );
 };
 
-// Block until the queue might have work or the loop is stopping. fs.watch on the
-// queue and runs dirs wakes us promptly; the interval is the robust fallback
-// (watch can miss events and a requeue is a nested meta.json write a
-// non-recursive dir watch won't see). The driver re-lists the queue on return.
+// Block until the queue might have work or the loop is stopping. The queue is
+// now SQLite-backed, so fs.watch can't detect new admissions. Poll on an
+// interval — the driver re-lists the queue on return.
 const waitForWork =
-  (paths: Paths): WaitForWorkCallback =>
+  (_paths: Paths): WaitForWorkCallback =>
   (signal: AbortSignal): Promise<void> =>
     new Promise((resolve) => {
       if (signal.aborted) {
@@ -242,167 +235,10 @@ const waitForWork =
         }
         done = true;
         clearInterval(poll);
-        queueWatcher.close();
-        runsWatcher?.close();
         signal.removeEventListener("abort", onAbort);
         resolve();
       };
       const onAbort = (): void => finish();
       const poll = setInterval(finish, 1500);
-      const queueWatcher = watch(paths.queueDir, finish);
-      const runsWatcher = existsSync(paths.runsDir) ? watch(paths.runsDir, finish) : undefined;
       signal.addEventListener("abort", onAbort, { once: true });
     });
-
-// ---------------------------------------------------------------------------
-// Manual reviewer commands. Both refuse to run while a `meridian run` driver
-// holds the lock (converge mutates run state; super-review would share the live
-// server), then bring up their own serve substrate for the one call.
-
-const withServe = async <T>(
-  config: Config,
-  paths: Paths,
-  fn: (store: StoreReturn) => Promise<T>,
-): Promise<T | 1> => {
-  const ref: RunRef = { current: undefined };
-  let serve: Serve;
-  try {
-    serve = await startServe(config, paths, ref);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(
-      message.includes("in use") ? "a `meridian run` driver is live — stop it first" : message,
-    );
-    return 1;
-  }
-  try {
-    const clock = systemClock;
-    const repo = buildRepo();
-    const store = StoreAdapter.create(paths, repo, clock);
-    return await fn({ store, repo, clock });
-  } finally {
-    stopServe(serve);
-  }
-};
-
-type StoreReturn = {
-  store: ReturnType<typeof StoreAdapter.create>;
-  repo: Repo;
-  clock: typeof systemClock;
-};
-
-// `meridian converge <runId>`: review a finished run and ACT (converge / author
-// a follow-up / escalate) — the same use case the always-on driver runs.
-export const convergeOnce = async (config: Config, paths: Paths, runId: string): Promise<number> =>
-  withServe(config, paths, async ({ store, repo, clock }) => {
-    const executor = createOpencodeClient(config);
-    const reviewer = createReviewer(
-      executor,
-      modelOf(config.superdaddy),
-      config.superdaddy.timeoutMs,
-      config.superdaddy.transportRetries,
-    );
-    const verify = createVerify();
-    await convergeRun({ store, repo, reviewer, verify, clock, config, paths })(runId);
-    console.log(
-      `converged pass run for ${runId} — see 'meridian status' / 'meridian tail ${runId}'`,
-    );
-    return 0;
-  });
-
-// `meridian super-review <runId>`: dry-run the convergence reviewer and print the
-// verdict. No packet authored, no state changed (D4-adjacent: read-only).
-export const superReviewOnce = async (
-  config: Config,
-  paths: Paths,
-  runId: string,
-): Promise<number> =>
-  withServe(config, paths, async ({ store, clock }) => {
-    const meta = store.readMetaIfExists(runId);
-    if (!meta) {
-      console.error(`run ${runId} not found`);
-      return 1;
-    }
-    let raw: string;
-    raw = store.readQueuePacket(runId) ?? "";
-    if (!raw) {
-      console.error(`run ${runId} has no packet to review`);
-      return 1;
-    }
-    const shape = parsePacketShape(raw, runId);
-    if (!shape.ok) {
-      console.error(`cannot parse packet: ${shape.problems.join("; ")}`);
-      return 1;
-    }
-    const executor = createOpencodeClient(config);
-    const reviewer = createReviewer(
-      executor,
-      modelOf(config.superdaddy),
-      config.superdaddy.timeoutMs,
-      config.superdaddy.transportRetries,
-    );
-    const reportText = existsSync(paths.reportFile(runId))
-      ? readFileSync(paths.reportFile(runId), "utf-8")
-      : "";
-    const skillText = readFileSync(expandHome(config.superdaddy.skillPath), "utf-8");
-
-    const campaignId = campaignIdForRun(shape.packet, runId);
-
-    // Make the dry-run visible in `lathe tail`: publish the active-convergence
-    // marker so tail resolves THIS run as its target, and record super-daddy's
-    // session into meta so tail routes the reviewer's live tool calls to the super
-    // pane DURING the review (mirrors convergeRun). Both are transient UI markers —
-    // the marker is cleared in finally; reviewerSessionId is additive meta the next
-    // real converge overwrites. Still read-only by intent: no packet, no run state.
-    store.writeActiveConvergence({ runId, startedAt: clock.nowIso() });
-    const recordReviewerSession = (sessionId: string): void => {
-      const current = store.readMeta(runId);
-      if (current.reviewerSessionId !== sessionId) {
-        store.writeMeta({ ...current, reviewerSessionId: sessionId, updatedAt: clock.nowIso() });
-      }
-    };
-
-    try {
-      const outcome = await reviewer.superReview(
-        {
-          packet: shape.packet,
-          worktree: meta.worktree,
-          reportText,
-          skillText,
-          pass: shape.packet.frontmatter.pass,
-          maxPasses: config.thresholds.maxPasses,
-          campaignId,
-        },
-        recordReviewerSession,
-      );
-
-      if (outcome.kind === "unreachable") {
-        console.error(`super-daddy unreachable: ${outcome.detail}`);
-        console.error("(transport drop, not a verdict — retry when the connection is back)");
-        return 1;
-      }
-
-      console.log(`super-daddy verdict: ${outcome.review.verdict}`);
-      for (const f of outcome.review.findings) {
-        console.log(`  - [${f.severity}] ${f.title}`);
-      }
-      if (outcome.review.notes) {
-        console.log(`notes: ${outcome.review.notes}`);
-      }
-      return 0;
-    } finally {
-      store.clearActiveConvergence();
-    }
-  });
-
-// `meridian plan`: open an interactive opencode session; the global /packet skill
-// authors the handoff into the queue dir (K4 — no hand-rolled chat).
-export const openPlanner = (paths: Paths): number => {
-  console.log(
-    "Opening OpenCode. Plan with your model of choice, then invoke /packet to author the handoff into:",
-  );
-  console.log(`  ${paths.queueDir}/YYYYMMDD-HHMMSS-<slug>.md`);
-  console.log("Then admit it with: meridian queue add <that file>\n");
-  const result = spawnSync("opencode", [], { stdio: "inherit", cwd: process.cwd() });
-  return result.status ?? 0;
-};

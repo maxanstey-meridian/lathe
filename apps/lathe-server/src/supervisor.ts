@@ -32,10 +32,12 @@ import {
   answerRun as answerRunUc,
   promoteStaged,
   parseStaged,
+  isLatched,
+  gateReason,
 } from "@lathe/core";
 
 import type { EventBus, AppDeps, LatheEvent } from "./app.js";
-import type { Reviewer } from "@lathe/contract";
+import type { Reviewer, ReviewDto, StatusDto } from "@lathe/contract";
 import { createEventBus } from "./app.js";
 import { projectJournalEvent } from "./event-projection.js";
 import type { ProjectionContext } from "./event-projection.js";
@@ -98,7 +100,7 @@ export type Supervisor = {
   config: Config;
   // -- Lifecycle methods (P03 handlers call these) --
   /** Admit a packet file into the queue; returns the derived runId. */
-   enqueueRun(packetPath: string): string;
+  enqueueRun(packetPath: string): string;
   /** Stage a chain directory (promotes heads straight away). */
   enqueueChain(chainDir: string): void;
   /** List all known runs (domain RunMeta). */
@@ -119,6 +121,12 @@ export type Supervisor = {
   lastVerdict(runId: string): string | null;
   /** Staged entries for chain-walking in error messages. */
   listStaged(): Array<{ runId: string; parentRunId: string | undefined }>;
+  /** Full snapshot for `lathe status`. */
+  getStatus(): StatusDto;
+  /** Morning triage snapshot for `lathe review`. */
+  getReview(): ReviewDto;
+  /** Outcome roll-up for run detail DTOs. */
+  outcomes(runId: string): string;
 };
 
 // ---------------------------------------------------------------------------
@@ -204,7 +212,7 @@ export const createSupervisor = (
 ): Supervisor => {
   const pollIntervalMs = options.pollIntervalMs ?? 1000;
 
-  // Supervisor-owned Store/Repo/Clock (same pattern as convergeOnce/withServe).
+  // Supervisor-owned Store/Repo/Clock.
   const clock: Clock = systemClock;
   const repo: Repo = buildRepo();
   const store: Store = SqliteStoreAdapter.create(paths, repo, clock);
@@ -238,7 +246,7 @@ export const createSupervisor = (
   // --- Start runDriver ---
 
   // runDriver is a background promise; the supervisor holds its handle.
-  const driverPromise = options.startDriver === false ? Promise.resolve() : runDriver(config, paths, seams);
+  const driverPromise = options.startDriver === false ? Promise.resolve() : runDriver(config, paths, store, seams);
 
   // --- Lifecycle method implementations ---
 
@@ -253,6 +261,29 @@ export const createSupervisor = (
     // A run is a chain tip if no staged entry references it as a parent.
     const staged = store.listStaged();
     return !staged.some((s) => s.parentRunId === runId);
+  };
+
+  const outcomes = (runId: string): string => {
+    try {
+      const ledger = store.readLedger(runId);
+      const counts = { done: 0, in_progress: 0, not_started: 0, blocked: 0 };
+      for (const outcome of ledger.outcomes) {
+        counts[outcome.status] += 1;
+      }
+      const extra = `${counts.in_progress ? `, ${counts.in_progress} in progress` : ""}${counts.blocked ? `, ${counts.blocked} blocked` : ""}`;
+      return `${counts.done}/${ledger.outcomes.length} done${extra}`;
+    } catch {
+      return "";
+    }
+  };
+
+  const gateLatchReason = (runId: string): string | null => {
+    try {
+      const gate = store.readGateState(runId);
+      return isLatched(gate) ? gateReason(gate) ?? "unknown" : null;
+    } catch {
+      return null;
+    }
   };
 
   // Private helper: find the tip of the chain containing runId.
@@ -296,6 +327,75 @@ export const createSupervisor = (
         );
       if (!verdict) return null;
       return verdict.answer ?? null;
+    },
+
+    outcomes(runId: string): string {
+      return outcomes(runId);
+    },
+
+    getStatus(): StatusDto {
+      const active = store.readActiveRun();
+      const activeRun = active
+        ? {
+            runId: active.runId,
+            outcomes: outcomes(active.runId),
+            gateLatched: gateLatchReason(active.runId),
+            recentEvents: store.readJournal(active.runId).slice(-5).map((event) => ({
+              at: event.at,
+              event: event.event,
+            })),
+          }
+        : null;
+
+      const parked = store
+        .listRunIds()
+        .map((id) => store.readMetaIfExists(id))
+        .filter((meta): meta is RunMeta => meta !== undefined && meta.status === "blocked")
+        .map((meta) => ({
+          runId: meta.runId,
+          blockedReason: meta.blockedReason ?? null,
+          blockedQuestion: meta.blockedQuestion ?? null,
+          stallRetries: meta.stallRetries,
+        }));
+
+      const campaigns = store.listCampaigns().map((campaign) => {
+        const last = campaign.passes[campaign.passes.length - 1];
+        return {
+          campaignId: campaign.campaignId,
+          status: campaign.status,
+          pass: last?.pass ?? 0,
+          maxPasses: campaign.maxPasses,
+          originalIntent: campaign.originalIntent,
+        };
+      });
+
+      return {
+        activeRun,
+        queued: store.listQueue().map((entry) => ({ runId: entry.runId })),
+        parked,
+        campaigns,
+        staged: store.listStaged().map((entry) => ({
+          runId: entry.runId,
+          parentRunId: entry.parentRunId ?? null,
+        })),
+      };
+    },
+
+    getReview(): ReviewDto {
+      const runs = store
+        .listRunIds()
+        .map((id) => store.readMetaIfExists(id))
+        .filter((meta): meta is RunMeta => meta !== undefined && meta.status !== "running" && meta.status !== "queued")
+        .map((meta) => ({
+          runId: meta.runId,
+          status: meta.status,
+          outcomes: outcomes(meta.runId),
+          branch: meta.branch,
+          repo: meta.repo,
+          base: meta.base,
+          blockedQuestion: meta.blockedQuestion ?? null,
+        }));
+      return { runs };
     },
 
     listStaged(): Array<{ runId: string; parentRunId: string | undefined }> {
@@ -359,9 +459,10 @@ export const createSupervisor = (
       const runId = basename(resolved).replace(/\.md$/, "");
       admitPacket(store, runId, raw);
 
-      // Check if admission succeeded (packet landed in queue dir).
-      if (!existsSync(join(paths.queueDir, `${runId}.md`))) {
-        throw new Error(`packet rejected — see ${paths.rejectedDir}`);
+      // Check if admission succeeded (meta written with status = 'queued').
+      const meta = store.readMetaIfExists(runId);
+      if (!meta || meta.status !== "queued") {
+        throw new Error(`packet "${runId}" rejected during admission`);
       }
       return runId;
     },
@@ -398,7 +499,7 @@ export const createSupervisor = (
     },
 
     abortRun(runId: string): void {
-      // Fresh queued runs have no meta.json yet — check the queue first.
+      // Queued runs are represented by run meta with status = "queued".
       if (store.listQueue().some((q) => q.runId === runId)) {
         store.archiveQueue(runId);
         return;
@@ -456,8 +557,7 @@ export const createSupervisor = (
     },
 
     rejectRun(runId: string, reason: string): void {
-      // Fresh queued runs have no meta — check the queue first (same pattern
-      // as abortRun; a purely-queued run has no meta.json yet to flip).
+      // Queued runs are represented by run meta with status = "queued".
       if (store.listQueue().some((q) => q.runId === runId)) {
         store.archiveQueue(runId);
         return;
@@ -469,7 +569,7 @@ export const createSupervisor = (
       }
 
       if (meta.status === "queued") {
-        // Queued runs: archive the queue entry (no meta.json yet to flip).
+        // Queued runs: archive the queue entry.
         store.archiveQueue(runId);
         return;
       }

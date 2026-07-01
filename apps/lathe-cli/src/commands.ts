@@ -2,10 +2,9 @@
 // @lathe/cli commands — the testable core behind the `lathe` bin.
 //
 // P05 cutover: mutating commands (enqueue, chain add, abort, accept, reject,
-// and the queue add/drop aliases) go through the daemon — the single owner of
-// run state — over the generated openapi-fetch client. Read commands (status,
-// review, queue list, get, tail) stay local over the WAL Store for consistent
-// snapshot reads.
+// and the queue add/drop aliases) plus read commands (status, review, queue
+// list, get) go through the daemon — the single owner of run state — over the
+// generated openapi-fetch client. Tail is the remaining local-file exception.
 //
 // Everything here is parameterised over a CliEnv (daemon client + reachability
 // probe + output sinks) so the commands can be driven in tests against a stub
@@ -14,16 +13,13 @@
 // ---------------------------------------------------------------------------
 
 import type { paths } from "@lathe/contract";
+import type { ReviewDto, RunDetailDto, StatusDto } from "@lathe/contract";
 import {
   loadConfig,
   buildRepo,
   systemClock,
-  StoreAdapter,
-  renderStatus,
-  renderReview,
-  renderQueue,
+  SqliteStoreAdapter,
   renderJournalEvent,
-  fmtOutcomes,
 } from "@lathe/core";
 import type { Paths, Store } from "@lathe/core";
 import { openTail } from "@lathe/core/tail";
@@ -163,7 +159,7 @@ export const cmdEnqueue = (env: CliEnv, packetPath: string): Promise<number> => 
     (data) => env.log(`enqueued: ${data.runId} (${data.status})`),
     (status) => {
       if (status === 400) {
-        env.err("packet rejected — see rejected/");
+        env.err("packet rejected by daemon");
         return true;
       }
       return false;
@@ -294,15 +290,9 @@ export const cmdReject = (env: CliEnv, runId: string, reason: string): Promise<n
 };
 
 // ---------------------------------------------------------------------------
-// Read commands — stay local over the WAL Store
+// Read commands — status/review/queue/get go through the daemon. Tail stays
+// local until the SSE + journal endpoint pass.
 // ---------------------------------------------------------------------------
-
-const openStore = () => {
-  const { paths: configPaths } = loadConfig();
-  const repo = buildRepo();
-  const store = StoreAdapter.create(configPaths, repo, systemClock);
-  return { configPaths, store };
-};
 
 type TailStore = Pick<Store, "readActiveRun" | "readActiveConvergence" | "readJournal">;
 type TailPaths = Pick<Paths, "journalFile">;
@@ -321,7 +311,7 @@ export type TailDeps = {
 const openTailDeps = (): TailDeps => {
   const { config, paths: configPaths } = loadConfig();
   const repo = buildRepo();
-  const store = StoreAdapter.create(configPaths, repo, systemClock);
+  const store = SqliteStoreAdapter.create(configPaths, repo, systemClock);
   return {
     paths: configPaths,
     store,
@@ -341,21 +331,132 @@ const openTailDeps = (): TailDeps => {
   };
 };
 
-export const cmdStatus = (env: CliEnv): number => {
-  const { store } = openStore();
-  env.log(renderStatus(store));
-  return 0;
+const renderStatusDto = (status: StatusDto): string => {
+  const lines: string[] = [];
+
+  if (status.activeRun) {
+    lines.push(`ACTIVE: ${status.activeRun.runId}  (${status.activeRun.outcomes})`);
+    if (status.activeRun.gateLatched) {
+      lines.push(`  gate latched: ${status.activeRun.gateLatched}`);
+    }
+    for (const event of status.activeRun.recentEvents) {
+      lines.push(`  ${event.at.slice(11, 19)} ${event.event}`);
+    }
+  } else {
+    lines.push("no active run");
+  }
+
+  if (status.queued.length > 0) {
+    lines.push(`queued: ${status.queued.map((q) => q.runId).join(", ")}`);
+  }
+
+  for (const parked of status.parked) {
+    const retries = parked.stallRetries
+      ? `, ${parked.stallRetries} auto-retr${parked.stallRetries === 1 ? "y" : "ies"}`
+      : "";
+    lines.push(
+      `parked: ${parked.runId} (${parked.blockedReason ?? "?"}${retries}) — ${(parked.blockedQuestion ?? "").slice(0, 100)}`,
+    );
+  }
+
+  if (status.campaigns.length > 0) {
+    lines.push("campaigns:");
+    for (const campaign of status.campaigns) {
+      const mark = campaign.status === "converged" ? "✅" : campaign.status === "needs_max" ? "🅿" : "…";
+      lines.push(
+        `  ${mark} ${campaign.campaignId}  [${campaign.status}]  pass ${campaign.pass}/${campaign.maxPasses}  — ${campaign.originalIntent.slice(0, 60)}`,
+      );
+    }
+  }
+
+  if (status.staged.length > 0) {
+    lines.push("chain (staged):");
+    for (const staged of status.staged) {
+      const parent = staged.parentRunId ? `← ${staged.parentRunId}` : "(no parent — head)";
+      lines.push(`  … ${staged.runId}  ${parent}`);
+    }
+  }
+
+  return lines.join("\n");
 };
 
-export const cmdReview = (env: CliEnv): number => {
-  const { store } = openStore();
-  env.log(renderReview(store));
-  return 0;
+const renderReviewDto = (review: ReviewDto): string => {
+  if (review.runs.length === 0) {
+    return "nothing to review";
+  }
+
+  const lines: string[] = [];
+  for (const run of review.runs) {
+    const icon =
+      run.status === "ready_for_review"
+        ? "✅"
+        : run.status === "accepted"
+          ? "☑"
+          : run.status === "blocked"
+            ? "🅿"
+            : run.status === "failed"
+              ? "❌"
+              : "⏸";
+    lines.push(`${icon} ${run.runId}  [${run.status}]  ${run.outcomes}  branch ${run.branch}`);
+    if (run.status === "blocked") {
+      lines.push(`   needs: ${run.blockedQuestion ?? "(no question recorded)"}`);
+      lines.push(`   answer with: lathe answer ${run.runId} "<your decision>"`);
+    }
+    if (run.status === "ready_for_review") {
+      lines.push(`   diff:   git -C ${run.repo} diff ${run.base}...${run.branch}`);
+      lines.push(
+        `   accept: meridian accept ${run.runId} [branch]   (merges into [branch], default ${run.base}; tidies the worktree)`,
+      );
+    }
+  }
+  return lines.join("\n");
 };
 
-// `queue` lists locally; `queue add`/`queue drop` are daemon aliases for
-// enqueue/abort (abortRun archives a still-queued run), so they never mutate
-// the Store behind the daemon's back.
+const renderQueueDto = (status: StatusDto): string => {
+  if (status.queued.length === 0) {
+    return "queue is empty";
+  }
+  return status.queued.map((entry, index) => `${index + 1}. ${entry.runId}`).join("\n");
+};
+
+const renderRunDetailDto = (run: RunDetailDto): string[] => {
+  const lines = [
+    `run: ${run.runId}`,
+    `  status:    ${run.status}`,
+    `  base:      ${run.base}`,
+    `  branch:    ${run.branch}`,
+    `  pass:      ${run.pass}`,
+    `  worktree:  ${run.worktreePath}`,
+  ];
+  if (run.outcomes) {
+    lines.push(`  outcomes: ${run.outcomes}`);
+  }
+  if (run.blockedReason) {
+    lines.push(`  blocked:  ${run.blockedReason}`);
+  }
+  if (run.blockedQuestion) {
+    lines.push(`  question: ${run.blockedQuestion}`);
+  }
+  return lines;
+};
+
+export const cmdStatus = (env: CliEnv): Promise<number> =>
+  runDaemon<PathJsonResponse<"/status", "get", 200>>(
+    env,
+    (client) => client.GET("/status"),
+    (data) => env.log(renderStatusDto(data)),
+  );
+
+export const cmdReview = (env: CliEnv): Promise<number> =>
+  runDaemon<PathJsonResponse<"/review", "get", 200>>(
+    env,
+    (client) => client.GET("/review"),
+    (data) => env.log(renderReviewDto(data)),
+  );
+
+// `queue` lists through daemon status; `queue add`/`queue drop` are daemon
+// aliases for enqueue/abort, so they never mutate the Store behind the daemon's
+// back.
 export const cmdQueue = (env: CliEnv, args: string[]): Promise<number> => {
   const sub = args[0];
   if (sub === "add") {
@@ -372,40 +473,35 @@ export const cmdQueue = (env: CliEnv, args: string[]): Promise<number> => {
     }
     return cmdAbort(env, args[1]);
   }
-  const { store } = openStore();
-  env.log(renderQueue(store));
-  return Promise.resolve(0);
+  return runDaemon<PathJsonResponse<"/status", "get", 200>>(
+    env,
+    (client) => client.GET("/status"),
+    (data) => env.log(renderQueueDto(data)),
+  );
 };
 
-export const cmdGet = (env: CliEnv, runId: string): number => {
+export const cmdGet = (env: CliEnv, runId: string): Promise<number> => {
   if (!runId) {
     env.err("usage: lathe get <runId>");
-    return 1;
-  }
-  const { store } = openStore();
-
-  const meta = store.readMetaIfExists(runId);
-  if (!meta) {
-    env.err(`run ${runId} not found`);
-    return 1;
+    return Promise.resolve(1);
   }
 
-  env.log(`run: ${meta.runId}`);
-  env.log(`  status:    ${meta.status}`);
-  env.log(`  base:      ${meta.base}`);
-  env.log(`  branch:    ${meta.branch}`);
-  env.log(`  pass:      ${meta.attempt}`);
-  env.log(`  worktree:  ${meta.worktree}`);
-  if (meta.summary) {
-    env.log(`  summary:   ${meta.summary}`);
-  }
-
-  const outcomes = fmtOutcomes(store, runId);
-  if (outcomes) {
-    env.log(`  outcomes: ${outcomes}`);
-  }
-
-  return 0;
+  return runDaemon<PathJsonResponse<"/runs/{runId}", "get", 200>>(
+    env,
+    (client) => client.GET("/runs/{runId}", { params: { path: { runId } } }),
+    (data) => {
+      for (const line of renderRunDetailDto(data)) {
+        env.log(line);
+      }
+    },
+    (status) => {
+      if (status === 404) {
+        env.err(`run ${runId} not found`);
+        return true;
+      }
+      return false;
+    },
+  );
 };
 
 const activeTailRunId = (deps: TailDeps): string | undefined =>
@@ -508,8 +604,8 @@ export const usage = `lathe — sequential overnight executor of human-written s
   lathe reject <runId> [reason]  reject a run (via daemon)
   lathe status                 what is running / queued / parked + campaign convergence
   lathe review                 morning triage: terminal statuses, outcomes, questions
-  lathe queue [add|drop]       list the queue (local) / add or drop a packet (via daemon)
-  lathe get <runId>            show run details (local)
+  lathe queue [add|drop]       list the queue / add or drop a packet (via daemon)
+  lathe get <runId>            show run details (via daemon)
   lathe tail [runId]           live journal stream for a run (local)
 `;
 

@@ -97,7 +97,7 @@ export const makeExecuteRun =
     // Decide whether this run resumes a prior session or starts fresh.
     const startDecision = decideRunStart(priorMeta);
 
-    // Packet selection: the queue dir is the single live source of truth.
+    // Packet selection: read the current live run packet for this execution.
     const raw = queuePacket ?? "";
     const shape = parsePacketShape(raw, runId);
     if (!shape.ok) {

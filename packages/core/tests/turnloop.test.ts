@@ -24,7 +24,7 @@ import { buildReconciliationEvidence } from "../src/domain/reconciliation.js";
 import { SubmitReport } from "../src/domain/report.js";
 import type { AskPlannerInput, PlannerResponse, FinalReview } from "../src/domain/review.js";
 import type { BridgeIntent } from "../src/domain/turn.js";
-import { StoreAdapter } from "../src/infrastructure/store.js";
+import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -285,7 +285,7 @@ const FAR_FUTURE = 1_700_000_000_000 + 60 * 60 * 1000;
 test("turnLoop: report → final review accept → ready_for_review with render payload", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-accept-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -321,7 +321,7 @@ test("turnLoop: report → final review accept → ready_for_review with render 
 test("turnLoop: ask_planner aborts the active opencode message and resumes same session", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-ask-abort-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -395,7 +395,7 @@ test("turnLoop: ask_planner aborts the active opencode message and resumes same 
 test("turnLoop: syncs Max answers to Daddy once before later planner work", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-max-sync-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
     const meta = store.readMeta(RUN_ID);
@@ -465,7 +465,7 @@ test("turnLoop: syncs Max answers to Daddy once before later planner work", () =
 test("turnLoop: submit_report aborts the active opencode message before final review", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-report-abort-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -525,7 +525,7 @@ test("turnLoop: submit_report aborts the active opencode message before final re
 test("turnLoop: final review request_changes → re-prompt Q7, then accept", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-rc-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -576,7 +576,7 @@ test("turnLoop: final review request_changes → re-prompt Q7, then accept", () 
 test("turnLoop: 3 final-review rejections → model_promoted → accept on promoted model", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-promo-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -641,7 +641,7 @@ test("turnLoop: 3 final-review rejections → model_promoted → accept on promo
 test("turnLoop: promoted model also rejected → run fails (no double promotion)", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-promo-fail-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -691,7 +691,7 @@ test("turnLoop: promoted model also rejected → run fails (no double promotion)
 test("turnLoop: first context overflow rotates without promoting", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-overflow-once-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -738,7 +738,7 @@ test("turnLoop: first context overflow rotates without promoting", () => {
 test("turnLoop: two consecutive context overflows promote and continue on the promoted model", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-overflow-promote-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -791,7 +791,7 @@ test("turnLoop: two consecutive context overflows promote and continue on the pr
 test("turnLoop: non-overflow turn resets the consecutive overflow counter", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-overflow-reset-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -839,7 +839,7 @@ test("turnLoop: non-overflow turn resets the consecutive overflow counter", () =
 test("turnLoop: promoted model context-overflow loop parks wedged", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-overflow-promoted-park-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
     store.writeMeta({ ...store.readMeta(RUN_ID), promoted: true });
@@ -879,7 +879,7 @@ test("turnLoop: promoted model context-overflow loop parks wedged", () => {
 test("turnLoop: Baby submits mid-turn → bridge sets turnComplete, turn resolves normally, runs final review, terminal", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-submit-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -933,7 +933,7 @@ test("turnLoop: Baby submits mid-turn → bridge sets turnComplete, turn resolve
 test("turnLoop: consult round-trip — accepted decision clears the gate", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-consult-"));
-    const store = StoreAdapter.create(
+    const store = SqliteStoreAdapter.create(
       makePaths(tmp),
       fakeRepo({ "src/index.ts": { added: 3, removed: 0 } }),
       fixedClock(),
@@ -1016,7 +1016,7 @@ test("turnLoop: reconciliation consult is enriched from driver evidence", () => 
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-reconcile-"));
     const repo = fakeRepo({ "src/index.ts": { added: 3, removed: 0 } });
-    const store = StoreAdapter.create(makePaths(tmp), repo, fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
     store.writeGateState(RUN_ID, {
@@ -1083,7 +1083,7 @@ test("turnLoop: reconciliation reuses prior accepted fingerprint without Daddy",
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-reconcile-reuse-"));
     const repo = fakeRepo();
-    const store = StoreAdapter.create(makePaths(tmp), repo, fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
     const fingerprint = buildReconciliationEvidence({
@@ -1173,7 +1173,7 @@ test("turnLoop: reconciliation reuses prior accepted fingerprint without Daddy",
 test("turnLoop: orphaned consult re-arms and runs on the next turn", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-rearm-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -1249,7 +1249,7 @@ test("turnLoop: orphaned consult re-arms and runs on the next turn", () => {
 test("turnLoop: consult stop verdict → parks blocked (stop_condition)", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-stop-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -1303,7 +1303,7 @@ test("turnLoop: consult stop verdict → parks blocked (stop_condition)", () => 
 test("turnLoop: no-progress rotate — session replaced, gate re-latched, then terminal", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-rotate-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -1344,7 +1344,7 @@ test("turnLoop: no-progress rotate — session replaced, gate re-latched, then t
 test("turnLoop: provider context overflow rotates instead of parking as dead session", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-overflow-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -1409,7 +1409,7 @@ test("turnLoop: gate trigger at turn end → latch + demand checkpoint (Q4)", ()
     const tmp = await mkdtempP(join(tmpdir(), "tl-gate-"));
     // A diff present + initial phase → the first-edit trigger fires.
     const repo = fakeRepo({ "src/index.ts": { added: 5, removed: 1 } });
-    const store = StoreAdapter.create(makePaths(tmp), repo, fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -1456,7 +1456,7 @@ test("turnLoop: gate trigger at turn end → latch + demand checkpoint (Q4)", ()
 test("turnLoop: report rejected at the cap → terminal failed", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-reject-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -1486,7 +1486,7 @@ test("turnLoop: report rejected at the cap → terminal failed", () => {
 test("turnLoop: final-review nit cap at completed final step → ready_for_review for convergence", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-final-nit-cap-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
     markLedgerDone(store);
@@ -1542,7 +1542,7 @@ test("turnLoop: final-review nit cap at completed final step → ready_for_revie
 test("turnLoop: final-review cap with incomplete ledger still fails", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-final-incomplete-cap-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -1590,7 +1590,7 @@ test("turnLoop: final-review cap with incomplete ledger still fails", () => {
 test("turnLoop: past the deadline → parks wedged (watchdog)", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-watchdog-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -1623,7 +1623,7 @@ test("turnLoop: past the deadline → parks wedged (watchdog)", () => {
 test("turnLoop: progress with nothing pending → neutral continue (Q3), then terminal", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-continue-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -1658,7 +1658,7 @@ test("turnLoop: progress with nothing pending → neutral continue (Q3), then te
 test("turnLoop: two consecutive sendMessage failures → parks wedged", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-sndfail-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -1707,7 +1707,7 @@ test("turnLoop: two consecutive sendMessage failures → parks wedged", () => {
 test("turnLoop: consult reorient → session replaced, Q9 reseed, then terminal", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-reorient-"));
-    const store = StoreAdapter.create(
+    const store = SqliteStoreAdapter.create(
       makePaths(tmp),
       fakeRepo({ "src/index.ts": { added: 3, removed: 0 } }),
       fixedClock(),
@@ -1772,7 +1772,7 @@ test("turnLoop: consult reorient → session replaced, Q9 reseed, then terminal"
 test("turnLoop: consult promote_run → promotes model, rotates session, then continues", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-promote-run-"));
-    const store = StoreAdapter.create(
+    const store = SqliteStoreAdapter.create(
       makePaths(tmp),
       fakeRepo({ "src/index.ts": { added: 3, removed: 0 } }),
       fixedClock(),
@@ -1854,7 +1854,7 @@ test("turnLoop: consult promote_run → promotes model, rotates session, then co
 test("turnLoop: context budget reached → demand_teardown Q5, then terminal", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-teardown-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 
@@ -1917,7 +1917,7 @@ test("turnLoop: context budget reached → demand_teardown Q5, then terminal", (
 test("turnLoop: rotationPending with no checkpoint → re_demand_teardown Q5, ladder climbs", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-redemand-"));
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
 

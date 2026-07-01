@@ -60,24 +60,23 @@ Write a markdown file named:
 YYYYMMDD-HHMMSS-<short-kebab-slug>.md
 ```
 
-The filename is machine-checked and becomes the run id. Lexical order is queue
-order.
+The filename is machine-checked and becomes the run id.
 
-Prefer writing outside the live queue dir, then admit it:
+Write the draft anywhere convenient, then admit it:
 
 ```sh
 lathe queue add <the-packet-file>
 ```
 
 `lathe queue add` validates YAML, stamps missing `base`, verifies that `repo` is
-a git repo, verifies that `base` exists, and writes the admitted copy to the
-current queue under `~/.meridian/v3/queue`. It prints `admitted: <runId>` on
-success. If it rejects, fix the packet and re-run until it admits. Do not hand
-Max an unvalidated packet.
+a git repo, verifies that `base` exists, creates a queued run in SQLite, and
+writes the live packet to `runs/<runId>/packet.md`. It prints `enqueued: <runId>`
+on success. If it rejects, fix the packet and re-run until it admits. Do not
+hand Max an unvalidated packet.
 
-If `lathe plan` told you to write into `~/.meridian/v3/queue`, still run
-`lathe queue add` immediately. A file dropped into the queue dir is not a proper
-admission step by itself, especially when `base` was omitted.
+Do not drop files into `~/.meridian/v3/queue`; the queue is SQLite-backed and a
+packet file by itself is not an admission step, especially when `base` was
+omitted.
 
 ## Frontmatter
 

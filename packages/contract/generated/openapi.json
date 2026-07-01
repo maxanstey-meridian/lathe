@@ -132,6 +132,50 @@
         }
       }
     },
+    "/status": {
+      "get": {
+        "operationId": "lathe_getStatus",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "getStatus",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/review": {
+      "get": {
+        "operationId": "lathe_getReview",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "getReview",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/runs/{runId}/abort": {
       "post": {
         "operationId": "lathe_abortRun",
@@ -439,6 +483,58 @@
           }
         }
       },
+      "ReviewDto": {
+        "type": "object",
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewRunDto"
+            }
+          }
+        },
+        "required": [
+          "runs"
+        ]
+      },
+      "ReviewRunDto": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "outcomes": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "base": {
+            "type": "string"
+          },
+          "blockedQuestion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "runId",
+          "status",
+          "outcomes",
+          "branch",
+          "repo",
+          "base",
+          "blockedQuestion"
+        ]
+      },
       "RunDetailDto": {
         "type": "object",
         "properties": {
@@ -501,6 +597,21 @@
               "string",
               "null"
             ]
+          },
+          "outcomes": {
+            "type": "string"
+          },
+          "blockedReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "blockedQuestion": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -520,7 +631,10 @@
           "worktreePath",
           "parentRunId",
           "expectedSurface",
-          "lastVerdict"
+          "lastVerdict",
+          "outcomes",
+          "blockedReason",
+          "blockedQuestion"
         ]
       },
       "RunSummaryDto": {
@@ -572,6 +686,178 @@
           "isChainTip",
           "startedAt",
           "updatedAt"
+        ]
+      },
+      "StatusActiveRunDto": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "outcomes": {
+            "type": "string"
+          },
+          "gateLatched": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recentEvents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "string"
+                },
+                "event": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "at",
+                "event"
+              ]
+            }
+          }
+        },
+        "required": [
+          "runId",
+          "outcomes",
+          "gateLatched",
+          "recentEvents"
+        ]
+      },
+      "StatusCampaignDto": {
+        "type": "object",
+        "properties": {
+          "campaignId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "pass": {
+            "type": "number"
+          },
+          "maxPasses": {
+            "type": "number"
+          },
+          "originalIntent": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "campaignId",
+          "status",
+          "pass",
+          "maxPasses",
+          "originalIntent"
+        ]
+      },
+      "StatusDto": {
+        "type": "object",
+        "properties": {
+          "activeRun": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StatusActiveRunDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "queued": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusQueuedRunDto"
+            }
+          },
+          "parked": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusParkedRunDto"
+            }
+          },
+          "campaigns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusCampaignDto"
+            }
+          },
+          "staged": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusStagedRunDto"
+            }
+          }
+        },
+        "required": [
+          "activeRun",
+          "queued",
+          "parked",
+          "campaigns",
+          "staged"
+        ]
+      },
+      "StatusParkedRunDto": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "blockedReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "blockedQuestion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stallRetries": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "runId",
+          "blockedReason",
+          "blockedQuestion",
+          "stallRetries"
+        ]
+      },
+      "StatusQueuedRunDto": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId"
+        ]
+      },
+      "StatusStagedRunDto": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "parentRunId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "runId",
+          "parentRunId"
         ]
       },
       "RunStatus": {

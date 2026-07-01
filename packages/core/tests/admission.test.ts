@@ -1,6 +1,6 @@
 import { equal, strictEqual, ok, match } from "node:assert";
 import { execSync } from "node:child_process";
-import { readdirSync, writeFileSync, existsSync, readFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync } from "node:fs";
 import { mkdtemp as mkdtempP, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +10,7 @@ import type { Repo } from "../src/application/ports/repo.js";
 import { admitPacket } from "../src/application/use-cases/admit-packet.js";
 import { makePaths } from "../src/config/paths.js";
 import { repoValid, branchExists, headBranch } from "../src/infrastructure/git.js";
-import { StoreAdapter } from "../src/infrastructure/store.js";
+import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -176,7 +176,7 @@ test("admitPacket: valid packet → admitted to queue, not archived", () => {
     const repoPath = join(tmp, "repo");
     const repo = gitRepo();
     initGitRepo(repoPath);
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
     const packet = validPacket.replace("/tmp/test-repo", repoPath);
     admitPacket(store, "20260101-000000-valid", packet);
     // Should be in queue
@@ -184,7 +184,7 @@ test("admitPacket: valid packet → admitted to queue, not archived", () => {
     strictEqual(queue.length, 1);
     equal(queue[0].runId, "20260101-000000-valid");
     // Should NOT be archived
-    strictEqual(existsSync(join(tmp, "rejected", "20260101-000000-valid.md")), false);
+    strictEqual(store.readRejected("20260101-000000-valid"), undefined);
     await cleanTemp(tmp);
   })();
 });
@@ -196,7 +196,7 @@ test("admitPacket: valid packet without base → stamped from HEAD", () => {
     const repoPath = join(tmp, "repo");
     const repo = gitRepo();
     initGitRepo(repoPath);
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
     const packet = `---
 repo: ${repoPath}
 compare_commit: main
@@ -216,10 +216,9 @@ body
     const queue = store.listQueue();
     strictEqual(queue.length, 1);
     // Base should be stamped from HEAD (main)
-    const queueFile = join(tmp, "queue", "20260101-000000-nobase.md");
-    ok(existsSync(queueFile));
-    const content = readFileSync(queueFile, "utf-8");
-    match(content, /base: main/);
+    const queueContent = store.readQueuePacket("20260101-000000-nobase");
+    ok(queueContent);
+    match(queueContent, /base: main/);
     await cleanTemp(tmp);
   })();
 });
@@ -231,14 +230,14 @@ test("admitPacket: valid packet with explicit base → base preserved", () => {
     const repoPath = join(tmp, "repo");
     const repo = gitRepo();
     initGitRepo(repoPath);
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
     const packet = validPacket.replace("/tmp/test-repo", repoPath);
     admitPacket(store, "20260101-000000-explicit", packet);
     const queue = store.listQueue();
     strictEqual(queue.length, 1);
-    const queueFile = join(tmp, "queue", "20260101-000000-explicit.md");
-    const content = readFileSync(queueFile, "utf-8");
-    match(content, /base: main/);
+    const queueContent = store.readQueuePacket("20260101-000000-explicit");
+    ok(queueContent);
+    match(queueContent, /base: main/);
     await cleanTemp(tmp);
   })();
 });
@@ -250,15 +249,12 @@ test("admitPacket: invalid packet (no repo) → archived, not in queue", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "admit-norepo-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
     admitPacket(store, "20260101-000000-norepo", invalidNoRepoPacket);
     strictEqual(store.listQueue().length, 0);
-    ok(existsSync(join(tmp, "rejected", "20260101-000000-norepo.md")), "should be archived");
-    const problems = readFileSync(
-      join(tmp, "rejected", "20260101-000000-norepo.md.problems.txt"),
-      "utf-8",
-    );
-    match(problems, /no repo/);
+    const rejected = store.readRejected("20260101-000000-norepo");
+    ok(rejected, "should be archived");
+    match(rejected!.problems ?? "", /no repo/);
     await cleanTemp(tmp);
   })();
 });
@@ -267,15 +263,12 @@ test("admitPacket: invalid packet (no outcomes) → archived with schema error",
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "admit-nooutcomes-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
     admitPacket(store, "20260101-000000-nooutcomes", invalidNoOutcomesPacket);
     strictEqual(store.listQueue().length, 0);
-    ok(existsSync(join(tmp, "rejected", "20260101-000000-nooutcomes.md")), "should be archived");
-    const problems = readFileSync(
-      join(tmp, "rejected", "20260101-000000-nooutcomes.md.problems.txt"),
-      "utf-8",
-    );
-    match(problems, /outcomes/);
+    const rejected = store.readRejected("20260101-000000-nooutcomes");
+    ok(rejected, "should be archived");
+    match(rejected!.problems ?? "", /outcomes/);
     await cleanTemp(tmp);
   })();
 });
@@ -284,15 +277,12 @@ test("admitPacket: invalid YAML frontmatter → archived", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "admit-badyaml-"));
     const clock = fixedClock();
-    const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
     admitPacket(store, "20260101-000000-badyaml", invalidYamlPacket);
     strictEqual(store.listQueue().length, 0);
-    ok(existsSync(join(tmp, "rejected", "20260101-000000-badyaml.md")), "should be archived");
-    const problems = readFileSync(
-      join(tmp, "rejected", "20260101-000000-badyaml.md.problems.txt"),
-      "utf-8",
-    );
-    match(problems, /no repo/);
+    const rejected = store.readRejected("20260101-000000-badyaml");
+    ok(rejected, "should be archived");
+    match(rejected!.problems ?? "", /no repo/);
     await cleanTemp(tmp);
   })();
 });
@@ -305,16 +295,13 @@ test("admitPacket: invalid packet when repoValid fails → archived with repo er
     const repoPath = join(tmp, "not-a-repo");
     mkdirSync(repoPath);
     const repo = gitRepo();
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
     const packet = validPacket.replace("/tmp/test-repo", repoPath);
     admitPacket(store, "20260101-000000-badrepo", packet);
     strictEqual(store.listQueue().length, 0);
-    ok(existsSync(join(tmp, "rejected", "20260101-000000-badrepo.md")), "should be archived");
-    const problems = readFileSync(
-      join(tmp, "rejected", "20260101-000000-badrepo.md.problems.txt"),
-      "utf-8",
-    );
-    match(problems, /not a valid git repository/);
+    const rejected = store.readRejected("20260101-000000-badrepo");
+    ok(rejected, "should be archived");
+    match(rejected!.problems ?? "", /not a valid git repository/);
     await cleanTemp(tmp);
   })();
 });
@@ -326,19 +313,16 @@ test("admitPacket: invalid packet when branchExists fails → archived", () => {
     const repoPath = join(tmp, "repo");
     const repo = gitRepo();
     initGitRepo(repoPath);
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
     // Use a base branch that does not exist in the repo
     const packet = validPacket
       .replace("/tmp/test-repo", repoPath)
       .replace("base: main", "base: nonexistent");
     admitPacket(store, "20260101-000000-noexist", packet);
     strictEqual(store.listQueue().length, 0);
-    ok(existsSync(join(tmp, "rejected", "20260101-000000-noexist.md")), "should be archived");
-    const problems = readFileSync(
-      join(tmp, "rejected", "20260101-000000-noexist.md.problems.txt"),
-      "utf-8",
-    );
-    match(problems, /does not exist/);
+    const rejected = store.readRejected("20260101-000000-noexist");
+    ok(rejected, "should be archived");
+    match(rejected!.problems ?? "", /does not exist/);
     await cleanTemp(tmp);
   })();
 });
@@ -353,7 +337,7 @@ test("admitPacket: both valid and invalid packets are never deleted", () => {
     const repoPath = join(tmp, "repo");
     const repo = gitRepo();
     initGitRepo(repoPath);
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
     const validP = validPacket.replace("/tmp/test-repo", repoPath);
     admitPacket(store, "20260101-000000-valid", validP);
@@ -365,10 +349,7 @@ test("admitPacket: both valid and invalid packets are never deleted", () => {
     equal(queue[0].runId, "20260101-000000-valid");
 
     // Invalid should be in rejected
-    const rejectedDir = join(tmp, "rejected");
-    ok(existsSync(rejectedDir));
-    const rejected = readdirSync(rejectedDir);
-    ok(rejected.some((f) => f.startsWith("20260101-000000-invalid")));
+    ok(store.readRejected("20260101-000000-invalid"));
 
     await cleanTemp(tmp);
   })();

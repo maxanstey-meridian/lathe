@@ -620,6 +620,9 @@ test("checkpointNudgeNotice: past interval → NOTICE string", () => {
   assert.ok(notice?.includes("~30 min"));
   assert.ok(notice?.includes("You are NOT blocked"));
   assert.ok(notice?.includes("ask_planner"));
+  assert.ok(notice?.includes("call ask_planner now"));
+  assert.ok(notice?.includes("Prose is not a routed question"));
+  assert.ok(!notice?.includes("Daddy's eyes"));
 });
 
 test("checkpointNudgeNotice: uses default 20 min if checkpointNudgeMs not set", () => {
@@ -740,113 +743,36 @@ test("GIT_MESSAGE: git mutations blocked to driver", () => {
   assert.ok(GIT_MESSAGE.includes("the driver commits at the end of the run"));
 });
 
-// ===========================================================================
-// Legacy migration — old-format gate-state on disk must parse to new phase
-// ===========================================================================
-
-const legacyBase = {
-  runId: "20260101-000000-test",
-  expectedGlobs: ["src/**"],
-  suspiciousGlobs: [],
-  baselineDiffStats: {},
-  mutationCommandPatterns: [],
-  updatedAt: "2026-01-01T00:00:00Z",
-};
-
-test("GateState.parse: legacy FFF → initial", () => {
-  const parsed = GateState.parse({
-    ...legacyBase,
-    latched: false,
-    firstEditApproved: false,
-    reconciliationRequired: false,
-  });
-  assert.strictEqual(parsed.phase.phase, "initial");
-});
-
-test("GateState.parse: legacy TFF → first-edit-latched", () => {
-  const parsed = GateState.parse({
-    ...legacyBase,
-    latched: true,
-    latchReason: "first edit pending",
-    firstEditApproved: false,
-    reconciliationRequired: false,
-  });
-  assert.strictEqual(parsed.phase.phase, "first-edit-latched");
-  if (parsed.phase.phase === "first-edit-latched") {
-    assert.strictEqual(parsed.phase.reason, "first edit pending");
-  }
-});
-
-test("GateState.parse: legacy TFT → reconciliation-latched", () => {
-  const parsed = GateState.parse({
-    ...legacyBase,
-    latched: true,
-    latchReason: "recon needed",
-    firstEditApproved: false,
-    reconciliationRequired: true,
-  });
-  assert.strictEqual(parsed.phase.phase, "reconciliation-latched");
-  if (parsed.phase.phase === "reconciliation-latched") {
-    assert.strictEqual(parsed.phase.reason, "recon needed");
-  }
-});
-
-test("GateState.parse: legacy FTF → cleared", () => {
-  const parsed = GateState.parse({
-    ...legacyBase,
-    latched: false,
-    firstEditApproved: true,
-    reconciliationRequired: false,
-  });
-  assert.strictEqual(parsed.phase.phase, "cleared");
-});
-
-test("GateState.parse: legacy TTF → checkpoint-demand-latched", () => {
-  const parsed = GateState.parse({
-    ...legacyBase,
-    latched: true,
-    latchReason: "checkpoint demand",
-    firstEditApproved: true,
-    reconciliationRequired: false,
-  });
-  assert.strictEqual(parsed.phase.phase, "checkpoint-demand-latched");
-  if (parsed.phase.phase === "checkpoint-demand-latched") {
-    assert.strictEqual(parsed.phase.reason, "checkpoint demand");
-  }
-});
-
-test("GateState.parse: legacy with lastAcceptedDecisionAt preserves it", () => {
-  const parsed = GateState.parse({
-    ...legacyBase,
-    latched: false,
-    firstEditApproved: true,
-    reconciliationRequired: false,
-    lastAcceptedDecisionAt: "2026-06-01T00:00:00Z",
-  });
-  assert.strictEqual(parsed.phase.phase, "cleared");
-  assert.strictEqual(parsed.lastAcceptedDecisionAt, "2026-06-01T00:00:00Z");
-});
-
-test("GateState.parse: legacy with no latchReason gets default", () => {
-  const parsed = GateState.parse({
-    ...legacyBase,
-    latched: true,
-    firstEditApproved: false,
-    reconciliationRequired: false,
-  });
-  assert.strictEqual(parsed.phase.phase, "first-edit-latched");
-  if (parsed.phase.phase === "first-edit-latched") {
-    assert.ok(parsed.phase.reason.length > 0, "missing latchReason gets a default");
-  }
-});
-
 test("GateState.parse: new-format passes through unchanged", () => {
+  const base = {
+    runId: "20260101-000000-test",
+    expectedGlobs: ["src/**"],
+    suspiciousGlobs: [],
+    baselineDiffStats: {},
+    mutationCommandPatterns: [],
+    updatedAt: "2026-01-01T00:00:00Z",
+  };
   const parsed = GateState.parse({
-    ...legacyBase,
+    ...base,
     phase: { phase: "reconciliation-latched", reason: "test" },
   });
   assert.strictEqual(parsed.phase.phase, "reconciliation-latched");
   if (parsed.phase.phase === "reconciliation-latched") {
     assert.strictEqual(parsed.phase.reason, "test");
   }
+});
+
+test("GateState.parse: legacy boolean format is rejected", () => {
+  const parsed = GateState.safeParse({
+    runId: "20260101-000000-test",
+    latched: true,
+    firstEditApproved: false,
+    reconciliationRequired: false,
+    expectedGlobs: ["src/**"],
+    suspiciousGlobs: [],
+    baselineDiffStats: {},
+    mutationCommandPatterns: [],
+    updatedAt: "2026-01-01T00:00:00Z",
+  });
+  assert.strictEqual(parsed.success, false);
 });

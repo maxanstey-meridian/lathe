@@ -44,42 +44,6 @@ export type GateStateFile = {
   mutationCommandPatterns: string[]
 }
 
-// Legacy format (pre-phase-refactor): three control booleans.
-type GateStateFileLegacy = {
-  runId: string
-  latched: boolean
-  latchReason?: string
-  firstEditApproved: boolean
-  reconciliationRequired: boolean
-  expectedGlobs: string[]
-  baselineDiffStats: Record<string, { added: number; removed: number }>
-  lastAcceptedDecisionAt?: string
-  checkpointNudgeMs?: number
-  checkpointToolCalls?: number
-  checkpointFiles?: number
-  checkpointLoc?: number
-  mutationCommandPatterns: string[]
-}
-
-// Transparent migration: old-format gate-state files are converted on read.
-const migratePhase = (raw: GateStateFile | GateStateFileLegacy): GateStateFile => {
-  if ("phase" in raw) return raw
-  const { latched, latchReason, firstEditApproved, reconciliationRequired, ...rest } = raw
-  let phase: GatePhaseValue
-  if (!latched && !firstEditApproved && !reconciliationRequired)
-    phase = { phase: "initial" }
-  else if (latched && !firstEditApproved && !reconciliationRequired)
-    phase = { phase: "first-edit-latched", reason: latchReason ?? "planner checkpoint required" }
-  else if (latched && !firstEditApproved && reconciliationRequired)
-    phase = { phase: "reconciliation-latched", reason: latchReason ?? "reconciliation required: no valid checkpoint from the previous session" }
-  else if (!latched && firstEditApproved && !reconciliationRequired)
-    phase = { phase: "cleared" }
-  // Remaining (TTF reachable via relatchGate; FTT/FFT/TTT unreachable)
-  else
-    phase = { phase: "checkpoint-demand-latched", reason: latchReason ?? "planner checkpoint required" }
-  return { ...rest, phase }
-}
-
 const STATE_ROOT = join(homedir(), ".meridian", "v3")
 
 const readJson = <T>(path: string): T | undefined => {
@@ -94,9 +58,7 @@ export const activeRun = (): ActiveRun | undefined =>
   readJson<ActiveRun>(join(STATE_ROOT, "active-run.json"))
 
 export const gateState = (run: ActiveRun): GateStateFile | undefined => {
-  const raw = readJson<GateStateFile | GateStateFileLegacy>(join(run.runDir, "gate-state.json"))
-  if (!raw) return undefined
-  return migratePhase(raw)
+  return readJson<GateStateFile>(join(run.runDir, "gate-state.json"))
 }
 
 // --- tool classification -----------------------------------------------------
@@ -247,7 +209,7 @@ export const checkpointNudgeNotice = (state: GateStateFile, nowMs: number): stri
   const elapsed = nowMs - Date.parse(state.lastAcceptedDecisionAt)
   if (elapsed < intervalMs) return undefined
   const minutes = Math.round(elapsed / 60_000)
-  return `MERIDIAN GATE NOTICE: ~${minutes} min since your last planner check-in. You are NOT blocked — this is a reminder, keep working with full tool access. If your direction could use Daddy's eyes, call ask_planner; otherwise carry on and call submit_report once the packet is complete.`
+  return `MERIDIAN GATE NOTICE: ~${minutes} min since your last planner check-in. You are NOT blocked — this is a reminder, keep working with full tool access. If stuck, guessing, surprised by code, repeating a failed fix, or your plan changed, call ask_planner now. Prose is not a routed question. Otherwise carry on and call submit_report once the packet is complete.`
 }
 
 // Diff snapshot for the volume reminder's files/LoC axis. Only called on mutation

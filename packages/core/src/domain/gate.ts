@@ -45,66 +45,7 @@ const GateStateFields = z.object({
 
 const GateStateNew = GateStateFields.extend({ phase: GatePhase });
 
-// Legacy shape (pre-phase-refactor): three control booleans + latchReason.
-// Kept for transparent migration on read — old runs on disk still have this.
-const GateStateLegacy = z.object({
-  runId: z.string(),
-  latched: z.boolean(),
-  latchReason: z.string().optional(),
-  firstEditApproved: z.boolean(),
-  reconciliationRequired: z.boolean(),
-  expectedGlobs: z.array(z.string()),
-  suspiciousGlobs: z.array(z.string()),
-  baselineDiffStats: z.record(z.string(), DiffStat),
-  lastAcceptedDecisionAt: z.string().optional(),
-  checkpointNudgeMs: z.number().int().optional(),
-  checkpointToolCalls: z.number().int().optional(),
-  checkpointFiles: z.number().int().optional(),
-  checkpointLoc: z.number().int().optional(),
-  mutationCommandPatterns: z.array(z.string()).default([]),
-  updatedAt: z.string(),
-});
-
-type LegacyGateState = z.infer<typeof GateStateLegacy>;
-
-const migrateLegacy = (old: LegacyGateState): z.infer<typeof GateStateNew> => {
-  const { latched, latchReason, firstEditApproved, reconciliationRequired, ...rest } = old;
-  if (!latched && !firstEditApproved && !reconciliationRequired) {
-    return { ...rest, phase: { phase: "initial" } };
-  }
-  if (latched && !firstEditApproved && !reconciliationRequired) {
-    return {
-      ...rest,
-      phase: { phase: "first-edit-latched", reason: latchReason ?? "planner checkpoint required" },
-    };
-  }
-  if (latched && !firstEditApproved && reconciliationRequired) {
-    return {
-      ...rest,
-      phase: {
-        phase: "reconciliation-latched",
-        reason:
-          latchReason ?? "reconciliation required: no valid checkpoint from the previous session",
-      },
-    };
-  }
-  if (!latched && firstEditApproved && !reconciliationRequired) {
-    return { ...rest, phase: { phase: "cleared" } };
-  }
-  // Remaining combinations (TTF, and unreachable FTT/FFT/TTT).
-  // TTF (latched && firstEditApproved && !reconciliationRequired) is the only
-  // reachable one — relatchGate on a cleared state. The rest can't arise
-  // through factories but get the same mapping for safety.
-  return {
-    ...rest,
-    phase: {
-      phase: "checkpoint-demand-latched",
-      reason: latchReason ?? "planner checkpoint required",
-    },
-  };
-};
-
-export const GateState = z.union([GateStateNew, GateStateLegacy.transform(migrateLegacy)]);
+export const GateState = GateStateNew;
 export type GateState = z.infer<typeof GateStateNew>;
 
 // Read helpers — eliminate verbose phase narrowing at consumer sites.

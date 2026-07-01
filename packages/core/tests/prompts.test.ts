@@ -240,6 +240,9 @@ describe("prompts — Q-table renderers", () => {
       const prompt = softCheckpointNudge(25);
       match(prompt, /~25 min/);
       match(prompt, /NOT blocked/);
+      match(prompt, /call meridian-bridge_ask_planner now/);
+      match(prompt, /Prose is not a routed question/);
+      doesNotMatch(prompt, /Daddy's eyes/);
     });
   });
 

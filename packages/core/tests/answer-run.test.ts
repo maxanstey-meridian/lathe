@@ -106,7 +106,7 @@ test("answer-run: refuses when run is not blocked", async () => {
   strictEqual(result.ok, false);
   equal(
     (result as { ok: false; reason: string }).reason,
-    "run 20260101-000000-running is not parked (status: running)",
+    "run 20260101-000000-running is not answerable (status: running)",
   );
   await cleanTemp(tmp);
 });
@@ -190,6 +190,51 @@ test("answer-run: uses meta.blockedQuestion when present, placeholder when absen
 
   const decisions = store.readDecisions("20260101-000000-noq");
   equal(decisions[0].question, "(parked without a recorded question)");
+
+  await cleanTemp(tmp);
+});
+
+test("answer-run: succeeds for failed run (retry)", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "answer-run-failed-"));
+  const clock = fixedClock();
+  const repo = fakeRepo();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
+
+  const meta = {
+    runId: "20260101-000000-failed",
+    status: "failed" as const,
+    attempt: 1,
+    repo: "/tmp/repo",
+    base: "main",
+    branch: "meridian/20260101-000000-failed",
+    worktree: join(tmpdir(), "wt"),
+    crashRetries: 3,
+    stallRetries: 2,
+    updatedAt: clock.nowIso(),
+  };
+  store.writeMeta(meta);
+
+  const result = answerRun(
+    store,
+    repo,
+    "20260101-000000-failed",
+    "Tests are fixed. Please continue.",
+    join(tmpdir(), "wt"),
+    clock,
+  );
+  strictEqual(result.ok, true);
+
+  // Decision appended with retry context
+  const decisions = store.readDecisions("20260101-000000-failed");
+  strictEqual(decisions.length, 1);
+  equal(decisions[0].answer, "Tests are fixed. Please continue.");
+  equal(decisions[0].question, "(run failed — retry requested)");
+
+  // Meta updated: queued, counters reset
+  const updatedMeta = store.readMeta("20260101-000000-failed");
+  strictEqual(updatedMeta.status, "queued");
+  strictEqual(updatedMeta.crashRetries, 0);
+  strictEqual(updatedMeta.stallRetries, 0);
 
   await cleanTemp(tmp);
 });

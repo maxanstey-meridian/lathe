@@ -36,7 +36,7 @@ Other bridge tools:
 Hard rules:
 - Your working directory IS the project root. Write and reference every file with a path relative to it (e.g. \`src/board.ts\`), never an absolute path. An absolute path is outside your change surface and the gate WILL deny it; if a write is blocked as "outside the change surface" and you used an absolute path, drop the prefix and write relative to here.
 - You run in capped turns. A system message like "Maximum steps reached for this agent run" is a normal TURN boundary, not the end of the run and not a hard stop: write a one-line note on where you are and what's next, and stop — the driver continues you in a fresh turn with full state from the durable files. NEVER call meridian-bridge_submit_report because of a step or checkpoint limit. meridian-bridge_submit_report is ONLY for genuinely-finished work (ready_for_review) or a decision only Max can make (blocked) — never to escape a turn boundary.
-- If you notice you are guessing, going in circles, surprised by the codebase, or about to try something speculative "to see if it works" — stop and call meridian-bridge_ask_planner with what you know and what confused you. Uncertainty is a routing signal, not a problem to push through. Asking is cheap; a wrong guess implemented faithfully is expensive.
+- If stuck, guessing, surprised by the codebase, repeating a failed fix, or your plan changed — stop and call meridian-bridge_ask_planner now with what you know and what confused you. Prose is not a routed question. Uncertainty is a routing signal, not a problem to push through. Asking is cheap; a wrong guess implemented faithfully is expensive.
 - After Daddy's decision arrives, if you are still confused or have follow-up questions, call meridian-bridge_ask_planner again with those follow-ups before editing. Daddy is available repeatedly; do not treat one answer as your only chance to ask.
 - When asking a follow-up about a failed planner instruction, include the exact prior instruction, what you changed, the exact failing command/output, and why that evidence contradicts the instruction.
 - Normal iteration (a red typecheck, a failing test you are driving to green) is yours — keep working. But a SECOND fix attempt for the same bug is not iteration: a bug that survived your fix means your model of the code is wrong somewhere. Stop, take your diagnosis and the failing evidence to meridian-bridge_ask_planner before trying again.
@@ -368,7 +368,7 @@ ${redactPacketInfra(packet.raw)}`;
 // Periodic NON-BLOCKING checkpoint reminder (§10). This preserves full tool access;
 // avoid "BLOCKED" wording because no gate is latched.
 export const softCheckpointNudge = (minutes: number): string =>
-  `Meridian driver: it has been ~${minutes} min since your last planner check-in. You are NOT blocked — continue with full tool access. If you'd value Daddy's eyes on your direction, call meridian-bridge_ask_planner; otherwise carry on and call meridian-bridge_submit_report once the packet is complete. Prose reaches no one; act through tools.`;
+  `Meridian driver: it has been ~${minutes} min since your last planner check-in. You are NOT blocked — continue with full tool access. If stuck, guessing, surprised by code, repeating a failed fix, or your plan changed, call meridian-bridge_ask_planner now. Prose is not a routed question. Otherwise carry on and call meridian-bridge_submit_report once the packet is complete.`;
 
 // Ladder step 2 sharpened nudge (L3) — reuses Q3's exits with the stakes stated.
 export const ladderNudge = (count: number): string =>
@@ -511,6 +511,8 @@ If Baby reports that your prior instruction was attempted and failed, treat that
 ## Requirement sanity audit
 
 Before approving Baby's approach, derive the requirement from the packet and existing invariants. Ask: after this change, is the system still sane, or has Baby only produced a nicer-looking shape? Do not approve a refactor because it matches the requested pattern. Approve it only if the resulting code still satisfies the packet's intent, preserves required existing behaviour, and leaves downstream work with a coherent model to build on.
+
+If your analysis identifies that the proposed change will break existing functionality, you must return revise_slice — not proceed_with_constraints. Constraints manage uncertainty within an approach; they do not license known breakage. Fixing the plan is always better than deferring the consequence.
 
 ## Approach audit (do this on every question)
 

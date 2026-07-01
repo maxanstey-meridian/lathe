@@ -176,7 +176,7 @@ export const checkpointNudgeNotice = (state: GateState, nowMs: number): string |
     return undefined;
   }
   const minutes = Math.round(elapsed / 60_000);
-  return `MERIDIAN GATE NOTICE: ~${minutes} min since your last planner check-in. You are NOT blocked — this is a reminder, keep working with full tool access. If your direction could use Daddy's eyes, call ask_planner; otherwise carry on and call submit_report once the packet is complete.`;
+  return `MERIDIAN GATE NOTICE: ~${minutes} min since your last planner check-in. You are NOT blocked — this is a reminder, keep working with full tool access. If stuck, guessing, surprised by code, repeating a failed fix, or your plan changed, call ask_planner now. Prose is not a routed question. Otherwise carry on and call submit_report once the packet is complete.`;
 };
 
 // NON-BLOCKING VOLUME reminder (G10). Pure: takes delta precomputed by the caller

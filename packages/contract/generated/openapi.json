@@ -65,6 +65,38 @@
         }
       }
     },
+    "/runs/content": {
+      "post": {
+        "operationId": "lathe_enqueueContent",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "enqueueContent",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnqueueContentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Status 202",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunSummaryDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/chains": {
       "post": {
         "operationId": "lathe_enqueueChain",
@@ -169,6 +201,38 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ReviewDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/packet": {
+      "post": {
+        "operationId": "lathe_validatePacket",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "validatePacket",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidatePacketRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidatePacketResponse"
                 }
               }
             }
@@ -465,6 +529,21 @@
         },
         "required": [
           "chainDir"
+        ]
+      },
+      "EnqueueContentRequest": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "content",
+          "filename"
         ]
       },
       "EnqueueRunRequest": {
@@ -1071,6 +1150,178 @@
           "rotations",
           "journal",
           "lastSeq"
+        ]
+      },
+      "ValidatePacketFrontmatter": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": "string"
+          },
+          "base": {
+            "type": "string"
+          },
+          "compare_commit": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "outcomes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "description"
+              ]
+            }
+          },
+          "expected_surface": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "suspicious_surface": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "verification": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command"
+              ]
+            }
+          },
+          "constraints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "autofix_commands": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command"
+              ]
+            }
+          },
+          "campaign_id": {
+            "type": "string"
+          },
+          "parent_run_id": {
+            "type": "string"
+          },
+          "pass": {
+            "type": "number"
+          },
+          "regression_outcomes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "description"
+              ]
+            }
+          },
+          "promoted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "repo",
+          "base",
+          "compare_commit",
+          "outcomes",
+          "expected_surface",
+          "suspicious_surface",
+          "verification",
+          "constraints",
+          "autofix_commands",
+          "pass",
+          "regression_outcomes",
+          "promoted"
+        ]
+      },
+      "ValidatePacketRequest": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ]
+      },
+      "ValidatePacketResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "frontmatter": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ValidatePacketFrontmatter"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "frontmatter",
+          "body",
+          "problems"
         ]
       },
       "RunStatus": {

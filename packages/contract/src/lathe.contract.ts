@@ -119,6 +119,41 @@ export interface EnqueueRunRequest {
   packetPath: string; // absolute path to a single packet .md
 }
 
+export interface EnqueueContentRequest {
+  content: string; // raw markdown packet content
+  filename: string; // YYYYMMDD-HHMMSS-<slug>.md
+}
+
+export interface ValidatePacketRequest {
+  content: string;
+  filename?: string;
+}
+
+export interface ValidatePacketFrontmatter {
+  repo: string;
+  base: string;
+  compare_commit: string;
+  summary?: string;
+  outcomes: Array<{ id: string; description: string }>;
+  expected_surface: string[];
+  suspicious_surface: string[];
+  verification: Array<{ command: string }>;
+  constraints: string[];
+  autofix_commands: Array<{ command: string }>;
+  campaign_id?: string;
+  parent_run_id?: string;
+  pass: number;
+  regression_outcomes: Array<{ id: string; description: string }>;
+  promoted: boolean;
+}
+
+export interface ValidatePacketResponse {
+  ok: boolean;
+  frontmatter: ValidatePacketFrontmatter | null;
+  body: string;
+  problems: string[];
+}
+
 export interface EnqueueChainRequest {
   chainDir: string; // dir of ordered packet .md files
 }
@@ -267,6 +302,14 @@ export interface LatheContract extends Contract<"LatheContract"> {
     successStatus: 202;
   }>;
 
+  enqueueContent: Endpoint<{
+    method: "POST";
+    route: "/runs/content";
+    input: EnqueueContentRequest;
+    response: RunSummaryDto;
+    successStatus: 202;
+  }>;
+
   enqueueChain: Endpoint<{
     method: "POST";
     route: "/chains";
@@ -298,6 +341,14 @@ export interface LatheContract extends Contract<"LatheContract"> {
     method: "GET";
     route: "/review";
     response: ReviewDto;
+  }>;
+
+  validatePacket: Endpoint<{
+    method: "POST";
+    route: "/packet";
+    input: ValidatePacketRequest;
+    response: ValidatePacketResponse;
+    successStatus: 200;
   }>;
 
   abortRun: Endpoint<{

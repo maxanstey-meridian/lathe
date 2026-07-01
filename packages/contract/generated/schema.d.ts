@@ -20,6 +20,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/runs/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["lathe_enqueueContent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chains": {
         parameters: {
             query?: never;
@@ -78,6 +94,22 @@ export interface paths {
         get: operations["lathe_getReview"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/packet": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["lathe_validatePacket"];
         delete?: never;
         options?: never;
         head?: never;
@@ -214,6 +246,10 @@ export interface components {
         };
         EnqueueChainRequest: {
             chainDir: string;
+        };
+        EnqueueContentRequest: {
+            content: string;
+            filename: string;
         };
         EnqueueRunRequest: {
             packetPath: string;
@@ -354,6 +390,43 @@ export interface components {
             journal: components["schemas"]["TailJournalLineDto"][];
             lastSeq: number;
         };
+        ValidatePacketFrontmatter: {
+            repo: string;
+            base: string;
+            compare_commit: string;
+            summary?: string;
+            outcomes: {
+                id: string;
+                description: string;
+            }[];
+            expected_surface: string[];
+            suspicious_surface: string[];
+            verification: {
+                command: string;
+            }[];
+            constraints: string[];
+            autofix_commands: {
+                command: string;
+            }[];
+            campaign_id?: string;
+            parent_run_id?: string;
+            pass: number;
+            regression_outcomes: {
+                id: string;
+                description: string;
+            }[];
+            promoted: boolean;
+        };
+        ValidatePacketRequest: {
+            content: string;
+            filename?: string;
+        };
+        ValidatePacketResponse: {
+            ok: boolean;
+            frontmatter: components["schemas"]["ValidatePacketFrontmatter"] | null;
+            body: string;
+            problems: string[];
+        };
         /** @enum {string} */
         RunStatus: "queued" | "running" | "paused" | "converged" | "accepted" | "aborted" | "failed";
         /** @enum {string} */
@@ -397,6 +470,30 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["EnqueueRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Status 202 */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSummaryDto"];
+                };
+            };
+        };
+    };
+    lathe_enqueueContent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnqueueContentRequest"];
             };
         };
         responses: {
@@ -493,6 +590,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReviewDto"];
+                };
+            };
+        };
+    };
+    lathe_validatePacket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ValidatePacketRequest"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidatePacketResponse"];
                 };
             };
         };

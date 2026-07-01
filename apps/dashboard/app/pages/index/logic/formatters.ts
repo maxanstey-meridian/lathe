@@ -23,22 +23,28 @@ export function timeAgo(iso: string): string {
   return "just now";
 }
 
-export function runStatusColor(status: RunStatus): string {
+export function runStatusColor(status: RunStatus | "ready_for_review" | "blocked"): "error" | "primary" | "secondary" | "success" | "info" | "warning" | "neutral" {
   switch (status) {
     case "queued":
       return "info";
     case "running":
-      return "blue";
+      return "primary";
     case "paused":
-      return "amber";
+      return "warning";
     case "converged":
-      return "yellow";
+      return "warning";
     case "accepted":
-      return "green";
+      return "success";
     case "aborted":
-      return "red";
+      return "error";
     case "failed":
-      return "red";
+      return "error";
+    case "ready_for_review":
+      return "warning";
+    case "blocked":
+      return "error";
+    default:
+      return "neutral";
   }
 }
 

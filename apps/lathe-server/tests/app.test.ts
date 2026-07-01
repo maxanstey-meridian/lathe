@@ -7,6 +7,7 @@ import type { Supervisor } from "../src/supervisor.js";
 import { createApp, createEventBus, createTailEventBus } from "../src/app.js";
 import type { LatheEvent, TailEvent, TailSnapshotDto } from "@lathe/contract";
 import { RunNotAnswerableError, RunNotFoundError, NonChainTipError } from "../src/supervisor.js";
+import type { ValidatePacketResult } from "@lathe/core";
 
 // ---------------------------------------------------------------------------
 // Fake Supervisor — in-memory state, no real git/SQLite/runDriver
@@ -251,6 +252,7 @@ const makeAcceptSupervisor = (meta: RunMeta, currentBranch: string, isDirty = fa
     writeMeta: (next: RunMeta): void => {
       metaStore.set(next.runId, next);
     },
+    readConvergence: (_runId: string): Array<{ kind: string; primary?: { verdict: string } }> => [],
   };
   const repo = {
     headBranch: (_repoPath: string): string => currentBranch,
@@ -1264,6 +1266,217 @@ async function readUntilId(reader: ReadableStreamDefaultReader<Uint8Array>, targ
   for (const c of chunks) { all.set(c, offset); offset += c.length; }
   return new TextDecoder().decode(all);
 }
+
+// ---------------------------------------------------------------------------
+// POST /packet — validate packet endpoint
+// ---------------------------------------------------------------------------
+
+test("POST /packet returns 200 with parsed frontmatter for valid packet", async () => {
+  const validContent = `---
+repo: /tmp/test
+base: main
+compare_commit: abc123
+summary: test packet
+outcomes:
+  - id: test-outcome
+    description: Test outcome
+expected_surface:
+  - src/app.ts
+verification:
+  - command: echo test
+---
+Body text
+`;
+  const supervisor = makeFakeSupervisor({
+    validatePacket: (): ValidatePacketResult => ({
+      repoPath: "/tmp/test",
+      baseInFm: "main",
+      headBranch: "main",
+      stamped: validContent,
+      shape: { ok: true, packet: { runId: "", frontmatter: { repo: "/tmp/test", base: "main", compare_commit: "abc123", summary: "test packet", outcomes: [{ id: "test-outcome", description: "Test outcome" }], expected_surface: ["src/app.ts"], suspicious_surface: [], verification: [{ command: "echo test" }], constraints: [], autofix_commands: [], campaign_id: undefined, parent_run_id: undefined, pass: 1, regression_outcomes: [], promoted: false }, body: "Body text", raw: validContent } },
+      repoValid: true,
+      baseExists: true,
+      base: "main",
+    }),
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const req = new Request("http://localhost/packet", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content: validContent }),
+  });
+  const res = await app.request(req);
+  equal(res.status, 200);
+  const body = await res.json() as { ok: boolean; frontmatter: object | null; body: string; problems: string[] };
+  equal(body.ok, true);
+  ok(body.frontmatter !== null);
+  strictEqual((body.frontmatter as any).repo, "/tmp/test");
+  strictEqual((body.frontmatter as any).base, "main");
+  strictEqual(body.body, "Body text");
+  deepStrictEqual(body.problems, []);
+});
+
+test("POST /packet returns 200 with problems for invalid packet", async () => {
+  const supervisor = makeFakeSupervisor({
+    validatePacket: (): ValidatePacketResult => ({
+      repoPath: undefined,
+      baseInFm: undefined,
+      headBranch: "",
+      stamped: "no frontmatter",
+      shape: { ok: false, problems: ["no YAML frontmatter opening delimiter (---) found"] },
+      repoValid: false,
+      baseExists: false,
+      base: "",
+    }),
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const req = new Request("http://localhost/packet", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content: "no frontmatter at all" }),
+  });
+  const res = await app.request(req);
+  equal(res.status, 200);
+  const body = await res.json() as { ok: boolean; frontmatter: null; body: string; problems: string[] };
+  equal(body.ok, false);
+  strictEqual(body.frontmatter, null);
+  equal(body.body, "");
+  strictEqual(body.problems[0], "no YAML frontmatter opening delimiter (---) found");
+});
+
+test("POST /packet returns problems when repo is invalid or base branch missing", async () => {
+  const validContent = `---
+repo: /tmp/test
+base: nonexistent-branch
+summary: test packet
+outcomes:
+  - id: test-outcome
+    description: Test outcome
+expected_surface:
+  - src/app.ts
+verification:
+  - command: echo test
+---
+Body text
+`;
+  const supervisor = makeFakeSupervisor({
+    validatePacket: (): ValidatePacketResult => ({
+      repoPath: "/tmp/test",
+      baseInFm: "nonexistent-branch",
+      headBranch: "main",
+      stamped: validContent,
+      shape: { ok: true, packet: { runId: "", frontmatter: { repo: "/tmp/test", base: "nonexistent-branch", compare_commit: undefined, summary: "test packet", outcomes: [{ id: "test-outcome", description: "Test outcome" }], expected_surface: ["src/app.ts"], suspicious_surface: [], verification: [{ command: "echo test" }], constraints: [], autofix_commands: [], campaign_id: undefined, parent_run_id: undefined, pass: 1, regression_outcomes: [], promoted: false }, body: "Body text", raw: validContent } },
+      repoValid: true,
+      baseExists: false,
+      base: "nonexistent-branch",
+    }),
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const req = new Request("http://localhost/packet", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content: validContent }),
+  });
+  const res = await app.request(req);
+  equal(res.status, 200);
+  const body = await res.json() as { ok: boolean; frontmatter: object | null; body: string; problems: string[] };
+  equal(body.ok, false);
+  equal(body.frontmatter, null);
+  equal(body.body, "Body text");
+  ok(body.problems.some(p => p.includes("nonexistent-branch")), `expected base-branch problem, got: ${body.problems.join("; ")}`);
+});
+
+test("POST /packet returns problems when repo is invalid", async () => {
+  const validContent = `---
+repo: /tmp/test
+base: main
+summary: repo invalid packet
+outcomes:
+  - id: test-outcome
+    description: Test outcome
+expected_surface:
+  - src/app.ts
+verification:
+  - command: echo test
+---
+Body text
+`;
+  const supervisor = makeFakeSupervisor({
+    validatePacket: (): ValidatePacketResult => ({
+      repoPath: "/tmp/test",
+      baseInFm: "main",
+      headBranch: "main",
+      stamped: validContent,
+      shape: { ok: true, packet: { runId: "", frontmatter: { repo: "/tmp/test", base: "main", compare_commit: undefined, summary: "repo invalid packet", outcomes: [{ id: "test-outcome", description: "Test outcome" }], expected_surface: ["src/app.ts"], suspicious_surface: [], verification: [{ command: "echo test" }], constraints: [], autofix_commands: [], campaign_id: undefined, parent_run_id: undefined, pass: 1, regression_outcomes: [], promoted: false }, body: "Body text", raw: validContent } },
+      repoValid: false,
+      baseExists: true,
+      base: "main",
+    }),
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const req = new Request("http://localhost/packet", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content: validContent }),
+  });
+  const res = await app.request(req);
+  equal(res.status, 200);
+  const body = await res.json() as { ok: boolean; frontmatter: null; body: string; problems: string[] };
+  equal(body.ok, false);
+  equal(body.frontmatter, null);
+  equal(body.body, "Body text");
+  ok(body.problems.some(p => p.includes("not a valid git repository")), `expected repo problem, got: ${body.problems.join("; ")}`);
+});
+
+test("POST /runs/content enqueues from raw content", async () => {
+  const content = `---
+repo: /tmp/test
+base: main
+compare_commit: abc123
+summary: content packet
+outcomes:
+  - id: outcome-1
+    description: Outcome 1
+expected_surface:
+  - src/app.ts
+verification:
+  - command: echo test
+---
+Body
+`;
+  let contentSeen = "";
+  let filenameSeen = "";
+  const supervisor = makeFakeSupervisor({
+    enqueueContent: (c: string, f: string) => {
+      contentSeen = c;
+      filenameSeen = f;
+      return "content-run";
+    },
+    getRun: (id: string) => (id === "content-run" ? {
+      runId: "content-run", status: "queued" as const, attempt: 1, repo: "/tmp/test", base: "main", branch: "meridian/content-run", worktree: "/tmp/w", stallRetries: 0, reorientRetries: 0, reviewerUnreachable: 0, updatedAt: new Date().toISOString(), queuedAt: new Date().toISOString(),
+    } as RunMeta : undefined),
+    listRuns: () => [],
+    isChainTip: () => true,
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const req = new Request("http://localhost/runs/content", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content, filename: "20260101-120000-test-packet.md" }),
+  });
+  const res = await app.request(req);
+  equal(res.status, 202);
+  const body = await res.json() as { runId: string; status: string };
+  equal(body.runId, "content-run");
+  equal(body.status, "queued");
+  ok(contentSeen.includes("Body"), "content passed through");
+  equal(filenameSeen, "20260101-120000-test-packet.md");
+});
 
 // ---------------------------------------------------------------------------
 // run-to-dto — status mapping

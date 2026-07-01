@@ -19,6 +19,7 @@ import type {
   RunMeta,
   JournalEvent,
   RunLoopSeams,
+  ValidatePacketResult,
 } from "@lathe/core";
 import {
   SqliteStoreAdapter,
@@ -28,6 +29,7 @@ import {
   recoverOrphanedRuns,
   recoverStalledRunsAtStartup,
   admitPacket,
+  validatePacket as validatePacketUc,
   acceptRun as acceptRunUc,
   answerRun as answerRunUc,
   promoteStaged,
@@ -106,6 +108,10 @@ export type Supervisor = {
   // -- Lifecycle methods (P03 handlers call these) --
   /** Admit a packet file into the queue; returns the derived runId. */
   enqueueRun(packetPath: string): string;
+  /** Admit raw packet content into the queue; returns the derived runId. */
+  enqueueContent(content: string, filename: string): string;
+  /** Validate raw packet content without writing; returns validation result. */
+  validatePacket(content: string, filename?: string): ValidatePacketResult;
   /** Stage a chain directory (promotes heads straight away). */
   enqueueChain(chainDir: string): void;
   /** List all known runs (domain RunMeta). */
@@ -890,6 +896,22 @@ export const createSupervisor = (
         throw new Error(`packet "${runId}" rejected during admission`);
       }
       return runId;
+    },
+
+    enqueueContent(content: string, filename: string): string {
+      const runId = basename(filename).replace(/\.md$/, "");
+      admitPacket(store, runId, content);
+
+      // Check if admission succeeded (meta written with status = 'queued').
+      const meta = store.readMetaIfExists(runId);
+      if (!meta || meta.status !== "queued") {
+        throw new Error(`packet "${runId}" rejected during admission`);
+      }
+      return runId;
+    },
+
+    validatePacket(content: string, filename?: string): ValidatePacketResult {
+      return validatePacketUc(content, repo, filename);
     },
 
     enqueueChain(chainDir: string): void {

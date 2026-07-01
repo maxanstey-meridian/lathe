@@ -84,8 +84,8 @@ export const Config = z.object({
       // One turn must run every verification command, inspect the tree, and emit
       // a verdict.
       turnSteps: z.number().int().default(40),
-      // The judgement rubric (§4): the FULL skill, not the ambient SKILL_SMALL
-      // the executors inherit. Live path (§14.4) — read fresh each pass.
+      // The judgement rubric (§4): the FULL skill, not the ambient
+      // instructions the executors inherit. Live path (§14.4) — read fresh each pass.
       skillPath: z.string().default("~/.config/opencode/skills/meridian/SKILL.md"),
       // The packet-authoring spec super-daddy follows when it authors a follow-up
       // packet (request_changes → repair pass). The SAME skill the planner uses to

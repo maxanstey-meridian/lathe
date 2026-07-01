@@ -56,6 +56,8 @@ bridge tool namespace. That is legacy naming, not v2. Use the public CLI command
   issues.
 - Normalize section names to the packet skill's expected structure.
 - Add missing useful sections when intent is already clear.
+- Add missing `compare_commit` when the intended ref is obvious (typically the
+  same as `base`).
 - Convert vague outcome descriptions into observable descriptions.
 - Split obviously bundled outcomes without changing scope.
 - Tighten bloated `Inspect first` lists.
@@ -111,6 +113,7 @@ Say `DO NOT QUEUE` when any of these remain after mechanical fixes:
 - Stop conditions are exact.
 - Constraints are compatible and locally testable.
 - Expected and suspicious surfaces are realistic.
+- `compare_commit` is present and points to the right integration ref.
 - Verification commands exist and run from the sandbox root.
 - No contradictory strictness.
 - No broad negatives without verification.

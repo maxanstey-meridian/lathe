@@ -39,7 +39,7 @@ export const writeOpencodeConfig = (
     // The isolated XDG home cuts off the global AGENTS.md as a side effect, so
     // doctrine is re-attached explicitly: Max's house doctrine for both models.
     // Runs inherit the global file directly.
-    instructions: [join(homedir(), ".config", "opencode", "skills", "meridian", "SKILL_SMALL.md")],
+    instructions: [join(homedir(), ".config", "opencode", "skills", "meridian", "SKILL.md")],
     compaction: { auto: false }, // rotation replaces compaction (D2); never summarize
     // Unattended serve must never stall on a permission ask; the gate plugin
     // enforces the actual rules (§10) and denies what must be denied.

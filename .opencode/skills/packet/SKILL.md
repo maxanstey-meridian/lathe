@@ -22,8 +22,9 @@ bridge tool namespace. That is legacy naming, not v2. Use the public CLI command
 
 ## Before Writing
 
-1. Read `~/.config/opencode/skills/meridian/SKILL_SMALL.md` when available for
-   Max's engineering doctrine. The doctrine skill still carries the old name.
+1. Read `.opencode/skills/meridian/SKILL.md` for Max's engineering
+   doctrine. Read `AGENTS.md` in the target repo for codebase-specific
+   conventions.
 2. Recon the target repo with read-only tools. Scale recon to the task: a small
    local change needs a compact packet; an architectural split needs enough Known
    context that Baby is not forced into broad discovery at 2am.

@@ -18,7 +18,6 @@ export type Repo = {
   removeSandbox(sandboxPath: string, runsDir: string): void;
   headBranch(worktree: string): string;
   branchExists(worktree: string, branch: string): boolean;
-  isCloneSandbox(sandboxPath: string): boolean;
   mergeAccept(repo: string, sourceBranch: string): void;
   repoValid(path: string): boolean;
 };

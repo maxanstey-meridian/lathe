@@ -47,7 +47,6 @@ const _repoContract: Repo = {
   removeSandbox: () => {},
   headBranch: () => "main",
   branchExists: () => true,
-  isCloneSandbox: () => false,
   repoValid: () => true,
   mergeAccept: () => {},
 };

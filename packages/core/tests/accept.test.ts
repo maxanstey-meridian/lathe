@@ -89,7 +89,6 @@ const makeStore = (meta?: ReturnType<typeof makeMeta>): Store => {
 const makeRepo = (opts?: {
   currentBranch?: string;
   isDirty?: boolean;
-  isClone?: boolean;
   headBranchThrows?: boolean;
   fetchBranchFromCloneCalled?: boolean;
   mergeAcceptCalled?: boolean;
@@ -130,7 +129,6 @@ const makeRepo = (opts?: {
       return opts?.currentBranch ?? "main";
     },
     branchExists: () => true,
-    isCloneSandbox: () => opts?.isClone ?? false,
     repoValid: () => true,
     mergeAccept: (repo, sourceBranch) => {
       state.mergeAcceptCalled = true;
@@ -223,7 +221,7 @@ describe("acceptRun — success", () => {
   it("full clone path: fetch + merge + sandbox remove + accepted", () => {
     const meta = makeMeta();
     const store = makeStore(meta);
-    const repo = makeRepo({ currentBranch: "main", isDirty: false, isClone: true });
+    const repo = makeRepo({ currentBranch: "main", isDirty: false });
     const ports = { store, repo, clock: makeClock(), runsDir: "/tmp/runs" };
     const code = acceptRun("20260618-070000-test", undefined, ports);
     equal(code, 0);
@@ -236,29 +234,9 @@ describe("acceptRun — success", () => {
         };
       }
     )._state();
-    ok(state.fetchBranchFromCloneCalled, "fetchBranchFromClone should be called for clone");
+    ok(state.fetchBranchFromCloneCalled, "fetchBranchFromClone should be called");
     ok(state.mergeAcceptCalled, "mergeAccept should be called");
-    ok(state.removeSandboxCalled, "removeSandbox should be called for clone");
-    const written = (
-      store as unknown as { _getLastMeta: () => Record<string, unknown> }
-    )._getLastMeta();
-    equal(written?.status, "accepted");
-  });
-
-  it("legacy worktree path: no fetch, no sandbox remove", () => {
-    const meta = makeMeta();
-    const store = makeStore(meta);
-    const repo = makeRepo({ currentBranch: "main", isDirty: false, isClone: false });
-    const ports = { store, repo, clock: makeClock(), runsDir: "/tmp/runs" };
-    const code = acceptRun("20260618-070000-test", undefined, ports);
-    equal(code, 0);
-    const state = (
-      repo as unknown as {
-        _state: () => { fetchBranchFromCloneCalled: boolean; removeSandboxCalled: boolean };
-      }
-    )._state();
-    ok(!state.fetchBranchFromCloneCalled, "fetchBranchFromClone should NOT be called for worktree");
-    ok(!state.removeSandboxCalled, "removeSandbox should NOT be called for worktree");
+    ok(state.removeSandboxCalled, "removeSandbox should be called");
     const written = (
       store as unknown as { _getLastMeta: () => Record<string, unknown> }
     )._getLastMeta();
@@ -268,7 +246,7 @@ describe("acceptRun — success", () => {
   it("accepts with explicit target branch", () => {
     const meta = makeMeta({ base: "main" });
     const store = makeStore(meta);
-    const repo = makeRepo({ currentBranch: "feature", isDirty: false, isClone: false });
+    const repo = makeRepo({ currentBranch: "feature", isDirty: false });
     const ports = { store, repo, clock: makeClock(), runsDir: "/tmp/runs" };
     const code = acceptRun("20260618-070000-test", "feature", ports);
     equal(code, 0);

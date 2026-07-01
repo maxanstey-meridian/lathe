@@ -38,7 +38,6 @@ const fakeRepo = (_opts?: {
   headBranch: () => "main",
   branchExists: () => true,
   repoValid: () => true,
-  isCloneSandbox: () => false,
   mergeAccept: () => { throw new Error("unimplemented"); },
 });
 

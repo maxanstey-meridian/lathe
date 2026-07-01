@@ -49,15 +49,6 @@ export const createSandbox = (
   git(sandboxPath, ["checkout", "-b", branch]);
 };
 
-// A run sandbox is a self-rooted `--local` clone iff its `.git` is a DIRECTORY
-// (a legacy `git worktree` keeps `.git` as a FILE pointing back to the source).
-// The two need different ref handling: a clone's branch lives only in its own
-// refs and must be fetched into the source repo; a worktree already shares them.
-export const isCloneSandbox = (sandboxPath: string): boolean => {
-  const dotGit = join(sandboxPath, ".git");
-  return existsSync(dotGit) && statSync(dotGit).isDirectory();
-};
-
 // Pull a branch out of a run's clone into another repo's ref namespace, e.g. so a
 // super-daddy follow-up packet whose `base` is the parent run branch can pass
 // admission (`git rev-parse --verify <base>`) and be cloned from the source repo

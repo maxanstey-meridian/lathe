@@ -255,7 +255,6 @@ const makeAcceptSupervisor = (meta: RunMeta, currentBranch: string, isDirty = fa
   const repo = {
     headBranch: (_repoPath: string): string => currentBranch,
     worktreeIsDirty: (_repoPath: string): boolean => isDirty,
-    isCloneSandbox: () => false,
     fetchBranchFromClone: () => {},
     mergeAccept: () => {},
     removeSandbox: () => {},

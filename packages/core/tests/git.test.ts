@@ -9,7 +9,6 @@ import { join } from "node:path";
 import { test } from "node:test";
 import {
   createSandbox,
-  isCloneSandbox,
   fetchBranchFromClone,
   removeSandbox,
   worktreeIsDirty,
@@ -119,26 +118,6 @@ test("createSandbox: fresh restart — recreates an existing real sandbox cleanl
   }
 });
 
-test("isCloneSandbox: returns true for a self-rooted clone, false for a worktree-like .git file", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "meridian-isclone-"));
-  try {
-    const { repo } = initSourceRepo(tmp);
-    const runsDir = join(tmp, "runs");
-    const sandbox = join(runsDir, "20990101-000000-z", "worktree");
-    mkdirSync(join(runsDir, "20990101-000000-z"), { recursive: true });
-
-    createSandbox(repo, sandbox, "meridian/z", "main");
-    assert.ok(isCloneSandbox(sandbox), "should detect a clone sandbox");
-
-    // Simulate a worktree: replace .git directory with a pointer file.
-    rmSync(join(sandbox, ".git"), { recursive: true });
-    writeFileSync(join(sandbox, ".git"), "gitdir: /tmp/fake\n");
-    assert.ok(!isCloneSandbox(sandbox), "should NOT detect a worktree as clone");
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
 // ===========================================================================
 // X1: guarded sandbox removal
 // ===========================================================================
@@ -240,7 +219,7 @@ test("wipCommit: dirty → returns SHA; clean → undefined", () => {
 
     // Dirty → SHA.
     writeFileSync(join(repo, "new.txt"), "stuff\n");
-    const sha = wipCommit(repo, "meridian: WIP test");
+    const sha = wipCommit(repo, "lathe: WIP test");
     assert.ok(typeof sha === "string" && sha.length === 40, `expected 40-char SHA, got: ${sha}`);
 
     // Clean again → undefined.

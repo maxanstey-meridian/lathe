@@ -87,7 +87,7 @@ lathe queue add <packet.md>
 Run the queue:
 
 ```sh
-lathe run
+lathe serve
 ```
 
 Watch the active run:

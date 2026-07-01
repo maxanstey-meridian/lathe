@@ -8,12 +8,13 @@
  * through to app.onError 500 envelope.
  */
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { logger } from "hono/logger";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { registerRivetHonoRoutes, rivetHttpError } from "rivet-ts/hono";
-import type { AnswerRunRequest, LatheContract, LatheEvent, RejectRunRequest, RunSummaryDto } from "@lathe/contract";
-export type { LatheEvent };
+import type { AnswerRunRequest, LatheContract, LatheEvent, RejectRunRequest, RunSummaryDto, TailEvent, TailSnapshotDto } from "@lathe/contract";
+export type { LatheEvent, TailEvent };
 import contract from "@lathe/contract/generated/api.contract.json" with { type: "json" };
 
 import type { RunMeta } from "@lathe/core";
@@ -33,6 +34,11 @@ export interface EventBus {
   subscribe(onEvent: (seq: number, event: LatheEvent) => void): () => void;
 }
 
+export interface TailEventBus {
+  publish(event: TailEvent): void;
+  subscribe(onEvent: (event: TailEvent) => void): () => void;
+}
+
 export const createEventBus = (): EventBus => {
   const subs = new Set<(seq: number, event: LatheEvent) => void>();
   return {
@@ -41,10 +47,20 @@ export const createEventBus = (): EventBus => {
   };
 };
 
+export const createTailEventBus = (): TailEventBus => {
+  const subs = new Set<(event: TailEvent) => void>();
+  return {
+    publish: (event) => { for (const s of subs) s(event); },
+    subscribe: (onEvent) => { subs.add(onEvent); return () => subs.delete(onEvent); },
+  };
+};
+
 export interface AppDeps {
   bus: EventBus;
   /** Resumable replay on reconnect — SQLite events table (P01's readJournalSince). */
   readEventsSince: (seq: number) => { seq: number; event: LatheEvent }[];
+  tailBus?: TailEventBus;
+  readTailEventsSince?: (seq: number, runId: string) => TailEvent[];
 }
 
 export interface CreateAppOptions {
@@ -207,6 +223,18 @@ export const createApp = (
       getConfig: async () => {
         return configToDto(supervisor.config);
       },
+
+      getTail: async ({ params }) => {
+        const snapshot = supervisor.getTailSnapshot(params.runId);
+        if (!snapshot) {
+          throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+        }
+        return snapshot;
+      },
+
+      getActiveTail: async () => {
+        return supervisor.getActiveTailSnapshot();
+      },
     },
   });
 
@@ -261,6 +289,14 @@ export const createApp = (
     }),
   );
 
+  app.get("/tail/active/events", (c) =>
+    streamTailSse(c, deps, () => supervisor.getActiveTailSnapshot(), null),
+  );
+
+  app.get("/tail/:runId/events", (c) =>
+    streamTailSse(c, deps, () => supervisor.getTailSnapshot(c.req.param("runId")) ?? null, c.req.param("runId")),
+  );
+
   // Unhandled handler errors become a structured 500 — same envelope rivetHttpError
   // produces, matching the scaffolder's app.onError (behavioral parity).
   app.onError((error, context) => {
@@ -271,11 +307,112 @@ export const createApp = (
   return app;
 };
 
+const tailEventRunId = (event: TailEvent): string | null =>
+  "runId" in event ? event.runId : null;
+
+const tailEventSeq = (event: TailEvent): number | null =>
+  "seq" in event && typeof event.seq === "number" ? event.seq : null;
+
+const streamTailSse = (
+  c: Context,
+  deps: AppDeps,
+  resolveSnapshot: () => TailSnapshotDto | null,
+  fallbackRunId: string | null,
+) =>
+  streamSSE(c, async (stream) => {
+    const tailBus = deps.tailBus;
+    const readTailEventsSince = deps.readTailEventsSince;
+    if (!tailBus || !readTailEventsSince) {
+      await stream.writeSSE({ event: "tail.ping", data: JSON.stringify({ kind: "tail.ping" } satisfies TailEvent) });
+      return;
+    }
+
+    const lastId = Number.parseInt(c.req.header("Last-Event-ID") ?? "0", 10);
+    const since = Number.isInteger(lastId) ? lastId : -1;
+    const safeResolveSnapshot = (): TailSnapshotDto | null => {
+      try {
+        return resolveSnapshot();
+      } catch {
+        return null;
+      }
+    };
+    let activeSnapshot = safeResolveSnapshot();
+    let runId = activeSnapshot?.runId ?? fallbackRunId;
+    let lastSeq = since;
+
+    if (runId) {
+      for (const event of readTailEventsSince(since, runId)) {
+        const seq = tailEventSeq(event);
+        if (seq !== null) {
+          lastSeq = seq;
+        }
+        await stream.writeSSE({
+          id: seq === null ? undefined : String(seq),
+          event: event.kind,
+          data: JSON.stringify(event),
+        });
+      }
+    }
+
+    const queue: TailEvent[] = [];
+    let notify: (() => void) | null = null;
+    stream.onAbort(() => notify?.());
+    const unsub = tailBus.subscribe((event) => {
+      const currentSnapshot = safeResolveSnapshot();
+      const currentRunId = currentSnapshot?.runId ?? fallbackRunId;
+      if (currentRunId !== runId) {
+        activeSnapshot = currentSnapshot;
+        runId = currentRunId;
+        queue.push({ kind: "tail.run.changed", runId: currentRunId ?? "", snapshot: activeSnapshot });
+        notify?.();
+      }
+      const eventRunId = tailEventRunId(event);
+      if (currentRunId && eventRunId && eventRunId !== currentRunId) {
+        return;
+      }
+      const seq = tailEventSeq(event);
+      if (seq !== null && seq <= lastSeq) {
+        return;
+      }
+      queue.push(event);
+      notify?.();
+    });
+
+    try {
+      while (!stream.aborted) {
+        if (queue.length === 0) {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          await new Promise<void>((r) => { notify = r; timer = setTimeout(r, 15_000); });
+          if (timer) clearTimeout(timer);
+          notify = null;
+          if (stream.aborted) break;
+          if (queue.length === 0) {
+            await stream.writeSSE({ event: "tail.ping", data: JSON.stringify({ kind: "tail.ping" } satisfies TailEvent) });
+            continue;
+          }
+        }
+        const event = queue.shift()!;
+        const seq = tailEventSeq(event);
+        if (seq !== null) {
+          lastSeq = seq;
+        }
+        await stream.writeSSE({
+          id: seq === null ? undefined : String(seq),
+          event: event.kind,
+          data: JSON.stringify(event),
+        });
+      }
+    } finally {
+      unsub();
+    }
+  });
+
 // ---------------------------------------------------------------------------
 // Handler helpers
 // ---------------------------------------------------------------------------
 
 const buildDtoCtx = (sup: Supervisor, meta: RunMeta): RunDtoCtx => ({
+  ...sup.runReadModel(meta.runId),
   isChainTip: sup.isChainTip(meta.runId),
   contextWindow: sup.config.baby.contextWindow,
   lastVerdict: sup.lastVerdict(meta.runId),

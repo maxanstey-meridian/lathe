@@ -3,8 +3,8 @@
 //
 // P05 cutover: mutating commands (enqueue, chain add, abort, accept, reject,
 // and the queue add/drop aliases) plus read commands (status, review, queue
-// list, get) go through the daemon — the single owner of run state — over the
-// generated openapi-fetch client. Tail is the remaining local-file exception.
+// list, get, tail) go through the daemon — the single owner of run state — over
+// the generated openapi-fetch client.
 //
 // Everything here is parameterised over a CliEnv (daemon client + reachability
 // probe + output sinks) so the commands can be driven in tests against a stub
@@ -13,17 +13,10 @@
 // ---------------------------------------------------------------------------
 
 import type { paths } from "@lathe/contract";
-import type { ReviewDto, RunDetailDto, StatusDto } from "@lathe/contract";
-import {
-  loadConfig,
-  buildRepo,
-  systemClock,
-  SqliteStoreAdapter,
-  renderJournalEvent,
-} from "@lathe/core";
-import type { Paths, Store } from "@lathe/core";
-import { openTail } from "@lathe/core/tail";
-import { existsSync, statSync, watchFile, unwatchFile } from "node:fs";
+import type { ReviewDto, RunDetailDto, StatusDto, TailEvent, TailSnapshotDto } from "@lathe/contract";
+import { loadConfig } from "@lathe/core";
+import { runTailUi } from "@lathe/core/tail";
+import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { createDaemonClient, type DaemonClient } from "./client.js";
 
@@ -290,38 +283,69 @@ export const cmdReject = (env: CliEnv, runId: string, reason: string): Promise<n
 };
 
 // ---------------------------------------------------------------------------
-// Read commands — status/review/queue/get go through the daemon. Tail stays
-// local until the SSE + journal endpoint pass.
+// Read commands — status/review/queue/get/tail go through the daemon.
 // ---------------------------------------------------------------------------
 
-type TailStore = Pick<Store, "readActiveRun" | "readActiveConvergence" | "readJournal">;
-type TailPaths = Pick<Paths, "journalFile">;
-
 export type TailDeps = {
-  paths: TailPaths;
-  store: TailStore;
-  openTail: (runId: string, autoAdvance: boolean) => number;
+  openTailUi: (snapshot: TailSnapshotDto, subscribe: (onEvent: (event: TailEvent) => void) => { close: () => void }) => number;
+  streamTailEvents: (target: string, lastSeq: number, onEvent: (event: TailEvent) => void) => Promise<void>;
   stdoutIsTTY: () => boolean;
-  watchJournal: (runId: string, flush: () => void) => () => void;
   startPolling: (poll: () => void) => () => void;
   onSigint: (handler: () => void) => void;
   exit: (code: number) => never;
 };
 
+const streamTailEvents = async (
+  baseUrl: string,
+  target: string,
+  lastSeq: number,
+  onEvent: (event: TailEvent) => void,
+): Promise<void> => {
+  const encoded = target === "active" ? "active" : encodeURIComponent(target);
+  const res = await fetch(`${baseUrl}/tail/${encoded}/events`, {
+    headers: lastSeq > 0 ? { "Last-Event-ID": String(lastSeq) } : undefined,
+  });
+  if (!res.ok || !res.body) {
+    throw new Error(`tail stream failed (${res.status})`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      return;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    let frameEnd = buffer.indexOf("\n\n");
+    while (frameEnd !== -1) {
+      const frame = buffer.slice(0, frameEnd);
+      buffer = buffer.slice(frameEnd + 2);
+      const data = frame
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n");
+      if (data) {
+        onEvent(JSON.parse(data) as TailEvent);
+      }
+      frameEnd = buffer.indexOf("\n\n");
+    }
+  }
+};
+
 const openTailDeps = (): TailDeps => {
   const { config, paths: configPaths } = loadConfig();
-  const repo = buildRepo();
-  const store = SqliteStoreAdapter.create(configPaths, repo, systemClock);
+  const baseUrl = `http://${config.daemon.host}:${config.daemon.port}`;
+  void configPaths;
   return {
-    paths: configPaths,
-    store,
-    openTail: (runId, autoAdvance) => openTail(config, configPaths, runId, autoAdvance),
-    stdoutIsTTY: () => process.stdout.isTTY === true,
-    watchJournal: (runId, flush) => {
-      const file = configPaths.journalFile(runId);
-      watchFile(file, { interval: 1000 }, flush);
-      return () => unwatchFile(file);
+    openTailUi: (snapshot, subscribe) => {
+      runTailUi({ snapshot, subscribe });
+      return -1;
     },
+    streamTailEvents: (runId, lastSeq, onEvent) => streamTailEvents(baseUrl, runId, lastSeq, onEvent),
+    stdoutIsTTY: () => process.stdout.isTTY === true,
     startPolling: (poll) => {
       const interval = setInterval(poll, 1000);
       return () => clearInterval(interval);
@@ -377,6 +401,15 @@ const renderStatusDto = (status: StatusDto): string => {
     }
   }
 
+  const reviewCount = status.review.readyForReview + status.review.failed;
+  if (reviewCount > 0) {
+    const parts = [
+      status.review.failed > 0 ? `${status.review.failed} failed` : "",
+      status.review.readyForReview > 0 ? `${status.review.readyForReview} ready` : "",
+    ].filter((part) => part.length > 0);
+    lines.push(`review: ${parts.join(", ")} — lathe review`);
+  }
+
   return lines.join("\n");
 };
 
@@ -402,10 +435,13 @@ const renderReviewDto = (review: ReviewDto): string => {
       lines.push(`   needs: ${run.blockedQuestion ?? "(no question recorded)"}`);
       lines.push(`   answer with: lathe answer ${run.runId} "<your decision>"`);
     }
+    if (run.status === "failed") {
+      lines.push(`   retry with: lathe answer ${run.runId} "<context for the retry>"`);
+    }
     if (run.status === "ready_for_review") {
       lines.push(`   diff:   git -C ${run.repo} diff ${run.base}...${run.branch}`);
       lines.push(
-        `   accept: meridian accept ${run.runId} [branch]   (merges into [branch], default ${run.base}; tidies the worktree)`,
+        `   accept: lathe accept ${run.runId} [branch]   (merges into [branch], default ${run.base}; tidies the worktree)`,
       );
     }
   }
@@ -423,11 +459,24 @@ const renderRunDetailDto = (run: RunDetailDto): string[] => {
   const lines = [
     `run: ${run.runId}`,
     `  status:    ${run.status}`,
+    `  campaign:  ${run.campaignId}`,
     `  base:      ${run.base}`,
     `  branch:    ${run.branch}`,
     `  pass:      ${run.pass}`,
     `  worktree:  ${run.worktreePath}`,
   ];
+  if (run.parentRunId) {
+    lines.push(`  parent:    ${run.parentRunId}`);
+  }
+  if (run.expectedSurface.length > 0) {
+    lines.push(`  surface:   ${run.expectedSurface.join(", ")}`);
+  }
+  if (run.turn !== 0) {
+    lines.push(`  turn:      ${run.turn}`);
+  }
+  if (run.contextTokens !== 0) {
+    lines.push(`  ctx:       ${run.contextTokens}/${run.contextWindow}`);
+  }
   if (run.outcomes) {
     lines.push(`  outcomes: ${run.outcomes}`);
   }
@@ -504,79 +553,103 @@ export const cmdGet = (env: CliEnv, runId: string): Promise<number> => {
   );
 };
 
-const activeTailRunId = (deps: TailDeps): string | undefined =>
-  deps.store.readActiveRun()?.runId ?? deps.store.readActiveConvergence()?.runId;
+const renderTailSnapshot = (snapshot: TailSnapshotDto): string =>
+  snapshot.journal.map((entry) => entry.line).join("\n");
 
-const renderTailReplay = (store: TailStore, runId: string): string =>
-  store.readJournal(runId).map(renderJournalEvent).join("\n");
+const printTailSnapshot = (env: CliEnv, snapshot: TailSnapshotDto): void => {
+  const replay = renderTailSnapshot(snapshot);
+  if (replay) {
+    env.log(replay);
+  }
+};
 
-const tailRunId = (
+const printTailEvent = (env: CliEnv, event: TailEvent): void => {
+  if (event.kind === "tail.journal") {
+    env.log(event.line);
+  }
+};
+
+const fetchTailSnapshot = async (
   env: CliEnv,
-  deps: TailDeps,
-  runId: string,
-  follow: boolean,
-  plain: boolean,
-  autoAdvance: boolean,
-): void => {
-  if (follow && !plain && deps.stdoutIsTTY()) {
-    deps.openTail(runId, autoAdvance);
-    return;
+  runId: string | undefined,
+): Promise<TailSnapshotDto | null | undefined> => {
+  if (runId) {
+    const { data, response } = await env.client.GET("/tail/{runId}", { params: { path: { runId } } });
+    if (response.status === 404) {
+      return undefined;
+    }
+    return response.ok ? data : undefined;
   }
+  const { data, response } = await env.client.GET("/tail/active");
+  return response.ok ? data ?? null : undefined;
+};
 
-  const file = deps.paths.journalFile(runId);
-  if (!existsSync(file)) {
-    if (!follow) {
-      env.err(`no journal for ${runId}`);
-      return;
-    }
-    env.log(`run ${runId} has not started — waiting for its journal…`);
-  } else {
-    env.log(renderTailReplay(deps.store, runId));
+const followTailSnapshot = async (env: CliEnv, deps: TailDeps, snapshot: TailSnapshotDto): Promise<void> => {
+  try {
+    await deps.streamTailEvents(snapshot.runId, snapshot.lastSeq, (event) => printTailEvent(env, event));
+  } catch (err) {
+    env.err(err instanceof Error ? err.message : String(err));
   }
-  if (!follow) {
-    return;
-  }
+};
 
-  let printed = existsSync(file) ? deps.store.readJournal(runId).length : 0;
-  const flush = (): void => {
-    if (!existsSync(file)) {
-      return;
-    }
-    const events = deps.store.readJournal(runId);
-    for (const e of events.slice(printed)) {
-      env.log(renderJournalEvent(e));
-    }
-    printed = events.length;
-  };
-  const cancelWatch = deps.watchJournal(runId, flush);
-  deps.onSigint(() => {
-    cancelWatch();
-    deps.exit(0);
+const openDaemonTailUi = (deps: TailDeps, snapshot: TailSnapshotDto, autoAdvance: boolean): void => {
+  deps.openTailUi(snapshot, (onEvent) => {
+    let closed = false;
+    const target = autoAdvance ? "active" : snapshot.runId;
+    void deps.streamTailEvents(target, snapshot.lastSeq, (event) => {
+      if (!closed) {
+        onEvent(event);
+      }
+    });
+    return {
+      close: () => {
+        closed = true;
+      },
+    };
   });
 };
 
-export const cmdTail = (env: CliEnv, args: string[], deps = openTailDeps()): void => {
-  const follow = !args.includes("--no-follow");
-  const plain = args.includes("--plain");
-  const explicit = args.find((a) => !a.startsWith("--"));
+const daemonPlainTail = async (
+  env: CliEnv,
+  deps: TailDeps,
+  runId: string | undefined,
+  follow: boolean,
+): Promise<void> => {
+  if (!(await env.isDaemonUp())) {
+    env.err("no daemon running — start `lathe serve` first");
+    return;
+  }
 
-  const autoAdvance = explicit === undefined;
-  const runId = explicit ?? activeTailRunId(deps);
-
-  if (!runId) {
+  const snapshot = await fetchTailSnapshot(env, runId);
+  if (snapshot === undefined) {
+    env.err(runId ? `run ${runId} not found` : "daemon tail request failed");
+    return;
+  }
+  if (snapshot === null) {
     if (!follow) {
       env.log("no active run");
       return;
     }
     env.log("no active run or convergence — waiting for one to start…");
+    let polling = false;
     let cancelPoll = (): void => {};
     cancelPoll = deps.startPolling(() => {
-      const next = activeTailRunId(deps);
-      if (next !== undefined) {
-        cancelPoll();
-        env.log(`run ${next} became active — tailing…`);
-        tailRunId(env, deps, next, follow, plain, autoAdvance);
+      if (polling) {
+        return;
       }
+      polling = true;
+      void fetchTailSnapshot(env, undefined)
+        .then((next) => {
+          if (next && next !== null) {
+            cancelPoll();
+            env.log(`run ${next.runId} became active — tailing…`);
+            printTailSnapshot(env, next);
+            void followTailSnapshot(env, deps, next);
+          }
+        })
+        .finally(() => {
+          polling = false;
+        });
     });
     deps.onSigint(() => {
       cancelPoll();
@@ -585,7 +658,64 @@ export const cmdTail = (env: CliEnv, args: string[], deps = openTailDeps()): voi
     return;
   }
 
-  tailRunId(env, deps, runId, follow, plain, autoAdvance);
+  printTailSnapshot(env, snapshot);
+  if (follow) {
+    await followTailSnapshot(env, deps, snapshot);
+  }
+};
+
+export const cmdTail = async (env: CliEnv, args: string[], deps = openTailDeps()): Promise<void> => {
+  const follow = !args.includes("--no-follow");
+  const plain = args.includes("--plain");
+  const explicit = args.find((a) => !a.startsWith("--"));
+
+  if (plain || !deps.stdoutIsTTY() || !follow) {
+    await daemonPlainTail(env, deps, explicit, follow);
+    return;
+  }
+
+  if (!(await env.isDaemonUp())) {
+    env.err("no daemon running — start `lathe serve` first");
+    return;
+  }
+
+  const autoAdvance = explicit === undefined;
+  const snapshot = await fetchTailSnapshot(env, explicit);
+
+  if (snapshot === undefined) {
+    env.err(explicit ? `run ${explicit} not found` : "daemon tail request failed");
+    return;
+  }
+
+  if (snapshot === null) {
+    env.log("no active run or convergence — waiting for one to start…");
+    let polling = false;
+    let cancelPoll = (): void => {};
+    cancelPoll = deps.startPolling(() => {
+      if (polling) {
+        return;
+      }
+      polling = true;
+      void fetchTailSnapshot(env, undefined)
+        .then((next) => {
+          if (next && next !== null) {
+            cancelPoll();
+            env.log(`run ${next.runId} became active — tailing…`);
+            openDaemonTailUi(deps, next, true);
+          }
+        })
+        .finally(() => {
+          polling = false;
+        });
+    });
+    deps.onSigint(() => {
+      cancelPoll();
+      deps.exit(0);
+    });
+    return;
+  }
+
+  openDaemonTailUi(deps, snapshot, autoAdvance);
 };
 
 // ---------------------------------------------------------------------------
@@ -599,14 +729,14 @@ export const usage = `lathe — sequential overnight executor of human-written s
   lathe enqueue <packet.md>    add a packet to the queue (via daemon)
   lathe chain add <dir>        stage a chain of packets (via daemon)
   lathe abort <runId>          abort a run (via daemon)
-  lathe answer <runId> <decision>  answer a parked blocked run (via daemon)
+  lathe answer <runId> <decision>  answer a parked or failed run, requeue it (via daemon)
   lathe accept <runId>         accept a ready_for_review run (via daemon, chain-tip guarded)
   lathe reject <runId> [reason]  reject a run (via daemon)
   lathe status                 what is running / queued / parked + campaign convergence
   lathe review                 morning triage: terminal statuses, outcomes, questions
   lathe queue [add|drop]       list the queue / add or drop a packet (via daemon)
   lathe get <runId>            show run details (via daemon)
-  lathe tail [runId]           live journal stream for a run (local)
+  lathe tail [runId]           live journal stream for a run (via daemon)
 `;
 
 export const runCommand = async (env: CliEnv, command: string, args: string[]): Promise<number> => {

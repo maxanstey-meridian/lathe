@@ -26,6 +26,8 @@ export type { Store } from "./application/ports/store.js";
 
 export { SqliteStoreAdapter } from "./infrastructure/sqlite-store.js";
 export { systemClock } from "./infrastructure/clock.js";
+export { createEvents, createContextTokenReader } from "./infrastructure/opencode/events.js";
+export type { OpencodeEvent } from "./application/ports/events.js";
 
 // ---------------------------------------------------------------------------
 // CLI composition root (buildRepo + runDriver — the server hosts these)
@@ -58,6 +60,7 @@ export type {
 // ---------------------------------------------------------------------------
 
 export { parseStaged } from "./domain/chain.js";
+export { parsePacketShape } from "./domain/packet.js";
 export { isLatched, gateReason } from "./domain/gate.js";
 export type { StagedInfo } from "./domain/chain.js";
 export type { RunMeta } from "./domain/run.js";

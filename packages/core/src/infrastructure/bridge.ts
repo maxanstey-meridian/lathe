@@ -976,7 +976,7 @@ export const listenBridge = (httpServer: Server, config: Config): Promise<void> 
       reject(
         err.code === "EADDRINUSE"
           ? new Error(
-              `port ${config.opencode.bridgePort} is in use — another 'meridian run' is already active. One driver at a time.`,
+              `port ${config.opencode.bridgePort} is in use — another 'lathe serve' is already active. One driver at a time.`,
             )
           : err,
       );

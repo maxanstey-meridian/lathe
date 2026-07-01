@@ -72,7 +72,9 @@ export const startDaemon = async (deps?: DaemonDeps, userPort?: number): Promise
   // 5. Graceful shutdown.
   let shuttingDown = false;
   const shutdown = async (): Promise<void> => {
-    if (shuttingDown) return;
+    if (shuttingDown) {
+      (deps?.exit ?? process.exit)(1);
+    }
     shuttingDown = true;
 
     console.log("shutting down…");

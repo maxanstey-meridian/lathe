@@ -276,9 +276,16 @@ test("acceptRun throws NonChainTipError for a non-chain-tip run", async () => {
     listRuns: () => Array.from(metaStore.values()),
     getRun: (id: string) => metaStore.get(id),
     abortRun: () => {},
+    answerRun: () => {},
     isChainTip: (id: string) => !stagedEntries.some(s => s.parentRunId === id),
     lastVerdict: () => null,
     listStaged: () => stagedEntries,
+    outcomes: () => "",
+    runReadModel: (runId: string) => ({ campaignId: runId, parentRunId: null, expectedSurface: [], pass: 1, turn: 0, contextTokens: 0 }),
+    getStatus: () => ({ activeRun: null, queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
+    getReview: () => ({ runs: [] }),
+    getTailSnapshot: () => undefined,
+    getActiveTailSnapshot: () => null,
     acceptRun: (id: string): number => {
       if (stagedEntries.some(s => s.parentRunId === id)) {
         throw new NonChainTipError(id, "unknown");
@@ -324,6 +331,57 @@ test("readEventsSince returns projected events from the journal", async () => {
   });
 });
 
+test("runReadModel derives packet and latest journal fields", async () => {
+  await withSupervisor(async (supervisor, paths) => {
+    const store = createStore(paths);
+    const runId = "20260101-000200-read-model";
+    store.admitQueue(runId, `---
+repo: /tmp/test-repo
+base: main
+compare_commit: main
+campaign_id: campaign-a
+parent_run_id: parent-a
+pass: 3
+outcomes:
+  - id: test
+    description: A test outcome
+expected_surface:
+  - apps/lathe-server/src/app.ts
+verification:
+  - command: echo ok
+---
+
+body
+`);
+    store.appendJournal(runId, {
+      event: "turn_ended",
+      at: systemClock.nowIso(),
+      turn: 2,
+      messageId: "m1",
+      tokens: { input: 1, output: 2, reasoning: 3, cacheRead: 4, cacheWrite: 5 },
+      contextTokens: 123,
+      text: "first",
+    });
+    store.appendJournal(runId, {
+      event: "turn_ended",
+      at: systemClock.nowIso(),
+      turn: 4,
+      messageId: "m2",
+      tokens: { input: 1, output: 2, reasoning: 3, cacheRead: 4, cacheWrite: 5 },
+      contextTokens: 456,
+      text: "latest",
+    });
+
+    const model = supervisor.runReadModel(runId);
+    equal(model.campaignId, "campaign-a");
+    equal(model.parentRunId, "parent-a");
+    deepStrictEqual(model.expectedSurface, ["apps/lathe-server/src/app.ts"]);
+    equal(model.pass, 3);
+    equal(model.turn, 4);
+    equal(model.contextTokens, 456);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // rejectRun — queued run — archives via queue check
 
@@ -347,7 +405,7 @@ const testConfig = {
   baby: { modelId: "test", baseUrl: "http://localhost:9999", contextWindow: 131072, turnSteps: 30 } as const,
   daddy: { modelId: "test-daddy", provider: "test-provider" } as const,
   superdaddy: { modelId: "test-superdaddy" } as const,
-  thresholds: { ladderParkAt: 10, ladderRotateAt: 4, maxPasses: 3 } as const,
+  thresholds: { ladderParkAt: 10, ladderRotateAt: 4, maxPasses: 3, rotationFraction: 0.65 } as const,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -368,9 +426,16 @@ test("acceptRun throws NonChainTipError with chainTip for a non-chain-tip run", 
     listRuns: () => [],
     getRun: () => undefined,
     abortRun: () => {},
+    answerRun: () => {},
     isChainTip: (id: string) => id === childRunId,
     lastVerdict: () => null,
     listStaged: () => stagedEntries,
+    outcomes: () => "",
+    runReadModel: (runId: string) => ({ campaignId: runId, parentRunId: null, expectedSurface: [], pass: 1, turn: 0, contextTokens: 0 }),
+    getStatus: () => ({ activeRun: null, queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
+    getReview: () => ({ runs: [] }),
+    getTailSnapshot: () => undefined,
+    getActiveTailSnapshot: () => null,
     acceptRun: (id: string): number => {
       if (stagedEntries.some(s => s.parentRunId === id)) {
         throw new NonChainTipError(id, childRunId);
@@ -405,9 +470,16 @@ test("acceptRun throws NonChainTipError with correct chainTip when multiple chai
     listRuns: () => [],
     getRun: () => undefined,
     abortRun: () => {},
+    answerRun: () => {},
     isChainTip: (id: string) => id === "a-chain" || id === "b-child-chain",
     lastVerdict: () => null,
     listStaged: () => stagedEntries,
+    outcomes: () => "",
+    runReadModel: (runId: string) => ({ campaignId: runId, parentRunId: null, expectedSurface: [], pass: 1, turn: 0, contextTokens: 0 }),
+    getStatus: () => ({ activeRun: null, queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
+    getReview: () => ({ runs: [] }),
+    getTailSnapshot: () => undefined,
+    getActiveTailSnapshot: () => null,
     acceptRun: (id: string): number => {
       if (stagedEntries.some(s => s.parentRunId === id)) {
         throw new NonChainTipError(id, "b-child-chain");

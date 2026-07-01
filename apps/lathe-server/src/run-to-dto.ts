@@ -3,11 +3,8 @@
  *
  * Constraints:
  * - status: exhaustive domain→wire switch, no silent default.
- * - isChainTip: supplied by the handler via supervisor.isChainTip() — RunMeta
- *   has no parentRunId field.
- * - campaignId, turn, contextTokens, parentRunId, expectedSurface, lastVerdict:
- *   NO source in RunMeta. Uses transparent placeholders ("" / 0 / null) and
- *   must be reported as contract gaps — never a value implying real data.
+ * - isChainTip, packet-backed fields, and journal-backed fields are supplied by
+ *   the handler via supervisor read models because RunMeta does not own them.
  * - contextWindow: supplied via supervisor.config.baby.contextWindow.
  */
 import type { RunMeta } from "@lathe/core";
@@ -44,6 +41,12 @@ export const mapStatus = (domain: RunMeta["status"]): RunStatus =>
 // ---------------------------------------------------------------------------
 
 export interface RunDtoCtx {
+  campaignId: string;
+  parentRunId: string | null;
+  expectedSurface: string[];
+  pass: number;
+  turn: number;
+  contextTokens: number;
   isChainTip: boolean;
   contextWindow: number;
   lastVerdict: string | null;
@@ -58,12 +61,12 @@ export const runToSummary = (
   ctx: RunDtoCtx,
 ): RunSummaryDto => ({
   runId: meta.runId,
-  campaignId: "", // GAP: RunMeta has no campaignId
+  campaignId: ctx.campaignId,
   packet: meta.runId, // fallback: runId is the slug when packet field absent
   status: mapStatus(meta.status),
-  pass: meta.attempt,
-  turn: 0, // GAP: RunMeta has no turn field
-  contextTokens: 0, // GAP: RunMeta has no contextTokens field
+  pass: ctx.pass,
+  turn: ctx.turn,
+  contextTokens: ctx.contextTokens,
   contextWindow: ctx.contextWindow,
   isChainTip: ctx.isChainTip,
   startedAt: meta.startedAt ?? "",
@@ -81,8 +84,8 @@ export const runToDetail = (
   base: meta.base,
   branch: meta.branch,
   worktreePath: meta.worktree,
-  parentRunId: null, // GAP: RunMeta has no parentRunId field
-  expectedSurface: [], // GAP: RunMeta has no expectedSurface field
+  parentRunId: ctx.parentRunId,
+  expectedSurface: ctx.expectedSurface,
   lastVerdict: ctx.lastVerdict,
   outcomes: ctx.outcomes,
   blockedReason: meta.blockedReason ?? null,

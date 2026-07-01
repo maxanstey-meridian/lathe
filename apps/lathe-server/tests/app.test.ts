@@ -1,11 +1,11 @@
-import { equal, ok, strictEqual } from "node:assert";
+import { deepStrictEqual, equal, ok, strictEqual } from "node:assert";
 import { test } from "node:test";
 
 import { acceptRun as acceptRunUc } from "@lathe/core";
 import type { RunMeta } from "@lathe/core";
 import type { Supervisor } from "../src/supervisor.js";
-import { createApp, createEventBus } from "../src/app.js";
-import type { LatheEvent } from "@lathe/contract";
+import { createApp, createEventBus, createTailEventBus } from "../src/app.js";
+import type { LatheEvent, TailEvent, TailSnapshotDto } from "@lathe/contract";
 import { RunNotAnswerableError, RunNotFoundError, NonChainTipError } from "../src/supervisor.js";
 
 // ---------------------------------------------------------------------------
@@ -20,8 +20,40 @@ const defaultConfig = {
   } as const,
   daddy: { modelId: "test-daddy", providerId: "test-provider" } as const,
   superdaddy: { modelId: "test-superdaddy" } as const,
-  thresholds: { ladderParkAt: 10, ladderRotateAt: 4, maxPasses: 3 } as const,
+  thresholds: { ladderParkAt: 10, ladderRotateAt: 4, maxPasses: 3, rotationFraction: 0.65 } as const,
 } as const;
+
+const tailSnapshot = (runId: string): TailSnapshotDto => ({
+  runId,
+  summary: "tail summary",
+  status: "running",
+  startedAt: "2026-01-01T00:00:00Z",
+  models: {
+    baby: "test",
+    promoted: "test-daddy",
+    daddy: "test-daddy",
+    super: "test-superdaddy",
+  },
+  promoted: false,
+  budget: 85196,
+  worktree: `/tmp/w/${runId}`,
+  outcomesDone: 1,
+  outcomesTotal: 2,
+  gateReason: null,
+  contextTokens: 1234,
+  turn: 2,
+  rotations: 1,
+  journal: [
+    {
+      seq: 7,
+      at: "2026-01-01T00:00:01Z",
+      line: "00:00:01 ▶ run started (attempt 1)",
+      event: "run_started",
+      driver: true,
+    },
+  ],
+  lastSeq: 7,
+});
 
 const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
   const metaStore = new Map<string, RunMeta>();
@@ -71,7 +103,7 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
     answerRun: (runId: string, _answer: string): void => {
       const meta = metaStore.get(runId);
       if (!meta) throw new RunNotFoundError(runId);
-      if (meta.status !== "blocked") throw new RunNotAnswerableError(`run ${runId} is not parked (status: ${meta.status})`);
+      if (meta.status !== "blocked" && meta.status !== "failed") throw new RunNotAnswerableError(`run ${runId} is not answerable (status: ${meta.status})`);
       metaStore.set(runId, { ...meta, status: "queued" as const, updatedAt: new Date().toISOString() });
     },
 
@@ -108,6 +140,16 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
 
     lastVerdict: (_runId: string): string | null => "approved",
     outcomes: (_runId: string): string => "",
+    runReadModel: (runId: string) => ({
+      campaignId: runId,
+      parentRunId: null,
+      expectedSurface: [],
+      pass: 1,
+      turn: 0,
+      contextTokens: 0,
+    }),
+    getTailSnapshot: (runId: string): TailSnapshotDto | undefined => metaStore.has(runId) ? tailSnapshot(runId) : undefined,
+    getActiveTailSnapshot: (): TailSnapshotDto | null => null,
     getStatus: () => ({
       activeRun: null,
       queued: Array.from(metaStore.values())
@@ -123,6 +165,14 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
         })),
       campaigns: [],
       staged: stagedEntries.map((entry) => ({ runId: entry.runId, parentRunId: entry.parentRunId ?? null })),
+      review: Array.from(metaStore.values()).reduce(
+        (summary, meta) => {
+          if (meta.status === "ready_for_review") summary.readyForReview += 1;
+          if (meta.status === "failed") summary.failed += 1;
+          return summary;
+        },
+        { readyForReview: 0, failed: 0 },
+      ),
     }),
     getReview: () => ({
       runs: Array.from(metaStore.values())
@@ -156,7 +206,7 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
     const meta = merged.getRun!(runId);
     if (!meta) throw new RunNotFoundError(runId);
     if (overrides?.answerRun) return overrides.answerRun!(runId, answer);
-    if (meta.status !== "blocked") throw new RunNotAnswerableError(`run ${runId} is not parked (status: ${meta.status})`);
+    if (meta.status !== "blocked" && meta.status !== "failed") throw new RunNotAnswerableError(`run ${runId} is not answerable (status: ${meta.status})`);
     metaStore.set(runId, { ...meta, status: "queued" as const, updatedAt: new Date().toISOString() });
   };
 
@@ -230,7 +280,17 @@ const makeAcceptSupervisor = (meta: RunMeta, currentBranch: string, isDirty = fa
     isChainTip: (_runId: string): boolean => true,
     lastVerdict: (_runId: string): string | null => null,
     outcomes: (_runId: string): string => "",
-    getStatus: () => ({ activeRun: null, queued: [], parked: [], campaigns: [], staged: [] }),
+    runReadModel: (runId: string) => ({
+      campaignId: runId,
+      parentRunId: null,
+      expectedSurface: [],
+      pass: 1,
+      turn: 0,
+      contextTokens: 0,
+    }),
+    getTailSnapshot: (_runId: string): TailSnapshotDto | undefined => undefined,
+    getActiveTailSnapshot: (): TailSnapshotDto | null => null,
+    getStatus: () => ({ activeRun: null, queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
     getReview: () => ({ runs: [] }),
     listStaged: (): Array<{ runId: string; parentRunId: string | undefined }> => [],
   } satisfies Supervisor;
@@ -356,15 +416,29 @@ test("GetRun returns RunDetailDto for known run", async () => {
     listRuns: () => [meta],
     isChainTip: () => true,
     outcomes: () => "1/2 done, 1 in progress",
+    runReadModel: () => ({
+      campaignId: "campaign-1",
+      parentRunId: "parent-run",
+      expectedSurface: ["apps/lathe-server/src/app.ts"],
+      pass: 2,
+      turn: 3,
+      contextTokens: 4567,
+    }),
   });
   const app2 = createApp(supWithMeta.appDeps, supWithMeta);
 
   const req = new Request(`http://localhost/runs/${runId}`);
   const res = await app2.request(req);
   equal(res.status, 200);
-  const body = await res.json() as { runId: string; status: string; isChainTip: boolean; base: string; branch: string; outcomes: string; blockedReason: string | null; blockedQuestion: string | null };
+  const body = await res.json() as { runId: string; status: string; campaignId: string; parentRunId: string | null; expectedSurface: string[]; pass: number; turn: number; contextTokens: number; isChainTip: boolean; base: string; branch: string; outcomes: string; blockedReason: string | null; blockedQuestion: string | null };
   equal(body.runId, runId);
   equal(body.status, "running");
+  equal(body.campaignId, "campaign-1");
+  equal(body.parentRunId, "parent-run");
+  deepStrictEqual(body.expectedSurface, ["apps/lathe-server/src/app.ts"]);
+  equal(body.pass, 2);
+  equal(body.turn, 3);
+  equal(body.contextTokens, 4567);
   equal(body.base, "main");
   equal(body.branch, "meridian/test");
   equal(body.outcomes, "1/2 done, 1 in progress");
@@ -380,6 +454,7 @@ test("GetStatus returns daemon status snapshot", async () => {
       parked: [],
       campaigns: [],
       staged: [],
+      review: { readyForReview: 0, failed: 0 },
     }),
   });
   const app = createApp(supervisor.appDeps, supervisor);
@@ -728,7 +803,7 @@ test("AnswerRun for a non-blocked run returns 409", async () => {
   equal(res.status, 409);
   const body = await res.json() as { code: string; message: string };
   equal(body.code, "not_answerable");
-  ok(body.message.includes("not parked"));
+  ok(body.message.includes("not answerable"));
 });
 
 test("AcceptRun on chain tip returns 200", async () => {
@@ -845,6 +920,53 @@ test("RejectRun for a queue-only run returns success without meta", async () => 
   equal(body.status, "paused");
 });
 
+test("GetTail returns daemon-owned snapshot for a run", async () => {
+  const runId = "tail-run";
+  const supervisor = makeFakeSupervisor();
+  supervisor.enqueueRun(`/tmp/${runId}.md`);
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request(`http://localhost/tail/${runId}`);
+  equal(res.status, 200);
+  const body = await res.json() as TailSnapshotDto;
+  equal(body.runId, runId);
+  equal(body.summary, "tail summary");
+  equal(body.models.baby, "test");
+  equal(body.outcomesDone, 1);
+  equal(body.outcomesTotal, 2);
+  equal(body.journal[0]?.seq, 7);
+  equal(body.lastSeq, 7);
+});
+
+test("GetTail returns 404 for a missing run", async () => {
+  const supervisor = makeFakeSupervisor();
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request("http://localhost/tail/missing-run");
+  equal(res.status, 404);
+});
+
+test("GetActiveTail returns null when no active tail target exists", async () => {
+  const supervisor = makeFakeSupervisor();
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request("http://localhost/tail/active");
+  equal(res.status, 200);
+  strictEqual(await res.json(), null);
+});
+
+test("GetActiveTail returns the daemon active tail snapshot", async () => {
+  const supervisor = makeFakeSupervisor({
+    getActiveTailSnapshot: () => tailSnapshot("active-tail"),
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request("http://localhost/tail/active");
+  equal(res.status, 200);
+  const body = await res.json() as TailSnapshotDto;
+  equal(body.runId, "active-tail");
+});
+
 // ---------------------------------------------------------------------------
 // SSE feed — basic connectivity
 // ---------------------------------------------------------------------------
@@ -861,6 +983,59 @@ test("SSE: /events returns 200 with text/event-stream", async () => {
   equal(res.status, 200);
   ok(res.headers.get("content-type")?.includes("text/event-stream"));
   await res.body?.cancel();
+});
+
+test("Tail SSE: run stream replays only matching durable tail events", async () => {
+  const tailBus = createTailEventBus();
+  const events: TailEvent[] = [
+    { kind: "tail.journal", runId: "r1", seq: 1, at: "2026-01-01T00:00:01Z", line: "r1", event: "run_started", driver: true },
+    { kind: "tail.journal", runId: "r2", seq: 2, at: "2026-01-01T00:00:02Z", line: "r2", event: "run_started", driver: true },
+    { kind: "tail.stats", runId: "r1", seq: 3, at: "2026-01-01T00:00:03Z", contextTokens: 10, turn: 1, rotations: 0, outcomesDone: 0, outcomesTotal: 1, gateReason: null, status: "running" },
+  ];
+  const deps = {
+    bus: createEventBus(),
+    readEventsSince: (_seq: number): { seq: number; event: LatheEvent }[] => [],
+    tailBus,
+    readTailEventsSince: (seq: number, runId: string): TailEvent[] =>
+      events.filter((event) => "seq" in event && event.seq > seq && "runId" in event && event.runId === runId),
+  };
+  const app = createApp(deps, null as unknown as Supervisor, { logger: false });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2000);
+  const res = await app.request("http://localhost/tail/r1/events", { signal: controller.signal });
+  equal(res.status, 200);
+  const reader = res.body!.getReader();
+  const body = await readUntilId(reader, "3");
+  clearTimeout(timer);
+  await reader.cancel();
+  ok(body.includes("id: 1"), "replays r1 journal event");
+  ok(body.includes("id: 3"), "replays r1 stats event");
+  ok(!body.includes("id: 2"), "filters r2 event");
+});
+
+test("Tail SSE: run stream receives live matching tail events", async () => {
+  const tailBus = createTailEventBus();
+  const deps = {
+    bus: createEventBus(),
+    readEventsSince: (_seq: number): { seq: number; event: LatheEvent }[] => [],
+    tailBus,
+    readTailEventsSince: (_seq: number, _runId: string): TailEvent[] => [],
+  };
+  const app = createApp(deps, null as unknown as Supervisor, { logger: false });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2000);
+  const res = await app.request("http://localhost/tail/r1/events", { signal: controller.signal });
+  equal(res.status, 200);
+  const reader = res.body!.getReader();
+  tailBus.publish({ kind: "tail.journal", runId: "r2", seq: 4, at: "2026-01-01T00:00:04Z", line: "r2", event: "run_started", driver: true });
+  tailBus.publish({ kind: "tail.journal", runId: "r1", seq: 5, at: "2026-01-01T00:00:05Z", line: "r1", event: "run_started", driver: true });
+  const body = await readUntilId(reader, "5");
+  clearTimeout(timer);
+  await reader.cancel();
+  ok(body.includes("id: 5"), "receives matching live event");
+  ok(!body.includes("id: 4"), "filters non-matching live event");
 });
 
 test("SSE: fresh connection with no Last-Event-ID replays the first event", async () => {

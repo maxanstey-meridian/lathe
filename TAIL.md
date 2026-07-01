@@ -8,7 +8,49 @@ The CLI must stop opening local Lathe state and must stop subscribing directly t
 
 ## Current State
 
+### Completed
+
+- Tail contract DTOs now exist in `packages/contract/src/lathe.contract.ts`: `TailSnapshotDto`, `TailJournalLineDto`, `TailEvent`, `TailRunStatus`, speaker/style helper types.
+- Generated contract artifacts were refreshed: `packages/contract/generated/api.contract.json`, `openapi.json`, and `schema.d.ts`.
+- Daemon snapshot endpoints now exist:
+  - `GET /tail/active`
+  - `GET /tail/{runId}`
+- Daemon tail SSE sidecar endpoints now exist, separate from dashboard `/events`:
+  - `GET /tail/active/events`
+  - `GET /tail/{runId}/events`
+- `apps/lathe-server/src/app.ts` now owns a separate `TailEventBus` and tail SSE stream implementation.
+- `apps/lathe-server/src/supervisor.ts` now builds daemon-owned tail snapshots from store/config reads.
+- Durable journal rows now project to tail events: `tail.journal`, `tail.stats`, and `tail.super.verdict`.
+- Plain/non-TTY `lathe tail` now fetches daemon tail snapshots and follows daemon tail SSE.
+- Plain CLI tail no longer uses local `journalFile`, local journal replay, or `watchFile`/`unwatchFile`.
+- TTY/Ink `lathe tail` now fetches daemon tail snapshots and follows daemon tail SSE.
+- `apps/lathe-cli/src/commands.ts` no longer imports `SqliteStoreAdapter`, `buildRepo`, local `openTail`, local paths, or local store read seams for tail.
+- `packages/core/src/interfaces/cli/tail.ts` is now presentation-only: it exports `runTailUi`/`TailUiDeps` and no longer constructs a store or opencode subscribers.
+- `packages/core/src/interfaces/tui/tail-ui.tsx` now renders from `TailSnapshotDto` plus `TailEvent` and no longer polls store state or subscribes directly to opencode.
+- The daemon supervisor now owns opencode event subscriptions for active tail runs and publishes live-only `tail.pane.delta` / `tail.pane.tool` events.
+- The daemon supervisor now polls opencode context tokens and publishes live-only `tail.stats` updates.
+- Active tail SSE can emit `tail.run.changed` with a daemon snapshot so TTY auto-advance can switch without reading local pointers.
+- Focused and workspace verification passed:
+  - `pnpm --filter @lathe/server test`
+  - `pnpm --filter @lathe/server typecheck`
+  - `pnpm --filter @lathe/core typecheck`
+  - `pnpm --filter @lathe/core build`
+  - `pnpm --filter @lathe/server build && pnpm --filter @lathe/cli test`
+  - `pnpm --filter @lathe/cli typecheck`
+  - `pnpm run typecheck`
+
+### Remaining Caveats
+
+- Opencode pane deltas/tool lines are live-only. Durable replay is still journal/stat/super-verdict only.
+- TTY event subscription close currently stops forwarding events to Ink, but the underlying fetch stream is not abort-controller cancelled yet.
+- Live context-token `tail.stats` updates are seq-less by design; durable journal-derived stats keep `seq` and replay normally.
+- The daemon opencode subscription service is intentionally scoped to active run/convergence targets, not every historical run.
+
 ### CLI Tail Is Still Local
+
+This section is now only partially true.
+
+Plain/non-TTY tail and TTY tail have been cut over to the daemon.
 
 - `apps/lathe-cli/src/commands.ts:292-294` explicitly says tail is local until the SSE + journal endpoint pass.
 - `apps/lathe-cli/src/commands.ts:297-309` defines `TailDeps` around a local `Store`, local `Paths`, local `openTail`, and local file watching.
@@ -16,9 +58,11 @@ The CLI must stop opening local Lathe state and must stop subscribing directly t
 - `apps/lathe-cli/src/commands.ts:507-588` resolves active run and plain replay from local store reads.
 - `apps/lathe-cli/src/commands.ts:526-551` still uses `journalFile`, `existsSync`, `watchFile`, and `unwatchFile` as the plain-tail follow trigger.
 
-This is the last CLI read path that still owns local state access.
+Current status: this section is obsolete. `apps/lathe-cli/src/commands.ts` now has daemon-backed plain and TTY tail helpers. It still names its test seam `openTailUi`, but that is only an Ink presentation callback, not local state composition.
 
 ### TTY Tail Is Also Local
+
+This section is obsolete after the latest slice.
 
 - `packages/core/src/interfaces/cli/tail.ts:19-45` constructs `SqliteStoreAdapter`, `createEvents(config)`, and `createContextTokenReader(config)` locally before calling `runTailUi`.
 - `packages/core/src/interfaces/tui/tail-ui.tsx:192-195` reads local run meta for label and model promotion.
@@ -27,9 +71,11 @@ This is the last CLI read path that still owns local state access.
 - `packages/core/src/interfaces/tui/tail-ui.tsx:300-414` subscribes directly to opencode live event feeds for baby, daddy, and super-daddy panes.
 - `packages/core/src/interfaces/tui/tail-ui.tsx:496-517` auto-advances by polling local meta and active-run state.
 
-TTY tail working today does not make it daemon-owned. It works because it still does all of the local work itself.
+TTY tail now works from daemon snapshots/events. The old local store/opencode polling path has been removed.
 
 ### Existing Daemon `/events` Is Not Enough
+
+This remains true. A tail-specific stream now exists; do not collapse it back into `/events`.
 
 - `apps/lathe-server/src/app.ts:213-262` serves sidecar `GET /events`.
 - `apps/lathe-server/src/supervisor.ts:162-202` tails SQLite journal rows with `readJournalSince` and publishes projected events to the bus.
@@ -74,9 +120,18 @@ The CLI must not:
 
 ## New Daemon Tail Surface
 
+This is implemented. Snapshot, durable SSE, active SSE, live pane events, context-token stats, and active-run change events exist.
+
 Do not overload the existing dashboard `/events` stream. Add a tail-specific daemon surface.
 
 ### Snapshot Endpoint
+
+Implemented:
+
+- `GET /tail/{runId}`
+- `GET /tail/active`
+
+Current snapshot includes: `runId`, `summary`, `status`, `startedAt`, `models`, `promoted`, `budget`, `worktree`, `outcomesDone`, `outcomesTotal`, `gateReason`, `contextTokens`, `turn`, `rotations`, `journal`, `lastSeq`.
 
 Add a request/response endpoint, likely in the rivet contract:
 
@@ -110,6 +165,23 @@ Prefer `GET /tail/active` because tail needs tail-specific snapshot fields and b
 
 ### Tail SSE Endpoint
 
+Implemented:
+
+- `GET /tail/{runId}/events`
+- `GET /tail/active/events`
+
+Current streamed events:
+
+- `tail.journal`
+- `tail.stats`
+- `tail.super.verdict`
+- `tail.pane.delta`
+- `tail.pane.tool`
+- `tail.run.changed`
+- `tail.ping`
+
+Note: `tail.pane.delta`, `tail.pane.tool`, live context-token `tail.stats`, and `tail.run.changed` are live-only. They are not replayed from durable storage.
+
 Add a sidecar stream separate from `/events`, for example:
 
 - `GET /tail/{runId}/events`
@@ -138,6 +210,8 @@ The daemon should generate these from:
 
 ### Phase 1: Move Tail Read Model Into Server
 
+Status: mostly complete.
+
 - Add tail DTO/event types to `packages/contract/src/lathe.contract.ts` for snapshot responses and tail SSE payloads.
 - Keep the actual stream as a sidecar route if rivet cannot model SSE, but keep the payload types in the contract package like `LatheEvent` does today.
 - Add `Supervisor.getTailSnapshot(runId)`.
@@ -146,6 +220,8 @@ The daemon should generate these from:
 - Add tests in `apps/lathe-server/tests/app.test.ts` for snapshot success, missing run, active target, and shape fields required by the UI.
 
 ### Phase 2: Add Daemon Tail Stream
+
+Status: complete for this cutover.
 
 - Add a tail bus distinct from the dashboard `EventBus`, or extend the current bus with a separate typed channel.
 - Add daemon-owned opencode subscriptions in the supervisor or a small tail service owned by the supervisor.
@@ -163,6 +239,16 @@ The daemon should generate these from:
 
 ### Phase 3: Make CLI Plain Tail Daemon-Only
 
+Status: complete for plain/non-TTY tail.
+
+Notes:
+
+- `cmdTail` is now async and `apps/lathe-cli/src/index.ts` awaits it.
+- Plain tail requires daemon availability.
+- `--plain --no-follow <runId>` fetches the daemon snapshot and prints snapshot journal lines.
+- `--plain <runId>` fetches the daemon snapshot, prints journal lines, and follows daemon tail SSE from `lastSeq`.
+- Local file watch and local journal replay seams were removed from plain tail.
+
 - Remove local `TailStore`, `TailPaths`, `watchJournal`, and local `renderTailReplay` from `apps/lathe-cli/src/commands.ts`.
 - Make `cmdTail --plain` require daemon availability, fetch `GET /tail/{runId}` or `GET /tail/active`, print the snapshot journal, then follow the tail SSE stream.
 - For `--no-follow`, fetch snapshot and print once.
@@ -172,6 +258,16 @@ The daemon should generate these from:
 
 ### Phase 4: Make TTY Tail Daemon-Only
 
+Status: complete.
+
+Implemented:
+
+- CLI-side daemon TTY opener in `apps/lathe-cli/src/commands.ts`.
+- `tail-ui.tsx` takes initial `TailSnapshotDto` plus a `TailEvent` subscription.
+- Local polling effects for store journal/ledger/gate/meta/active run/context tokens are removed.
+- TTY consumes `tail.journal`, `tail.stats`, `tail.pane.delta`, `tail.pane.tool`, `tail.super.verdict`, and `tail.run.changed` from daemon streams.
+- CLI stopped building `SqliteStoreAdapter` for tail.
+
 - Replace `openTail(config, paths, runId, autoAdvance)` with a CLI-side `openDaemonTail(client, runId, autoAdvance)` or equivalent.
 - Refactor `packages/core/src/interfaces/tui/tail-ui.tsx` so it renders from injected snapshot + `TailEvent` subscription, not from `Store`, `subscribe(directory, ...)`, or `readContextTokens`.
 - Remove local polling effects for store journal, ledger, gate state, meta, active run, and context tokens.
@@ -180,6 +276,8 @@ The daemon should generate these from:
 - Add UI-level tests or CLI seam tests proving TTY tail opens daemon-backed UI and no longer constructs `SqliteStoreAdapter`.
 
 ### Phase 5: Delete Local Tail State Surface
+
+Status: complete for CLI/TUI cutover. The remaining `@lathe/core/tail` export is presentation-only.
 
 - Delete or repurpose `packages/core/src/interfaces/cli/tail.ts`; it should not create store/opencode adapters for the CLI.
 - Remove `@lathe/core/tail` import from `apps/lathe-cli/src/commands.ts`.

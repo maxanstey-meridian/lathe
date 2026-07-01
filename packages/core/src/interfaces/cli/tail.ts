@@ -1,46 +1,6 @@
-// `meridian tail` on a TTY: the Ink split-pane UI (CONTRACT X3). Read-only —
-// constructs a Store + the SSE Events subscription and hands them to the
-// renderer, which polls the run's files and the live feed. Subscribing to the
-// serve instance's SSE is best-effort: if no driver is up, the connection errors
-// silently and the UI degrades to journal-only polling. Returns -1 (Ink owns the
-// terminal until 'q').
-//
-// Extracted from composition.ts to keep it free of .tsx transitive dependencies.
+// `lathe tail` on a TTY: the Ink split-pane presentation. The daemon owns all
+// state reads and opencode subscriptions; this package only renders typed tail
+// snapshots/events supplied by the CLI's daemon client.
 
-import { babyContextBudget } from "../../config/config.js";
-import type { Paths } from "../../config/paths.js";
-import type { Config } from "../../config/schemas.js";
-import { systemClock } from "../../infrastructure/clock.js";
-import { createContextTokenReader, createEvents } from "../../infrastructure/opencode/events.js";
-import { SqliteStoreAdapter } from "../../infrastructure/sqlite-store.js";
-import { runTailUi } from "../tui/tail-ui.js";
-import { buildRepo } from "./composition.js";
-
-export const openTail = (
-  config: Config,
-  paths: Paths,
-  runId: string,
-  autoAdvance: boolean,
-): number => {
-  const clock = systemClock;
-  const repo = buildRepo();
-  const store = SqliteStoreAdapter.create(paths, repo, clock);
-  const events = createEvents(config);
-  const readContextTokens = createContextTokenReader(config);
-  runTailUi({
-    store,
-    budget: babyContextBudget(config),
-    subscribe: events.subscribe,
-    readContextTokens,
-    runId,
-    daddyDirectory: paths.root,
-    autoAdvance,
-    models: {
-      baby: config.baby.modelId,
-      promoted: config.baby.promoteTo?.modelId ?? config.daddy.modelId,
-      daddy: config.daddy.modelId,
-      super: config.superdaddy.modelId,
-    },
-  });
-  return -1;
-};
+export { runTailUi } from "../tui/tail-ui.js";
+export type { TailUiDeps } from "../tui/tail-ui.js";

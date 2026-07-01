@@ -705,6 +705,14 @@
             }
           },
           "optional": false
+        },
+        {
+          "name": "review",
+          "type": {
+            "kind": "ref",
+            "name": "StatusReviewSummaryDto"
+          },
+          "optional": false
         }
       ]
     },
@@ -767,6 +775,28 @@
       ]
     },
     {
+      "name": "StatusReviewSummaryDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "readyForReview",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "failed",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
       "name": "StatusStagedRunDto",
       "typeParameters": [],
       "properties": [
@@ -790,6 +820,236 @@
           "optional": false
         }
       ]
+    },
+    {
+      "name": "TailJournalLineDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "seq",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "at",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "line",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "event",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "driver",
+          "type": {
+            "kind": "primitive",
+            "type": "boolean"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "TailModelsDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "baby",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "promoted",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "daddy",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "super",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "TailSnapshotDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "summary",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "status",
+          "type": {
+            "kind": "ref",
+            "name": "TailRunStatus"
+          },
+          "optional": false
+        },
+        {
+          "name": "startedAt",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "models",
+          "type": {
+            "kind": "ref",
+            "name": "TailModelsDto"
+          },
+          "optional": false
+        },
+        {
+          "name": "promoted",
+          "type": {
+            "kind": "primitive",
+            "type": "boolean"
+          },
+          "optional": false
+        },
+        {
+          "name": "budget",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "worktree",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "outcomesDone",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "outcomesTotal",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "gateReason",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "contextTokens",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "turn",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "rotations",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "journal",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "TailJournalLineDto"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "lastSeq",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        }
+      ]
     }
   ],
   "enums": [
@@ -803,6 +1063,19 @@
         "accepted",
         "aborted",
         "failed"
+      ]
+    },
+    {
+      "name": "TailRunStatus",
+      "values": [
+        "queued",
+        "running",
+        "interrupted",
+        "ready_for_review",
+        "blocked",
+        "failed",
+        "accepted",
+        "aborted"
       ]
     }
   ],
@@ -1123,6 +1396,62 @@
           "dataType": {
             "kind": "ref",
             "name": "ConfigDto"
+          }
+        }
+      ]
+    },
+    {
+      "name": "getActiveTail",
+      "httpMethod": "GET",
+      "routeTemplate": "/tail/active",
+      "params": [],
+      "returnType": {
+        "kind": "nullable",
+        "inner": {
+          "kind": "ref",
+          "name": "TailSnapshotDto"
+        }
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "ref",
+              "name": "TailSnapshotDto"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "getTail",
+      "httpMethod": "GET",
+      "routeTemplate": "/tail/{runId}",
+      "params": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "source": "route",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "ref",
+        "name": "TailSnapshotDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "ref",
+            "name": "TailSnapshotDto"
           }
         }
       ]

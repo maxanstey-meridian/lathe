@@ -20,7 +20,7 @@ const main = async (): Promise<void> => {
   }
 
   if (command === "tail") {
-    cmdTail(makeEnv(), args);
+    await cmdTail(makeEnv(), args);
     return;
   }
 

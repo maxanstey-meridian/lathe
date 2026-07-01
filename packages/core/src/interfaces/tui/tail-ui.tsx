@@ -1,66 +1,23 @@
-// The Ink face of `meridian tail` (CONTRACT X3, D4): a stateless renderer over
-// the run's durable state (through the Store) + the serve instance's live SSE
-// feed (through the injected Events subscription). Split panes for Baby and
-// Daddy, a driver-event strip, and a status bar with the tokens-until-rotation
-// gauge. Writes nothing; identical for a live and a finished run (the finished
-// run simply has no live SSE deltas, only the journal).
+// The Ink face of `lathe tail` (CONTRACT X3, D4): a stateless renderer over the
+// daemon-owned tail snapshot plus daemon tail events. Split panes for Baby,
+// Daddy, and Super-daddy, a driver-event strip, and a status bar with the
+// tokens-until-rotation gauge. Writes nothing.
 
+import type { TailEvent, TailLineStyle, TailSnapshotDto, TailSpeaker } from "@lathe/contract";
 import { render, Box, Text, useApp, useInput } from "ink";
 import React from "react";
 import { useEffect, useRef, useState } from "react";
-import type { OpencodeEvent } from "../../application/ports/events.js";
-import type { Store } from "../../application/ports/store.js";
-import { isLatched, gateReason } from "../../domain/gate.js";
-import type { JournalEvent } from "../../domain/journal.js";
-import { renderJournalEvent, isDriverEvent } from "../../domain/journal.js";
 
-// Durable reads can throw before a run's files exist; in a live tail that is
-// "not yet", not an error — swallow to undefined and let the next poll catch up.
-const safe = <T,>(fn: () => T): T | undefined => {
-  try {
-    return fn();
-  } catch {
-    return undefined;
-  }
-};
-
-type Subscribe = (
-  directory: string,
-  onEvent: (event: OpencodeEvent) => void,
-) => { close: () => void };
-type ReadContextTokens = (sessionId: string) => Promise<number | undefined>;
-
-// daddyDirectory: the planner session's directory (paths.root). Daddy's opencode
-// session is rooted there, NOT in the worktree, so its events arrive on a separate
-// directory-scoped feed (events.ts) — the tail subscribes to both to fill both panes.
 export type TailUiDeps = {
-  store: Store;
-  budget: number;
-  subscribe: Subscribe;
-  readContextTokens?: ReadContextTokens;
-  runId: string;
-  daddyDirectory: string;
-  // Model IDs shown in each pane header so the viewer can tell at a glance
-  // which model each session runs — and whether baby has been promoted.
-  models: {
-    baby: string;
-    promoted: string;
-    daddy: string;
-    super: string;
-  };
-  // No runId was named on the CLI → follow the chain: when the tailed run finishes,
-  // hop to the next run the daemon makes active. False when the user named a runId.
-  autoAdvance?: boolean;
+  snapshot: TailSnapshotDto;
+  subscribe: (onEvent: (event: TailEvent) => void) => { close: () => void };
 };
 
 const TERMINAL_STATUSES = ["ready_for_review", "blocked", "failed", "accepted"];
 
-type LineStyle = "think" | "text" | "tool";
+type LineStyle = TailLineStyle | "tool";
 type PaneLine = { text: string; style: LineStyle };
 type PaneState = { lines: PaneLine[]; current: string; currentStyle: LineStyle; lastAt: number };
-// Which pane a live session feeds: baby (executor), daddy (planner), or super
-// (the convergence reviewer — super-daddy).
-type Speaker = "baby" | "daddy" | "super";
 
 const emptyPane = (): PaneState => ({ lines: [], current: "", currentStyle: "text", lastAt: 0 });
 
@@ -160,39 +117,32 @@ const Pane = ({
   );
 };
 
-const TailApp = ({
-  store,
-  budget,
-  subscribe,
-  readContextTokens,
-  runId,
-  daddyDirectory,
-  models,
-}: TailUiDeps) => {
+const TailApp = ({ snapshot: initialSnapshot, subscribe }: TailUiDeps) => {
   const { exit } = useApp();
+  const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [baby, setBaby] = useState<PaneState>(emptyPane());
   const [daddy, setDaddy] = useState<PaneState>(emptyPane());
   const [superPane, setSuperPane] = useState<PaneState>(emptyPane());
-  const [events, setEvents] = useState<string[]>([]);
+  const [events, setEvents] = useState<string[]>(
+    initialSnapshot.journal
+      .filter((entry) => entry.driver)
+      .map((entry) => entry.line.split("\n")[0] ?? "")
+      .slice(-50),
+  );
   const [now, setNow] = useState(Date.now());
   const [stats, setStats] = useState({
-    ctx: 0,
-    turn: 0,
-    rotations: 0,
-    done: 0,
-    total: 0,
-    gate: "",
-    status: "",
+    ctx: initialSnapshot.contextTokens,
+    turn: initialSnapshot.turn,
+    rotations: initialSnapshot.rotations,
+    done: initialSnapshot.outcomesDone,
+    total: initialSnapshot.outcomesTotal,
+    gate: initialSnapshot.gateReason ?? "",
+    status: initialSnapshot.status,
   });
   const charsThisTurn = useRef(0);
-  const journalIndex = useRef(0);
-  const partTypes = useRef(new Map<string, string>());
-  const toolSeen = useRef(new Set<string>());
-  const tokenSession = useRef<string | undefined>(undefined);
-  const meta = store.readMetaIfExists(runId);
-  const startedAt = meta?.startedAt ? Date.parse(meta.startedAt) : Date.now();
-  const label = runLabel(runId, meta?.summary);
-  const babyModel = meta?.promoted ? `⬆ ${models.promoted}` : models.baby;
+  const startedAt = snapshot.startedAt ? Date.parse(snapshot.startedAt) : Date.now();
+  const label = runLabel(snapshot.runId, snapshot.summary ?? undefined);
+  const babyModel = snapshot.promoted ? `⬆ ${snapshot.models.promoted}` : snapshot.models.baby;
 
   useInput((input, key) => {
     if (input === "q" || (key.ctrl && input === "c")) {
@@ -205,125 +155,8 @@ const TailApp = ({
     return () => clearInterval(timer);
   }, []);
 
-  // OpenCode has step-level context totals; the Lathe journal only gets a token
-  // fact after the whole driver turn ends. Poll the Baby session so the bar climbs
-  // linearly through multi-step turns, while journal polling remains the fallback.
   useEffect(() => {
-    if (!readContextTokens) {
-      return;
-    }
-    let cancelled = false;
-    let busy = false;
-    const poll = async (): Promise<void> => {
-      if (busy) {
-        return;
-      }
-      const sessionId = store.readMetaIfExists(runId)?.babySessionId;
-      if (!sessionId) {
-        return;
-      }
-      if (tokenSession.current !== sessionId) {
-        tokenSession.current = sessionId;
-        charsThisTurn.current = 0;
-        setStats((s) => ({ ...s, ctx: 0 }));
-      }
-      busy = true;
-      try {
-        const tokens = await readContextTokens(sessionId);
-        if (!cancelled && typeof tokens === "number") {
-          charsThisTurn.current = 0;
-          setStats((s) => ({ ...s, ctx: tokens }));
-        }
-      } catch {
-        /* tail degrades to journal-only token updates */
-      } finally {
-        busy = false;
-      }
-    };
-    void poll();
-    const timer = setInterval(() => void poll(), 2000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, []);
-
-  // Journal: driver events to the strip, turn/rotation/outcome facts to stats.
-  useEffect(() => {
-    const poll = setInterval(() => {
-      const all = safe(() => store.readJournal(runId));
-      if (all) {
-        const fresh = all.slice(journalIndex.current);
-        journalIndex.current = all.length;
-        if (fresh.length > 0) {
-          const lines = fresh
-            .filter(isDriverEvent)
-            .map((e: JournalEvent) => renderJournalEvent(e).split("\n")[0] ?? "");
-          if (lines.length > 0) {
-            setEvents((prev) => [...prev, ...lines].slice(-50));
-          }
-          for (const e of fresh) {
-            if (e.event === "turn_ended") {
-              charsThisTurn.current = 0;
-              setStats((s) => ({ ...s, ctx: e.contextTokens, turn: e.turn ?? s.turn }));
-            }
-            if (e.event === "rotation" && e.phase === "session_replaced") {
-              charsThisTurn.current = 0;
-              setStats((s) => ({ ...s, ctx: 0, rotations: s.rotations + 1 }));
-            }
-            // Super-daddy's verdict: push a prominent line (+ findings) into the
-            // super pane so the outcome is visible right where its work streamed,
-            // not just in the shared driver-event strip (which can scroll off).
-            if (e.event === "super_review") {
-              setSuperPane((p) => pushToolLine(p, `🛡 verdict: ${e.verdict} (pass ${e.pass})`));
-              for (const f of e.findings) {
-                setSuperPane((p) => pushToolLine(p, `  ${f}`));
-              }
-            }
-          }
-        }
-      }
-      const ledger = safe(() => store.readLedger(runId));
-      const gate = safe(() => store.readGateState(runId));
-      const m = store.readMetaIfExists(runId);
-      setStats((s) => ({
-        ...s,
-        done: ledger?.outcomes.filter((o) => o.status === "done").length ?? s.done,
-        total: ledger?.outcomes.length ?? s.total,
-        gate: gate && isLatched(gate) ? (gateReason(gate) ?? "latched") : "",
-        status: m?.status ?? s.status,
-      }));
-    }, 1000);
-    return () => clearInterval(poll);
-  }, []);
-
-  // SSE: live deltas and tool lines into the panes.
-  useEffect(() => {
-    const worktree = store.readMetaIfExists(runId)?.worktree;
-    if (!worktree) {
-      return;
-    }
-    const speakerFor = (sessionID: string): Speaker | undefined => {
-      const active = store.readActiveRun();
-      if (active?.runId === runId && sessionID === active.babySessionId) {
-        return "baby";
-      }
-      const m = store.readMetaIfExists(runId);
-      if (m?.daddySessionId === sessionID) {
-        return "daddy";
-      }
-      // Super-daddy's session is rooted in the worktree (same feed as baby), so
-      // routing is by sessionID against meta.reviewerSessionId — written by
-      // converge-run the moment the reviewer binds its session.
-      if (m?.reviewerSessionId === sessionID) {
-        return "super";
-      }
-      if (m?.babySessionId === sessionID) {
-        return "baby";
-      }
-      return undefined;
-    };
-    const apply = (speaker: Speaker, fn: (p: PaneState) => PaneState) => {
+    const apply = (speaker: TailSpeaker, fn: (p: PaneState) => PaneState) => {
       if (speaker === "baby") {
         setBaby(fn);
       } else if (speaker === "daddy") {
@@ -333,85 +166,81 @@ const TailApp = ({
       }
     };
 
-    const onEvent = (event: OpencodeEvent) => {
-      const props = event.properties;
-      if (!props) {
+    const sub = subscribe((event) => {
+      if (event.kind === "tail.run.changed") {
+        if (event.snapshot) {
+          setSnapshot(event.snapshot);
+          setEvents(
+            event.snapshot.journal
+              .filter((entry) => entry.driver)
+              .map((entry) => entry.line.split("\n")[0] ?? "")
+              .slice(-50),
+          );
+          setStats({
+            ctx: event.snapshot.contextTokens,
+            turn: event.snapshot.turn,
+            rotations: event.snapshot.rotations,
+            done: event.snapshot.outcomesDone,
+            total: event.snapshot.outcomesTotal,
+            gate: event.snapshot.gateReason ?? "",
+            status: event.snapshot.status,
+          });
+          setBaby(emptyPane());
+          setDaddy(emptyPane());
+          setSuperPane(emptyPane());
+          charsThisTurn.current = 0;
+        }
         return;
       }
-      if (event.type === "message.part.updated") {
-        const part = (props.part ?? {}) as Record<string, unknown>;
-        const partId = typeof part.id === "string" ? part.id : undefined;
-        const type = typeof part.type === "string" ? part.type : "";
-        const sessionID = typeof part.sessionID === "string" ? part.sessionID : undefined;
-        if (partId) {
-          partTypes.current.set(partId, type);
+
+      if ("runId" in event && event.runId !== snapshot.runId) {
+        return;
+      }
+      if (event.kind === "tail.journal") {
+        if (event.driver) {
+          setEvents((prev) => [...prev, event.line.split("\n")[0] ?? ""].slice(-50));
         }
-        if (type !== "tool" || !partId || !sessionID) {
-          return;
+        return;
+      }
+      if (event.kind === "tail.stats") {
+        charsThisTurn.current = 0;
+        setStats({
+          ctx: event.contextTokens,
+          turn: event.turn,
+          rotations: event.rotations,
+          done: event.outcomesDone,
+          total: event.outcomesTotal,
+          gate: event.gateReason ?? "",
+          status: event.status,
+        });
+        return;
+      }
+      if (event.kind === "tail.pane.delta") {
+        if (event.speaker === "baby") {
+          charsThisTurn.current += event.text.length;
         }
-        const state = (part.state ?? {}) as Record<string, unknown>;
-        const status = typeof state.status === "string" ? state.status : "";
-        if ((status !== "completed" && status !== "error") || toolSeen.current.has(partId)) {
-          return;
-        }
-        toolSeen.current.add(partId);
-        const speaker = speakerFor(sessionID);
-        if (!speaker) {
-          return;
-        }
-        const inputObj = (state.input ?? {}) as Record<string, unknown>;
-        const detail =
-          typeof inputObj.command === "string"
-            ? inputObj.command.slice(0, 90)
-            : typeof inputObj.filePath === "string"
-              ? (inputObj.filePath.split("/worktree/").pop() ?? inputObj.filePath)
-              : typeof inputObj.question === "string"
-                ? `"${inputObj.question.slice(0, 80)}…"`
-                : typeof inputObj.status === "string"
-                  ? inputObj.status
-                  : "";
-        const tool = typeof part.tool === "string" ? part.tool : "tool";
-        apply(speaker, (p) =>
-          pushToolLine(p, `${status === "error" ? "✗" : "·"} ${tool}${detail ? ` ${detail}` : ""}`),
+        apply(event.speaker, (p) => pushDelta(p, event.text, event.style));
+        return;
+      }
+      if (event.kind === "tail.pane.tool") {
+        apply(event.speaker, (p) =>
+          pushToolLine(
+            p,
+            `${event.status === "error" ? "✗" : "·"} ${event.tool}${event.detail ? ` ${event.detail}` : ""}`,
+          ),
         );
         return;
       }
-      if (event.type === "message.part.delta") {
-        if (props.field !== "text") {
-          return;
+      if (event.kind === "tail.super.verdict") {
+        for (const line of event.lines) {
+          setSuperPane((p) => pushToolLine(p, line));
         }
-        const sessionID = typeof props.sessionID === "string" ? props.sessionID : undefined;
-        const partId = typeof props.partID === "string" ? props.partID : undefined;
-        const delta = typeof props.delta === "string" ? props.delta : "";
-        if (!sessionID || !partId || !delta) {
-          return;
-        }
-        const speaker = speakerFor(sessionID);
-        if (!speaker) {
-          return;
-        }
-        if (speaker === "baby") {
-          charsThisTurn.current += delta.length;
-        }
-        const style: LineStyle = partTypes.current.get(partId) === "reasoning" ? "think" : "text";
-        apply(speaker, (p) => pushDelta(p, delta, style));
       }
-    };
-
-    // opencode's /event feed is directory-scoped by EXACT match: the worktree feed
-    // carries every session rooted in the worktree — baby AND super-daddy (the
-    // convergence reviewer is scoped to the worktree so it can run git diff/test
-    // itself) — while the paths.root feed carries only daddy's planner session.
-    // An ancestor directory does NOT see child sessions, so neither feed covers the
-    // other — we subscribe to both and let speakerFor route each event by sessionID
-    // (baby/daddy/super). The two feeds never overlap, so there is no double-delivery.
-    const subBaby = subscribe(worktree, onEvent);
-    const subDaddy = subscribe(daddyDirectory, onEvent);
+    });
     return () => {
-      subBaby.close();
-      subDaddy.close();
+      sub.close();
     };
-  }, []);
+  }, [snapshot.runId, subscribe]);
 
   const rows = process.stdout.rows ?? 35;
   const columns = process.stdout.columns ?? 80;
@@ -423,7 +252,7 @@ const TailApp = ({
   const superWidth = frameWidth - babyWidth - daddyWidth;
   const paneHeight = Math.max(8, rows - 9);
   const ctxEstimate = stats.ctx + Math.round(charsThisTurn.current / 4);
-  const fraction = Math.min(1, budget > 0 ? ctxEstimate / budget : 0);
+  const fraction = Math.min(1, snapshot.budget > 0 ? ctxEstimate / snapshot.budget : 0);
   const barWidth = 24;
   const filled = Math.round(fraction * barWidth);
   const terminal = TERMINAL_STATUSES.includes(stats.status);
@@ -441,7 +270,7 @@ const TailApp = ({
         />
         <Pane
           title="daddy"
-          model={models.daddy}
+          model={snapshot.models.daddy}
           pane={daddy}
           height={paneHeight}
           width={daddyWidth}
@@ -449,7 +278,7 @@ const TailApp = ({
         />
         <Pane
           title="super-daddy"
-          model={models.super}
+          model={snapshot.models.super}
           pane={superPane}
           height={paneHeight}
           width={superWidth}
@@ -479,7 +308,7 @@ const TailApp = ({
             {"▓".repeat(filled)}
             {"░".repeat(barWidth - filled)}
           </Text>{" "}
-          {(ctxEstimate / 1000).toFixed(1)}k/{(budget / 1000).toFixed(0)}k
+          {(ctxEstimate / 1000).toFixed(1)}k/{(snapshot.budget / 1000).toFixed(0)}k
           {stats.rotations > 0 ? ` ♻×${stats.rotations}` : ""}
           {"  "}⏱ {fmtDuration(now - startedAt)} turn {stats.turn || "1"} ✓{stats.done}/
           {stats.total}
@@ -493,33 +322,9 @@ const TailApp = ({
   );
 };
 
-// Follow the chain, not one run. Holds the tailed runId as state; when autoAdvance
-// is set and the current run goes terminal, it switches to the next active run. The
-// `key={runId}` forces TailApp to remount so its run-scoped effects (journal poll,
-// SSE subscriptions) tear down and rebind to the new run cleanly.
-const TailRoot = (deps: TailUiDeps) => {
-  const [runId, setRunId] = useState(deps.runId);
-  useEffect(() => {
-    if (!deps.autoAdvance) {
-      return;
-    }
-    const poll = setInterval(() => {
-      const status = safe(() => deps.store.readMetaIfExists(runId)?.status);
-      if (status && TERMINAL_STATUSES.includes(status)) {
-        const next = safe(() => deps.store.readActiveRun()?.runId);
-        if (next && next !== runId) {
-          setRunId(next);
-        }
-      }
-    }, 1000);
-    return () => clearInterval(poll);
-  }, [runId, deps.autoAdvance, deps.store]);
-  return <TailApp key={runId} {...deps} runId={runId} />;
-};
-
 export const runTailUi = (deps: TailUiDeps): void => {
   if (!process.stdout.isTTY) {
-    render(<TailRoot {...deps} />);
+    render(<TailApp {...deps} />);
     return;
   }
 
@@ -534,6 +339,9 @@ export const runTailUi = (deps: TailUiDeps): void => {
 
   process.stdout.write("\x1b[?1049h\x1b[2J\x1b[H");
   process.once("exit", restore);
-  const instance = render(<TailRoot {...deps} />);
-  void instance.waitUntilExit().then(restore);
+  const instance = render(<TailApp {...deps} />);
+  void instance.waitUntilExit().then(() => {
+    restore();
+    process.exit(0);
+  });
 };

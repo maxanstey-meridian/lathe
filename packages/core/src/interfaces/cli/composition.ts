@@ -120,7 +120,7 @@ const stopServe = (serve: Serve): void => {
 };
 
 // ---------------------------------------------------------------------------
-// `meridian run`: the always-on driver. Constructs every adapter, wires the run
+// `lathe serve`: the always-on driver. Constructs every adapter, wires the run
 // loop, and hands it the bridge lock (which doubles as the serve-substrate
 // lifecycle) plus the executeRun / convergeStep / waitForWork callbacks.
 // ---------------------------------------------------------------------------

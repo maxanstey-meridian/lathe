@@ -87,12 +87,18 @@ export interface StatusStagedRunDto {
   parentRunId: string | null;
 }
 
+export interface StatusReviewSummaryDto {
+  readyForReview: number;
+  failed: number;
+}
+
 export interface StatusDto {
   activeRun: StatusActiveRunDto | null;
   queued: StatusQueuedRunDto[];
   parked: StatusParkedRunDto[];
   campaigns: StatusCampaignDto[];
   staged: StatusStagedRunDto[];
+  review: StatusReviewSummaryDto;
 }
 
 export interface ReviewRunDto {
@@ -140,6 +146,104 @@ export interface ConfigDto {
     turnSteps: number;
   };
 }
+
+export type TailRunStatus =
+  | "queued"
+  | "running"
+  | "interrupted"
+  | "ready_for_review"
+  | "blocked"
+  | "failed"
+  | "accepted"
+  | "aborted";
+
+export interface TailModelsDto {
+  baby: string;
+  promoted: string;
+  daddy: string;
+  super: string;
+}
+
+export interface TailJournalLineDto {
+  seq: number;
+  at: string;
+  line: string;
+  event: string;
+  driver: boolean;
+}
+
+export interface TailSnapshotDto {
+  runId: string;
+  summary: string | null;
+  status: TailRunStatus;
+  startedAt: string | null;
+  models: TailModelsDto;
+  promoted: boolean;
+  budget: number;
+  worktree: string;
+  outcomesDone: number;
+  outcomesTotal: number;
+  gateReason: string | null;
+  contextTokens: number;
+  turn: number;
+  rotations: number;
+  journal: TailJournalLineDto[];
+  lastSeq: number;
+}
+
+export type TailSpeaker = "baby" | "daddy" | "super";
+export type TailLineStyle = "think" | "text";
+
+export type TailEvent =
+  | {
+      kind: "tail.journal";
+      runId: string;
+      seq: number;
+      at: string;
+      line: string;
+      event: string;
+      driver: boolean;
+    }
+  | {
+      kind: "tail.stats";
+      runId: string;
+      seq?: number;
+      at: string;
+      contextTokens: number;
+      turn: number;
+      rotations: number;
+      outcomesDone: number;
+      outcomesTotal: number;
+      gateReason: string | null;
+      status: TailRunStatus;
+    }
+  | {
+      kind: "tail.pane.delta";
+      runId: string;
+      speaker: TailSpeaker;
+      style: TailLineStyle;
+      text: string;
+    }
+  | {
+      kind: "tail.pane.tool";
+      runId: string;
+      speaker: TailSpeaker;
+      status: "completed" | "error";
+      tool: string;
+      detail: string;
+    }
+  | {
+      kind: "tail.super.verdict";
+      runId: string;
+      seq: number;
+      at: string;
+      verdict: string;
+      pass: number;
+      findings: string[];
+      lines: string[];
+    }
+  | { kind: "tail.run.changed"; runId: string; snapshot: TailSnapshotDto | null }
+  | { kind: "tail.ping" };
 
 /* ------------------- event stream payload (SSE sidecar) ------------------- */
 
@@ -232,5 +336,18 @@ export interface LatheContract extends Contract<"LatheContract"> {
     method: "GET";
     route: "/config";
     response: ConfigDto;
+  }>;
+
+  getActiveTail: Endpoint<{
+    method: "GET";
+    route: "/tail/active";
+    response: TailSnapshotDto | null;
+  }>;
+
+  getTail: Endpoint<{
+    method: "GET";
+    route: "/tail/{runId}";
+    params: { runId: string };
+    response: TailSnapshotDto;
   }>;
 }

@@ -34,11 +34,16 @@ import {
   parseStaged,
   isLatched,
   gateReason,
+  renderJournalEvent,
+  createEvents,
+  createContextTokenReader,
+  parsePacketShape,
 } from "@lathe/core";
+import type { OpencodeEvent } from "@lathe/core";
 
-import type { EventBus, AppDeps, LatheEvent } from "./app.js";
-import type { Reviewer, ReviewDto, StatusDto } from "@lathe/contract";
-import { createEventBus } from "./app.js";
+import type { EventBus, AppDeps, LatheEvent, TailEventBus } from "./app.js";
+import type { Reviewer, ReviewDto, StatusDto, TailEvent, TailSnapshotDto } from "@lathe/contract";
+import { createEventBus, createTailEventBus } from "./app.js";
 import { projectJournalEvent } from "./event-projection.js";
 import type { ProjectionContext } from "./event-projection.js";
 
@@ -125,8 +130,23 @@ export type Supervisor = {
   getStatus(): StatusDto;
   /** Morning triage snapshot for `lathe review`. */
   getReview(): ReviewDto;
+  /** Full daemon-owned snapshot for tail presentation. */
+  getTailSnapshot(runId: string): TailSnapshotDto | undefined;
+  /** Active run/convergence tail snapshot, or null when nothing is active. */
+  getActiveTailSnapshot(): TailSnapshotDto | null;
   /** Outcome roll-up for run detail DTOs. */
   outcomes(runId: string): string;
+  /** Packet/journal-backed fields for run DTOs. */
+  runReadModel(runId: string): RunReadModel;
+};
+
+export type RunReadModel = {
+  campaignId: string;
+  parentRunId: string | null;
+  expectedSurface: string[];
+  pass: number;
+  turn: number;
+  contextTokens: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -159,11 +179,17 @@ type JournalTailHandle = {
   stop(): void;
 };
 
+type TailOpenCodeHandle = {
+  stop(): void;
+};
+
 const startJournalTail = (
   store: Store,
   bus: EventBus,
+  tailBus: TailEventBus,
   config: Config,
   pollIntervalMs: number,
+  projectTailEvents: (seq: number, runId: string, event: JournalEvent) => TailEvent[],
 ): JournalTailHandle => {
   let running = true;
   let lastSeq = 0;
@@ -190,6 +216,9 @@ const startJournalTail = (
       if (wire) {
         bus.publish(seq, wire);
       }
+      for (const tailEvent of projectTailEvents(seq, runId, event)) {
+        tailBus.publish(tailEvent);
+      }
     }
   }, pollIntervalMs);
 
@@ -197,6 +226,212 @@ const startJournalTail = (
     stop: () => {
       running = false;
       clearInterval(poll);
+    },
+  };
+};
+
+const isTailDriverEvent = (event: JournalEvent): boolean =>
+  event.event !== "tool_call" && event.event !== "turn_ended" && event.event !== "prompt_sent";
+
+const tailToolDetail = (state: Record<string, unknown>): string => {
+  const inputObj = (state.input ?? {}) as Record<string, unknown>;
+  if (typeof inputObj.command === "string") {
+    return inputObj.command.slice(0, 90);
+  }
+  if (typeof inputObj.filePath === "string") {
+    return inputObj.filePath.split("/worktree/").pop() ?? inputObj.filePath;
+  }
+  if (typeof inputObj.question === "string") {
+    return `"${inputObj.question.slice(0, 80)}…"`;
+  }
+  return typeof inputObj.status === "string" ? inputObj.status : "";
+};
+
+const startTailOpenCode = (
+  config: Config,
+  paths: Paths,
+  store: Store,
+  tailBus: TailEventBus,
+  pollIntervalMs: number,
+): TailOpenCodeHandle => {
+  const events = createEvents(config);
+  const readContextTokens = createContextTokenReader(config);
+  const subscriptions = new Map<string, { close: () => void }[]>();
+  const partTypes = new Map<string, string>();
+  const toolSeen = new Set<string>();
+  let running = true;
+
+  const speakerFor = (runId: string, sessionId: string): "baby" | "daddy" | "super" | undefined => {
+    const active = store.readActiveRun();
+    if (active?.runId === runId && sessionId === active.babySessionId) {
+      return "baby";
+    }
+    const meta = store.readMetaIfExists(runId);
+    if (meta?.daddySessionId === sessionId) {
+      return "daddy";
+    }
+    if (meta?.reviewerSessionId === sessionId) {
+      return "super";
+    }
+    if (meta?.babySessionId === sessionId) {
+      return "baby";
+    }
+    return undefined;
+  };
+
+  const onOpenCodeEvent = (runId: string, event: OpencodeEvent): void => {
+    const props = event.properties;
+    if (!props) {
+      return;
+    }
+    if (event.type === "message.part.updated") {
+      const part = (props.part ?? {}) as Record<string, unknown>;
+      const partId = typeof part.id === "string" ? part.id : undefined;
+      const type = typeof part.type === "string" ? part.type : "";
+      const sessionId = typeof part.sessionID === "string" ? part.sessionID : undefined;
+      if (partId) {
+        partTypes.set(`${runId}:${partId}`, type);
+      }
+      if (type !== "tool" || !partId || !sessionId) {
+        return;
+      }
+      const state = (part.state ?? {}) as Record<string, unknown>;
+      const status = typeof state.status === "string" ? state.status : "";
+      const seenKey = `${runId}:${partId}`;
+      if ((status !== "completed" && status !== "error") || toolSeen.has(seenKey)) {
+        return;
+      }
+      const speaker = speakerFor(runId, sessionId);
+      if (!speaker) {
+        return;
+      }
+      toolSeen.add(seenKey);
+      tailBus.publish({
+        kind: "tail.pane.tool",
+        runId,
+        speaker,
+        status,
+        tool: typeof part.tool === "string" ? part.tool : "tool",
+        detail: tailToolDetail(state),
+      });
+      return;
+    }
+    if (event.type === "message.part.delta") {
+      if (props.field !== "text") {
+        return;
+      }
+      const sessionId = typeof props.sessionID === "string" ? props.sessionID : undefined;
+      const partId = typeof props.partID === "string" ? props.partID : undefined;
+      const text = typeof props.delta === "string" ? props.delta : "";
+      if (!sessionId || !partId || !text) {
+        return;
+      }
+      const speaker = speakerFor(runId, sessionId);
+      if (!speaker) {
+        return;
+      }
+      tailBus.publish({
+        kind: "tail.pane.delta",
+        runId,
+        speaker,
+        style: partTypes.get(`${runId}:${partId}`) === "reasoning" ? "think" : "text",
+        text,
+      });
+    }
+  };
+
+  const ensureRun = (meta: RunMeta): void => {
+    if (subscriptions.has(meta.runId)) {
+      return;
+    }
+    subscriptions.set(meta.runId, [
+      events.subscribe(meta.worktree, (event) => onOpenCodeEvent(meta.runId, event)),
+      events.subscribe(paths.root, (event) => onOpenCodeEvent(meta.runId, event)),
+    ]);
+  };
+
+  const closeRun = (runId: string): void => {
+    const existing = subscriptions.get(runId);
+    if (!existing) {
+      return;
+    }
+    for (const sub of existing) {
+      sub.close();
+    }
+    subscriptions.delete(runId);
+  };
+
+  const syncSubscriptions = (): void => {
+    const activeIds = new Set<string>();
+    const activeRunId = store.readActiveRun()?.runId;
+    const activeConvergenceId = store.readActiveConvergence()?.runId;
+    for (const runId of [activeRunId, activeConvergenceId]) {
+      if (!runId) {
+        continue;
+      }
+      const meta = store.readMetaIfExists(runId);
+      if (!meta) {
+        continue;
+      }
+      activeIds.add(runId);
+      ensureRun(meta);
+    }
+    for (const runId of [...subscriptions.keys()]) {
+      if (!activeIds.has(runId)) {
+        closeRun(runId);
+      }
+    }
+  };
+
+  const pollTokens = async (): Promise<void> => {
+    for (const runId of subscriptions.keys()) {
+      const meta = store.readMetaIfExists(runId);
+      if (!meta?.babySessionId) {
+        continue;
+      }
+      const tokens = await readContextTokens(meta.babySessionId).catch(() => undefined);
+      if (typeof tokens !== "number") {
+        continue;
+      }
+      const counts = (() => {
+        try {
+          const ledger = store.readLedger(runId);
+          return { done: ledger.outcomes.filter((outcome) => outcome.status === "done").length, total: ledger.outcomes.length };
+        } catch {
+          return { done: 0, total: 0 };
+        }
+      })();
+      tailBus.publish({
+        kind: "tail.stats",
+        runId,
+        at: new Date().toISOString(),
+        contextTokens: tokens,
+        turn: 0,
+        rotations: 0,
+        outcomesDone: counts.done,
+        outcomesTotal: counts.total,
+        gateReason: null,
+        status: meta.status,
+      });
+    }
+  };
+
+  const poll = setInterval(() => {
+    if (!running) {
+      return;
+    }
+    syncSubscriptions();
+    void pollTokens();
+  }, pollIntervalMs);
+  syncSubscriptions();
+
+  return {
+    stop: () => {
+      running = false;
+      clearInterval(poll);
+      for (const runId of [...subscriptions.keys()]) {
+        closeRun(runId);
+      }
     },
   };
 };
@@ -238,10 +473,10 @@ export const createSupervisor = (
   recoverOrphanedRuns(store, repo, clock);
   recoverStalledRunsAtStartup(store, config.thresholds.maxStallRetries, clock);
 
-  // --- EventBus + journal tail ---
+  // --- Event buses ---
 
   const bus = createEventBus();
-  const journalTail = startJournalTail(store, bus, config, pollIntervalMs);
+  const tailBus = createTailEventBus();
 
   // --- Start runDriver ---
 
@@ -286,6 +521,103 @@ export const createSupervisor = (
     }
   };
 
+  const outcomeCounts = (runId: string): { done: number; total: number } => {
+    try {
+      const ledger = store.readLedger(runId);
+      return {
+        done: ledger.outcomes.filter((outcome) => outcome.status === "done").length,
+        total: ledger.outcomes.length,
+      };
+    } catch {
+      return { done: 0, total: 0 };
+    }
+  };
+
+  const getTailSnapshot = (runId: string): TailSnapshotDto | undefined => {
+    const meta = store.readMetaIfExists(runId);
+    if (!meta) {
+      return undefined;
+    }
+
+    const journalRows = store.readJournalSince(0).filter((row) => row.runId === runId);
+    const counts = outcomeCounts(runId);
+    let contextTokens = 0;
+    let turn = 0;
+    let rotations = 0;
+
+    for (const { event } of journalRows) {
+      if (typeof event.turn === "number") {
+        turn = event.turn;
+      }
+      if (event.event === "turn_ended") {
+        contextTokens = event.contextTokens;
+      }
+      if (event.event === "rotation" && event.phase === "session_replaced") {
+        rotations += 1;
+        contextTokens = event.contextTokens ?? 0;
+      }
+    }
+
+    return {
+      runId,
+      summary: meta.summary ?? null,
+      status: meta.status,
+      startedAt: meta.startedAt ?? null,
+      models: {
+        baby: config.baby.modelId,
+        promoted: config.baby.promoteTo?.modelId ?? config.daddy.modelId,
+        daddy: config.daddy.modelId,
+        super: config.superdaddy.modelId,
+      },
+      promoted: meta.promoted,
+      budget: Math.floor(config.baby.contextWindow * config.thresholds.rotationFraction),
+      worktree: meta.worktree,
+      outcomesDone: counts.done,
+      outcomesTotal: counts.total,
+      gateReason: gateLatchReason(runId),
+      contextTokens,
+      turn,
+      rotations,
+      journal: journalRows.map(({ seq, event }) => ({
+        seq,
+        at: event.at,
+        line: renderJournalEvent(event),
+        event: event.event,
+        driver: isTailDriverEvent(event),
+      })),
+      lastSeq: journalRows.at(-1)?.seq ?? 0,
+    };
+  };
+
+  const runReadModel = (runId: string): RunReadModel => {
+    const raw = store.readQueuePacket(runId);
+    const parsed = raw ? parsePacketShape(raw, runId) : undefined;
+    const frontmatter = parsed?.ok ? parsed.packet.frontmatter : undefined;
+
+    let turn = 0;
+    let contextTokens = 0;
+    for (const event of store.readJournal(runId)) {
+      if (typeof event.turn === "number") {
+        turn = event.turn;
+      }
+      if (event.event === "turn_ended") {
+        contextTokens = event.contextTokens;
+      }
+      if (event.event === "rotation" && typeof event.contextTokens === "number") {
+        contextTokens = event.contextTokens;
+      }
+    }
+
+    return {
+      campaignId: frontmatter?.campaign_id ?? runId,
+      parentRunId: frontmatter?.parent_run_id ?? null,
+      expectedSurface: frontmatter?.expected_surface ?? [],
+      pass: frontmatter?.pass ?? store.readMetaIfExists(runId)?.attempt ?? 0,
+      turn,
+      contextTokens,
+    };
+  };
+
   // Private helper: find the tip of the chain containing runId.
   // Walks every chain tip and traces its ancestry to see if it contains runId.
   const findChainTip = (runId: string): string => {
@@ -304,6 +636,57 @@ export const createSupervisor = (
 
     return tips.at(0)?.runId ?? runs.at(-1)?.runId ?? "unknown";
   };
+
+  const projectTailEvents = (seq: number, runId: string, event: JournalEvent): TailEvent[] => {
+    const snapshot = getTailSnapshot(runId);
+    if (!snapshot) {
+      return [];
+    }
+    const journalEvent: TailEvent = {
+      kind: "tail.journal",
+      runId,
+      seq,
+      at: event.at,
+      line: renderJournalEvent(event),
+      event: event.event,
+      driver: isTailDriverEvent(event),
+    };
+    const statsEvent: TailEvent = {
+      kind: "tail.stats",
+      runId,
+      seq,
+      at: event.at,
+      contextTokens: snapshot.contextTokens,
+      turn: snapshot.turn,
+      rotations: snapshot.rotations,
+      outcomesDone: snapshot.outcomesDone,
+      outcomesTotal: snapshot.outcomesTotal,
+      gateReason: snapshot.gateReason,
+      status: snapshot.status,
+    };
+    if (event.event !== "super_review") {
+      return [journalEvent, statsEvent];
+    }
+    return [
+      journalEvent,
+      statsEvent,
+      {
+        kind: "tail.super.verdict",
+        runId,
+        seq,
+        at: event.at,
+        verdict: event.verdict,
+        pass: event.pass,
+        findings: event.findings,
+        lines: [`verdict: ${event.verdict} (pass ${event.pass})`, ...event.findings.map((finding) => `  ${finding}`)],
+      },
+    ];
+  };
+
+  // --- Journal tail ---
+
+  const journalTail = startJournalTail(store, bus, tailBus, config, pollIntervalMs, projectTailEvents);
+  const tailOpenCode = startTailOpenCode(config, paths, store, tailBus, pollIntervalMs);
 
   return {
     get config(): Config {
@@ -331,6 +714,10 @@ export const createSupervisor = (
 
     outcomes(runId: string): string {
       return outcomes(runId);
+    },
+
+    runReadModel(runId: string): RunReadModel {
+      return runReadModel(runId);
     },
 
     getStatus(): StatusDto {
@@ -369,6 +756,22 @@ export const createSupervisor = (
         };
       });
 
+      const review = store
+        .listRunIds()
+        .map((id) => store.readMetaIfExists(id))
+        .reduce(
+          (summary, meta) => {
+            if (meta?.status === "ready_for_review") {
+              summary.readyForReview += 1;
+            }
+            if (meta?.status === "failed") {
+              summary.failed += 1;
+            }
+            return summary;
+          },
+          { readyForReview: 0, failed: 0 },
+        );
+
       return {
         activeRun,
         queued: store.listQueue().map((entry) => ({ runId: entry.runId })),
@@ -378,6 +781,7 @@ export const createSupervisor = (
           runId: entry.runId,
           parentRunId: entry.parentRunId ?? null,
         })),
+        review,
       };
     },
 
@@ -398,6 +802,18 @@ export const createSupervisor = (
       return { runs };
     },
 
+    getTailSnapshot(runId: string): TailSnapshotDto | undefined {
+      return getTailSnapshot(runId);
+    },
+
+    getActiveTailSnapshot(): TailSnapshotDto | null {
+      const runId = store.readActiveRun()?.runId ?? store.readActiveConvergence()?.runId;
+      if (!runId) {
+        return null;
+      }
+      return getTailSnapshot(runId) ?? null;
+    },
+
     listStaged(): Array<{ runId: string; parentRunId: string | undefined }> {
       return store.listStaged().map(s => ({ runId: s.runId, parentRunId: s.parentRunId }));
     },
@@ -415,6 +831,7 @@ export const createSupervisor = (
 
       // Stop the journal tail.
       journalTail.stop();
+      tailOpenCode.stop();
 
       // Await the driver to exit (with a timeout to avoid hanging forever).
       let shutdownTimer: ReturnType<typeof setTimeout> | undefined;
@@ -436,6 +853,7 @@ export const createSupervisor = (
     get appDeps(): AppDeps {
       return {
         bus,
+        tailBus,
         readEventsSince: (seq: number): { seq: number; event: LatheEvent }[] => {
           const events = store.readJournalSince(seq);
           return events
@@ -447,6 +865,11 @@ export const createSupervisor = (
             })
             .filter((e): e is { seq: number; event: LatheEvent } => e !== null);
         },
+        readTailEventsSince: (seq: number, runId: string): TailEvent[] =>
+          store
+            .readJournalSince(seq)
+            .filter((row) => row.runId === runId)
+            .flatMap((row) => projectTailEvents(row.seq, row.runId, row.event)),
       };
     },
 

@@ -90,19 +90,50 @@ const statusSnapshot = () => ({
   parked: [],
   campaigns: [],
   staged: [],
+  review: { readyForReview: 0, failed: 0 },
+});
+
+const statusWithFailedReview = () => ({
+  ...statusSnapshot(),
+  activeRun: null,
+  review: { readyForReview: 0, failed: 1 },
 });
 
 const detail = (runId: string) => ({
   ...summary(runId, "paused"),
+  campaignId: "campaign-1",
+  pass: 2,
+  turn: 4,
+  contextTokens: 9000,
+  contextWindow: 12000,
   base: "main",
   branch: `meridian/${runId}`,
   worktreePath: `/tmp/${runId}`,
-  parentRunId: null,
-  expectedSurface: [],
+  parentRunId: "parent-1",
+  expectedSurface: ["apps/lathe-cli/src/commands.ts"],
   lastVerdict: null,
   outcomes: "0/1 done, 1 blocked",
   blockedReason: "human_decision",
   blockedQuestion: "Which target branch?",
+});
+
+const tailSnapshot = (runId: string) => ({
+  runId,
+  summary: null,
+  status: "running",
+  startedAt: "2026-01-01T00:00:00Z",
+  models: { baby: "baby", promoted: "promoted", daddy: "daddy", super: "super" },
+  promoted: false,
+  budget: 1000,
+  worktree: `/tmp/${runId}`,
+  outcomesDone: 0,
+  outcomesTotal: 1,
+  gateReason: null,
+  contextTokens: 0,
+  turn: 0,
+  rotations: 0,
+  journal: [{ seq: 1, at: "2026-01-01T00:00:01Z", line: "00:00:01 ▶ run started", event: "run_started", driver: true }],
+  lastSeq: 1,
 });
 
 const withTempFile = (fn: (path: string) => Promise<void>): Promise<void> => {
@@ -118,15 +149,9 @@ const withTempDir = (fn: (path: string) => Promise<void>): Promise<void> => {
 };
 
 const tailDeps = (overrides: Partial<TailDeps> = {}): TailDeps => ({
-  paths: { journalFile: (runId) => join(tmpdir(), `missing-${runId}.jsonl`) },
-  store: {
-    readActiveRun: () => undefined,
-    readActiveConvergence: () => undefined,
-    readJournal: () => [],
-  },
-  openTail: () => 0,
+  openTailUi: () => 0,
+  streamTailEvents: async () => {},
   stdoutIsTTY: () => false,
-  watchJournal: () => () => {},
   startPolling: () => () => {},
   onSigint: () => {},
   exit: (code) => {
@@ -202,13 +227,13 @@ test("cmdAnswer: a 409 surfaces the not-answerable reason", async () => {
   const h = harness(() =>
     jsonResponse(409, {
       code: "not_answerable",
-      message: "run r is not parked (status: running)",
+      message: "run r is not answerable (status: running)",
     }),
   );
   const code = await cmdAnswer(h.env, "r", "go ahead");
   equal(code, 1);
   ok(
-    h.errs.some((e) => e.includes("not parked")),
+    h.errs.some((e) => e.includes("not answerable")),
     h.errs.join("|"),
   );
 });
@@ -300,6 +325,18 @@ test("cmdStatus: reads status through the daemon", async () => {
   ok(h.logs.some((line) => line.includes("queued: queued-run")), h.logs.join("|"));
 });
 
+test("cmdStatus: points to review when failed runs need attention", async () => {
+  const h = harness((req) => {
+    if (new URL(req.url).pathname === "/status") {
+      return jsonResponse(200, statusWithFailedReview());
+    }
+    return jsonResponse(200, { models: {}, thresholds: {} });
+  });
+  const code = await cmdStatus(h.env);
+  equal(code, 0);
+  ok(h.logs.some((line) => line.includes("review: 1 failed — lathe review")), h.logs.join("|"));
+});
+
 test("cmdReview: reads review through the daemon", async () => {
   const h = harness((req) => {
     if (new URL(req.url).pathname === "/review") {
@@ -347,6 +384,11 @@ test("cmdGet: reads run details through the daemon", async () => {
   equal(code, 0);
   ok(h.paths.includes("/runs/run-detail"), "hit GET /runs/{runId}");
   ok(h.logs.some((line) => line.includes("run: run-detail")), h.logs.join("|"));
+  ok(h.logs.some((line) => line.includes("campaign:  campaign-1")), h.logs.join("|"));
+  ok(h.logs.some((line) => line.includes("parent:    parent-1")), h.logs.join("|"));
+  ok(h.logs.some((line) => line.includes("surface:   apps/lathe-cli/src/commands.ts")), h.logs.join("|"));
+  ok(h.logs.some((line) => line.includes("turn:      4")), h.logs.join("|"));
+  ok(h.logs.some((line) => line.includes("ctx:       9000/12000")), h.logs.join("|"));
   ok(h.logs.some((line) => line.includes("outcomes: 0/1 done")), h.logs.join("|"));
   ok(h.logs.some((line) => line.includes("question: Which target branch?")), h.logs.join("|"));
 });
@@ -446,90 +488,103 @@ test("answer: dispatch joins the decision words and routes through the daemon", 
   equal(body?.answer, "go ahead");
 });
 
-test("tail: TTY follow opens the Ink tail UI for an explicit run", () => {
-  const h = harness(() => jsonResponse(200, {}));
-  const opened: Array<{ runId: string; autoAdvance: boolean }> = [];
+test("tail: TTY follow opens the Ink tail UI from a daemon snapshot for an explicit run", async () => {
+  const h = harness((req) => {
+    if (new URL(req.url).pathname === "/tail/run-1") {
+      return jsonResponse(200, tailSnapshot("run-1"));
+    }
+    return jsonResponse(200, {});
+  });
+  const opened: Array<{ runId: string }> = [];
 
-  cmdTail(
+  await cmdTail(
     h.env,
     ["run-1"],
     tailDeps({
       stdoutIsTTY: () => true,
-      openTail: (runId, autoAdvance) => {
-        opened.push({ runId, autoAdvance });
+      openTailUi: (snapshot) => {
+        opened.push({ runId: snapshot.runId });
         return -1;
       },
     }),
   );
 
-  deepEqual(opened, [{ runId: "run-1", autoAdvance: false }]);
+  ok(h.paths.includes("/tail/run-1"), "hit daemon tail snapshot route");
+  deepEqual(opened, [{ runId: "run-1" }]);
 });
 
-test("tail: --plain keeps the plain journal stream instead of opening Ink", () => {
-  const h = harness(() => jsonResponse(200, {}));
+test("tail: --plain fetches daemon snapshot and follows tail SSE", async () => {
+  const h = harness((req) => {
+    if (new URL(req.url).pathname === "/tail/run-1") {
+      return jsonResponse(200, tailSnapshot("run-1"));
+    }
+    return jsonResponse(200, {});
+  });
   let opened = false;
-  let watched = false;
+  const streamed: Array<{ runId: string; lastSeq: number }> = [];
 
-  cmdTail(
+  await cmdTail(
     h.env,
     ["--plain", "run-1"],
     tailDeps({
       stdoutIsTTY: () => true,
-      openTail: () => {
+      openTailUi: () => {
         opened = true;
         return -1;
       },
-      watchJournal: () => {
-        watched = true;
-        return () => {};
+      streamTailEvents: async (runId, lastSeq, onEvent) => {
+        streamed.push({ runId, lastSeq });
+        onEvent({ kind: "tail.journal", runId, seq: 2, at: "2026-01-01T00:00:02Z", line: "00:00:02 next", event: "driver_note", driver: true });
       },
     }),
   );
 
   equal(opened, false);
-  equal(watched, true);
-  ok(h.logs.some((l) => l.includes("waiting for its journal")), h.logs.join("|"));
+  deepEqual(streamed, [{ runId: "run-1", lastSeq: 1 }]);
+  ok(h.paths.includes("/tail/run-1"), "hit daemon tail snapshot route");
+  ok(h.logs.some((l) => l.includes("00:00:01")), h.logs.join("|"));
+  ok(h.logs.some((l) => l.includes("00:00:02 next")), h.logs.join("|"));
 });
 
-test("tail: no active run waits and then opens TTY tail with auto-advance", () => {
-  const h = harness(() => jsonResponse(200, {}));
-  const opened: Array<{ runId: string; autoAdvance: boolean }> = [];
+test("tail: no active run waits and then opens TTY tail from daemon active snapshot", async () => {
   let active = false;
+  const h = harness((req) => {
+    if (new URL(req.url).pathname === "/tail/active") {
+      return jsonResponse(200, active ? tailSnapshot("run-2") : null);
+    }
+    return jsonResponse(200, {});
+  });
+  const opened: Array<{ runId: string; streamedTarget: string; lastSeq: number }> = [];
 
-  cmdTail(
+  await cmdTail(
     h.env,
     [],
     tailDeps({
-      store: {
-        readActiveRun: () =>
-          active
-            ? {
-                runId: "run-2",
-                runDir: "/runs/run-2",
-                worktree: "/worktrees/run-2",
-                babySessionId: "baby",
-                startedAt: "2026-01-01T00:00:00Z",
-              }
-            : undefined,
-        readActiveConvergence: () => undefined,
-        readJournal: () => [],
-      },
       stdoutIsTTY: () => true,
       startPolling: (poll) => {
         active = true;
         poll();
         return () => {};
       },
-      openTail: (runId, autoAdvance) => {
-        opened.push({ runId, autoAdvance });
+      openTailUi: (snapshot, subscribe) => {
+        opened.push({ runId: snapshot.runId, streamedTarget: "", lastSeq: snapshot.lastSeq });
+        subscribe(() => {});
         return -1;
+      },
+      streamTailEvents: async (target, lastSeq) => {
+        const last = opened.at(-1);
+        if (last) {
+          last.streamedTarget = target;
+          last.lastSeq = lastSeq;
+        }
       },
     }),
   );
+  await new Promise((resolve) => setImmediate(resolve));
 
   ok(h.logs.some((l) => l.includes("waiting for one to start")), h.logs.join("|"));
   ok(h.logs.some((l) => l.includes("run run-2 became active")), h.logs.join("|"));
-  deepEqual(opened, [{ runId: "run-2", autoAdvance: true }]);
+  deepEqual(opened, [{ runId: "run-2", streamedTarget: "active", lastSeq: 1 }]);
 });
 
 // ---------------------------------------------------------------------------
@@ -566,7 +621,9 @@ const fakeSupervisor = (order: string[], config = ConfigSchema.parse({})): Super
   lastVerdict: () => null,
   listStaged: () => [],
   outcomes: () => "",
-  getStatus: () => ({ activeRun: null, queued: [], parked: [], campaigns: [], staged: [] }),
+  getTailSnapshot: () => undefined,
+  getActiveTailSnapshot: () => null,
+  getStatus: () => ({ activeRun: null, queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
   getReview: () => ({ runs: [] }),
 });
 

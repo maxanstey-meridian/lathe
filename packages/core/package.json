@@ -14,8 +14,7 @@
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts src/interfaces/cli/tail.ts --format esm --out-dir dist --sourcemap",
-    "postbuild": "node ./scripts/fix-node-builtins.mjs",
+    "build": "tsup",
     "typecheck": "tsc -p tsconfig.typecheck.json",
     "test": "tsx --test tests/*.test.ts",
     "lint": "oxlint src tests",
@@ -24,6 +23,7 @@
     "fmt:check": "oxfmt --check src tests"
   },
   "dependencies": {
+    "@lathe/contract": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "ink": "^5.1.0",
     "react": "^18.3.1",

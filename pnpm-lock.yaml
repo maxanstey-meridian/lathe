@@ -31,7 +31,7 @@ importers:
         version: 22.19.21
       tsup:
         specifier: ^8.5.0
-        version: 8.5.1(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
+        version: 8.5.1(supports-color@10.2.2)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
       tsx:
         specifier: ^4.20.0
         version: 4.22.4
@@ -59,7 +59,7 @@ importers:
         version: 22.19.21
       tsup:
         specifier: ^8.5.0
-        version: 8.5.1(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
+        version: 8.5.1(supports-color@10.2.2)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
       tsx:
         specifier: ^4.20.0
         version: 4.22.4
@@ -81,6 +81,9 @@ importers:
 
   packages/core:
     dependencies:
+      '@lathe/contract':
+        specifier: workspace:*
+        version: link:../contract
       '@modelcontextprotocol/sdk':
         specifier: ^1.12.0
         version: 1.29.0(supports-color@10.2.2)(zod@3.25.76)
@@ -111,7 +114,7 @@ importers:
         version: 1.70.0
       tsup:
         specifier: ^8.5.0
-        version: 8.5.1(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
+        version: 8.5.1(supports-color@10.2.2)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
       tsx:
         specifier: ^4.20.0
         version: 4.22.4
@@ -3040,7 +3043,7 @@ snapshots:
 
   ts-interface-checker@0.1.13: {}
 
-  tsup@8.5.1(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0):
+  tsup@8.5.1(supports-color@10.2.2)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0):
     dependencies:
       bundle-require: 5.1.0(esbuild@0.27.7)
       cac: 6.7.14

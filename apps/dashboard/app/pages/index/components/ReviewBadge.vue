@@ -1,9 +1,7 @@
 <script setup lang="ts">
-import type { StatusReviewSummaryDto } from "@lathe/contract";
+import { injectLatheStatus } from "../ports/lathe-status";
 
-const props = defineProps<{
-  review: StatusReviewSummaryDto;
-}>();
+const status = injectLatheStatus();
 </script>
 
 <template>
@@ -14,20 +12,20 @@ const props = defineProps<{
 
     <div class="flex items-center gap-4">
       <div class="flex items-center gap-2">
-        <UBadge v-if="props.review.readyForReview > 0" color="success" variant="soft" size="lg">
-          {{ props.review.readyForReview }} ready
+        <UBadge v-if="(status.status.value?.review.readyForReview ?? 0) > 0" color="success" variant="soft" size="lg">
+          {{ status.status.value?.review.readyForReview ?? 0 }} ready
         </UBadge>
         <UBadge v-else color="neutral" variant="soft" size="lg">0</UBadge>
       </div>
       <div class="flex items-center gap-2">
-        <UBadge v-if="props.review.failed > 0" color="error" variant="soft" size="lg">
-          {{ props.review.failed }} failed
+        <UBadge v-if="(status.status.value?.review.failed ?? 0) > 0" color="error" variant="soft" size="lg">
+          {{ status.status.value?.review.failed ?? 0 }} failed
         </UBadge>
         <UBadge v-else color="neutral" variant="soft" size="lg">0</UBadge>
       </div>
     </div>
 
-    <div v-if="props.review.readyForReview === 0 && props.review.failed === 0" class="py-6 text-center text-sm text-slate-500">
+    <div v-if="(status.status.value?.review.readyForReview ?? 0) === 0 && (status.status.value?.review.failed ?? 0) === 0" class="py-6 text-center text-sm text-slate-500">
       Nothing to review
     </div>
   </UCard>

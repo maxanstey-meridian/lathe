@@ -3,14 +3,18 @@ import { onMounted } from "vue";
 
 import ActiveRunCard from "./index/components/ActiveRunCard.vue";
 import CampaignLadder from "./index/components/CampaignLadder.vue";
+import EventLog from "./index/components/EventLog.vue";
 import ParkedList from "./index/components/ParkedList.vue";
 import QueueList from "./index/components/QueueList.vue";
 import ReviewBadge from "./index/components/ReviewBadge.vue";
 import StagedChains from "./index/components/StagedChains.vue";
+import { useDaemonEvents } from "./index/composables/useDaemonEvents";
 import { useLatheStatus } from "./index/composables/useLatheStatus";
+import { provideDaemonEvents } from "./index/ports/daemon-events";
 import { provideLatheStatus } from "./index/ports/lathe-status";
 
 const latheStatus = provideLatheStatus(useLatheStatus());
+provideDaemonEvents(useDaemonEvents());
 
 onMounted(() => {
   void latheStatus.refresh();
@@ -27,7 +31,7 @@ onMounted(() => {
       </p>
     </div>
 
-    <ActiveRunCard :active-run="latheStatus.status.value?.activeRun ?? null" :is-live="latheStatus.isLive.value" />
+    <ActiveRunCard />
 
     <UAlert
       v-if="latheStatus.errorMessage.value"
@@ -36,15 +40,17 @@ onMounted(() => {
       :title="latheStatus.errorMessage.value"
     />
 
-    <QueueList :queued="latheStatus.status.value?.queued ?? []" />
+    <QueueList />
 
-    <ParkedList :parked="latheStatus.status.value?.parked ?? []" />
+    <ParkedList />
 
-    <CampaignLadder :campaigns="latheStatus.status.value?.campaigns ?? []" />
+    <CampaignLadder />
 
-    <StagedChains :staged="latheStatus.status.value?.staged ?? []" />
+    <StagedChains />
 
-    <ReviewBadge :review="latheStatus.status.value?.review ?? { readyForReview: 0, failed: 0 }" />
+    <ReviewBadge />
+
+    <EventLog />
 
     <div>
       <UButton :loading="latheStatus.isLoading.value" color="neutral" variant="soft" @click="latheStatus.refresh">

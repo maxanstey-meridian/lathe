@@ -1,9 +1,7 @@
 <script setup lang="ts">
-import type { StatusStagedRunDto } from "@lathe/contract";
+import { injectLatheStatus } from "../ports/lathe-status";
 
-const props = defineProps<{
-  staged: StatusStagedRunDto[];
-}>();
+const status = injectLatheStatus();
 </script>
 
 <template>
@@ -12,10 +10,10 @@ const props = defineProps<{
       <h2 class="text-base font-semibold">Staged Chains</h2>
     </template>
 
-    <template v-if="props.staged.length">
+    <template v-if="status.status.value?.staged.length">
       <ul class="space-y-2">
         <li
-          v-for="entry in props.staged"
+          v-for="entry in status.status.value.staged"
           :key="entry.runId"
           class="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2"
         >

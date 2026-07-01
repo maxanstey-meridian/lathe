@@ -10,7 +10,9 @@
     "check": "pnpm -r --reporter=append-only lint && pnpm -r --reporter=append-only typecheck",
     "test": "pnpm -r --reporter=append-only test",
     "lint": "pnpm -r --reporter=append-only lint",
-    "fmt": "pnpm -r --reporter=append-only fmt"
+    "fmt": "pnpm -r --reporter=append-only fmt",
+    "dev": "pnpm --filter dashboard dev",
+    "serve": "pnpm --filter @lathe/cli exec tsx src/index.ts serve"
   },
   "engines": {
     "node": ">=22"

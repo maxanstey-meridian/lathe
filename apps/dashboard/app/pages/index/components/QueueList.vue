@@ -1,9 +1,7 @@
 <script setup lang="ts">
-import type { StatusQueuedRunDto } from "@lathe/contract";
+import { injectLatheStatus } from "../ports/lathe-status";
 
-defineProps<{
-  queued: StatusQueuedRunDto[];
-}>();
+const status = injectLatheStatus();
 </script>
 
 <template>
@@ -12,10 +10,10 @@ defineProps<{
       <h2 class="text-base font-semibold">Queue</h2>
     </template>
 
-    <template v-if="queued.length">
+    <template v-if="status.status.value?.queued.length">
       <ul class="space-y-2">
         <li
-          v-for="(entry, index) in queued"
+          v-for="(entry, index) in status.status.value.queued"
           :key="entry.runId"
           class="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2"
         >

@@ -1,10 +1,8 @@
 <script setup lang="ts">
-import type { StatusCampaignDto } from "@lathe/contract";
+import { injectLatheStatus } from "../ports/lathe-status";
 import { campaignStatusIcon, truncate } from "../logic/formatters";
 
-const props = defineProps<{
-  campaigns: StatusCampaignDto[];
-}>();
+const status = injectLatheStatus();
 </script>
 
 <template>
@@ -13,10 +11,10 @@ const props = defineProps<{
       <h2 class="text-base font-semibold">Campaigns</h2>
     </template>
 
-    <template v-if="props.campaigns.length">
+    <template v-if="status.status.value?.campaigns.length">
       <ul class="space-y-2">
         <li
-          v-for="campaign in props.campaigns"
+          v-for="campaign in status.status.value.campaigns"
           :key="campaign.campaignId"
           class="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2"
         >

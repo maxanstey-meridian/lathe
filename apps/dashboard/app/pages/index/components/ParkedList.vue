@@ -1,10 +1,8 @@
 <script setup lang="ts">
-import type { StatusParkedRunDto } from "@lathe/contract";
+import { injectLatheStatus } from "../ports/lathe-status";
 import { truncate } from "../logic/formatters";
 
-const props = defineProps<{
-  parked: StatusParkedRunDto[];
-}>();
+const status = injectLatheStatus();
 </script>
 
 <template>
@@ -13,10 +11,10 @@ const props = defineProps<{
       <h2 class="text-base font-semibold">Parked Runs</h2>
     </template>
 
-    <template v-if="props.parked.length">
+    <template v-if="status.status.value?.parked.length">
       <ul class="space-y-3">
         <li
-          v-for="run in props.parked"
+          v-for="run in status.status.value.parked"
           :key="run.runId"
           class="rounded-lg border border-slate-200 bg-white px-3 py-3"
         >

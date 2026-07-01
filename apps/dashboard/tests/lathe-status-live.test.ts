@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { connectLatheStatusLiveUpdates, REFRESH_EVENT_KINDS } from "./lathe-status-live";
+import { connectLatheStatusLiveUpdates, REFRESH_EVENT_KINDS } from "../app/pages/index/composables/lathe-status-live";
 
 class FakeEventSource {
   public onopen: ((event: Event) => void) | null = null;

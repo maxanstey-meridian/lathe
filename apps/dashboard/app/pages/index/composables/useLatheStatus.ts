@@ -2,11 +2,13 @@ import { client } from "@lathe/contract";
 import { computed, onUnmounted, ref } from "vue";
 
 import { connectLatheStatusLiveUpdates } from "./lathe-status-live";
+import { daemonEventsUrl } from "../logic/daemon-url";
 import type { LatheStatus, StatusDto } from "../ports/lathe-status";
 
-const SSE_URL = "http://127.0.0.1:4198/events";
+const POLL_INTERVAL_MS = 5_000;
 
 export const useLatheStatus = (): LatheStatus => {
+  const runtimeConfig = useRuntimeConfig();
   const status = ref<StatusDto | null>(null);
   const isLoading = ref(false);
   const errorMessage = ref<string | null>(null);
@@ -35,7 +37,7 @@ export const useLatheStatus = (): LatheStatus => {
   };
 
   const liveConnection = connectLatheStatusLiveUpdates({
-    url: SSE_URL,
+    url: daemonEventsUrl(runtimeConfig.public.apiBaseUrl),
     onLiveChange: (live) => {
       isLive.value = live;
     },
@@ -44,7 +46,12 @@ export const useLatheStatus = (): LatheStatus => {
     },
   });
 
+  const pollTimer = setInterval(() => {
+    void refresh();
+  }, POLL_INTERVAL_MS);
+
   onUnmounted(() => {
+    clearInterval(pollTimer);
     liveConnection.close();
   });
 

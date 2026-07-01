@@ -1,0 +1,58 @@
+import type { RunStatus } from "@lathe/contract";
+
+const UNITS = [
+  { max: 60, value: 1, label: "s" },
+  { max: 3600, value: 60, label: "m" },
+  { max: 86400, value: 3600, label: "h" },
+  { max: 604800, value: 86400, label: "d" },
+  { max: Infinity, value: 604800, label: "w" },
+] as const;
+
+export function timeAgo(iso: string): string {
+  const then = new Date(iso).getTime();
+  const now = Date.now();
+  const diff = Math.max(0, Math.floor((now - then) / 1000));
+
+  for (const unit of UNITS) {
+    if (diff < unit.max) {
+      const count = Math.max(1, Math.floor(diff / unit.value));
+      return `${count}${unit.label} ago`;
+    }
+  }
+
+  return "just now";
+}
+
+export function runStatusColor(status: RunStatus): string {
+  switch (status) {
+    case "queued":
+      return "info";
+    case "running":
+      return "blue";
+    case "paused":
+      return "amber";
+    case "converged":
+      return "yellow";
+    case "accepted":
+      return "green";
+    case "aborted":
+      return "red";
+    case "failed":
+      return "red";
+  }
+}
+
+export function campaignStatusIcon(status: string): string {
+  switch (status) {
+    case "converged":
+      return "✅";
+    case "needs_max":
+      return "🅿";
+    default:
+      return "…";
+  }
+}
+
+export function truncate(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max)}…`;
+}

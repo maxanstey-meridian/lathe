@@ -57,12 +57,18 @@ export const createSandbox = (
 // Skips the fetch when the branch already exists in the repo — this happens in
 // chained accepts where a child run was accepted into this branch first,
 // leaving the repo's copy ahead of the sandbox's stale ref.
-export const fetchBranchFromClone = (repo: string, clone: string, branch: string): void => {
-  try {
-    git(repo, ["rev-parse", "--verify", branch]);
-    return;
-  } catch {
-    /* branch not in repo yet — fetch from clone */
+//
+// `force` overrides the skip: accept uses it to always pull the sandbox tip,
+// avoiding a stale local ref when the sandbox branch advanced or was amended
+// after a prior convergence fetch.
+export const fetchBranchFromClone = (repo: string, clone: string, branch: string, force = false): void => {
+  if (!force) {
+    try {
+      git(repo, ["rev-parse", "--verify", branch]);
+      return;
+    } catch {
+      /* branch not in repo yet — fetch from clone */
+    }
   }
   git(repo, ["fetch", clone, `${branch}:${branch}`]);
 };

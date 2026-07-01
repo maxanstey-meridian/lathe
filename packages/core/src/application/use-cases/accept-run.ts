@@ -75,8 +75,9 @@ export const acceptRun = (
   }
 
   // 4. Fetch the run branch into the source repo (clone refs are local to the
-  // sandbox — the merge can't resolve without fetching).
-  repo.fetchBranchFromClone(meta.repo, meta.worktree, meta.branch);
+  // sandbox — the merge can't resolve without fetching). Force-fetch to always
+  // pull the sandbox tip, avoiding a stale local ref from a prior convergence fetch.
+  repo.fetchBranchFromClone(meta.repo, meta.worktree, meta.branch, true);
 
   // 5. Merge the run branch into target.
   repo.mergeAccept(meta.repo, meta.branch);

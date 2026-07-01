@@ -62,7 +62,7 @@ export const startDaemon = async (deps?: DaemonDeps, userPort?: number): Promise
 
   // 3. Build the Hono app: use supervisor's own bus (journal tail publishes here) + readEventsSince.
   const appFactory = deps?.createApp ?? createApp;
-  const app = appFactory(sup.appDeps, sup, { logger: true });
+  const app = appFactory(sup.appDeps, sup, { logger: true, cors: true });
 
   // 4. Attach the request listener to the already-bound held server.
   server.on("request", getRequestListener(app.fetch, { hostname: host }));

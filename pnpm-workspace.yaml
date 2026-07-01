@@ -3,5 +3,8 @@ packages:
   - "apps/*"
 
 allowBuilds:
+  '@parcel/watcher': true
   rivet-ts: true
   esbuild: true
+  vue-demi: true
+  unrs-resolver: true

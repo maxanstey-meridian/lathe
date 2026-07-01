@@ -216,6 +216,7 @@ export type TailEvent =
       outcomesTotal: number;
       gateReason: string | null;
       status: TailRunStatus;
+      promoted: boolean;
     }
   | {
       kind: "tail.pane.delta";

@@ -412,6 +412,7 @@ const startTailOpenCode = (
         outcomesTotal: counts.total,
         gateReason: null,
         status: meta.status,
+        promoted: meta.promoted,
       });
     }
   };
@@ -663,6 +664,7 @@ export const createSupervisor = (
       outcomesTotal: snapshot.outcomesTotal,
       gateReason: snapshot.gateReason,
       status: snapshot.status,
+      promoted: snapshot.promoted,
     };
     if (event.event !== "super_review") {
       return [journalEvent, statsEvent];

@@ -5,3 +5,6 @@ form/
 .DS_Store
 .idea
 drafts/
+.output
+.nuxt
+.build

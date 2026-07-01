@@ -989,7 +989,7 @@ test("Tail SSE: run stream replays only matching durable tail events", async () 
   const events: TailEvent[] = [
     { kind: "tail.journal", runId: "r1", seq: 1, at: "2026-01-01T00:00:01Z", line: "r1", event: "run_started", driver: true },
     { kind: "tail.journal", runId: "r2", seq: 2, at: "2026-01-01T00:00:02Z", line: "r2", event: "run_started", driver: true },
-    { kind: "tail.stats", runId: "r1", seq: 3, at: "2026-01-01T00:00:03Z", contextTokens: 10, turn: 1, rotations: 0, outcomesDone: 0, outcomesTotal: 1, gateReason: null, status: "running" },
+    { kind: "tail.stats", runId: "r1", seq: 3, at: "2026-01-01T00:00:03Z", contextTokens: 10, turn: 1, rotations: 0, outcomesDone: 0, outcomesTotal: 1, gateReason: null, status: "running", promoted: true },
   ];
   const deps = {
     bus: createEventBus(),
@@ -1010,6 +1010,7 @@ test("Tail SSE: run stream replays only matching durable tail events", async () 
   await reader.cancel();
   ok(body.includes("id: 1"), "replays r1 journal event");
   ok(body.includes("id: 3"), "replays r1 stats event");
+  ok(body.includes('"promoted":true'), "replays promoted state in stats event");
   ok(!body.includes("id: 2"), "filters r2 event");
 });
 

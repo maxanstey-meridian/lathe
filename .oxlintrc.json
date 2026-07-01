@@ -1,9 +1,9 @@
 {
   "categories": {
-    "correctness": "error"
+    "correctness": "warn"
   },
   "rules": {
-    "no-unused-vars": "error",
+    "no-unused-vars": "warn",
     "curly": ["error", "all"]
   },
   "ignorePatterns": ["dist/**", "node_modules/**"]

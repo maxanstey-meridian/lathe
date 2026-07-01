@@ -204,6 +204,7 @@ const TailApp = ({ snapshot: initialSnapshot, subscribe }: TailUiDeps) => {
       }
       if (event.kind === "tail.stats") {
         charsThisTurn.current = 0;
+        setSnapshot((prev) => ({ ...prev, promoted: event.promoted, status: event.status }));
         setStats({
           ctx: event.contextTokens,
           turn: event.turn,

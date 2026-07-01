@@ -251,6 +251,7 @@ const makeAcceptSupervisor = (meta: RunMeta, currentBranch: string, isDirty = fa
     writeMeta: (next: RunMeta): void => {
       metaStore.set(next.runId, next);
     },
+    readConvergence: (_runId: string): never[] => [],
   };
   const repo = {
     headBranch: (_repoPath: string): string => currentBranch,

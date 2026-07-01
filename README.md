@@ -22,10 +22,10 @@ The old project name was Meridian. Some paths and source identifiers still say `
 
 ```sh
 pnpm install
-pnpm --filter @lathe/core build
+pnpm build
 ```
 
-The local `lathe` wrapper runs the built core CLI from `packages/core/dist/`, so rebuild after changing core source.
+The `lathe` CLI binary is `apps/lathe-cli/dist/index.js`. Rebuild after changing core or CLI source.
 
 ## Configure
 
@@ -108,9 +108,13 @@ Other useful commands:
 lathe queue
 lathe status
 lathe review
+lathe get <runId>
 lathe answer <runId> <text>
-lathe accept <runId> [branch]
-lathe super-review <runId>
+lathe accept <runId>
+lathe reject <runId> [reason]
+lathe abort <runId>
+lathe chain add <dir>
+lathe db <command> [args]      # read-only SQLite inspector (defaults to active run)
 ```
 
 ## How It Works
@@ -124,7 +128,7 @@ Each run is turn-based. The driver watches tool use, context budget, progress, c
 ## Development
 
 ```sh
-npm run check
-pnpm --filter @lathe/core test
-pnpm --filter @lathe/core build
+pnpm check          # lint + typecheck across all packages
+pnpm test           # all packages
+pnpm build          # all packages
 ```

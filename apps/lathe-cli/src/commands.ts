@@ -19,6 +19,7 @@ import { runTailUi } from "@lathe/core/tail";
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { createDaemonClient, type DaemonClient } from "./client.js";
+import { cmdDb } from "./db.js";
 
 // ---------------------------------------------------------------------------
 // CLI environment — the seams the commands need, injectable for tests.
@@ -737,6 +738,7 @@ export const usage = `lathe — sequential overnight executor of human-written s
   lathe queue [add|drop]       list the queue / add or drop a packet (via daemon)
   lathe get <runId>            show run details (via daemon)
   lathe tail [runId]           live journal stream for a run (via daemon)
+  lathe db <command> [args]    read-only SQLite inspector (defaults to active run; --json for raw)
 `;
 
 export const runCommand = async (env: CliEnv, command: string, args: string[]): Promise<number> => {
@@ -769,6 +771,8 @@ export const runCommand = async (env: CliEnv, command: string, args: string[]): 
       return cmdQueue(env, args);
     case "get":
       return cmdGet(env, args[0] ?? "");
+    case "db":
+      return cmdDb(env, args);
     default:
       env.log(usage);
       return command ? 1 : 0;

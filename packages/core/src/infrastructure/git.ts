@@ -16,10 +16,14 @@ const git = (cwd: string, args: string[]): string => {
   const result = spawnSync("git", args, {
     cwd,
     encoding: "utf-8",
+    maxBuffer: 100 * 1024 * 1024,
     stdio: ["ignore" as const, "pipe" as const, "pipe" as const],
   });
   if (result.status !== 0) {
-    const stderr = result.stderr?.trim() || `git ${args.join(" ")} exited ${result.status}`;
+    const detail = result.signal
+      ? `git ${args.join(" ")} killed by signal ${result.signal}`
+      : `git ${args.join(" ")} exited ${result.status}`;
+    const stderr = result.stderr?.trim() || detail;
     throw new Error(stderr);
   }
   return (result.stdout ?? "").trim();
@@ -61,7 +65,12 @@ export const createSandbox = (
 // `force` overrides the skip: accept uses it to always pull the sandbox tip,
 // avoiding a stale local ref when the sandbox branch advanced or was amended
 // after a prior convergence fetch.
-export const fetchBranchFromClone = (repo: string, clone: string, branch: string, force = false): void => {
+export const fetchBranchFromClone = (
+  repo: string,
+  clone: string,
+  branch: string,
+  force = false,
+): void => {
   if (!force) {
     try {
       git(repo, ["rev-parse", "--verify", branch]);
@@ -319,7 +328,7 @@ export const reconciliationGitState = (worktree: string): ReconciliationGitState
     .map((l) => l.trim())
     .filter(Boolean)
     .sort();
-  const diff = git(worktree, ["diff", "--binary", "HEAD"]);
+  const diff = git(worktree, ["diff", "HEAD"]);
   const trackedChanged = git(worktree, ["diff", "--name-only", "HEAD"])
     .split("\n")
     .map((l) => l.trim())

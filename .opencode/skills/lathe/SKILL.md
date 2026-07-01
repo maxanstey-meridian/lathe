@@ -110,8 +110,9 @@ Lathe's lifecycle is owned by domain/application use cases and persisted state. 
 - HTTP handlers delegate to `Supervisor`.
 - `Supervisor` delegates to existing use cases such as admission, staged promotion, run driver, and accept.
 - SSE/event streaming is an observation surface over journals/events, not the state machine.
-- All CLI commands (`enqueue`, `answer`, `accept`, `abort`, `status`, `review`, `queue`, `tail`, `get`) go through the daemon over HTTP. The daemon is the single owner of run state.
+- All CLI commands (`enqueue`, `answer`, `accept`, `abort`, `status`, `review`, `queue`, `tail`, `get`) go through the daemon over HTTP. The daemon is the single owner of run state. The exception is `lathe db`, which reads `lathe.db` directly (read-only, daemon-independent) for debugging.
 - `lathe serve` starts the daemon with host/port config, single-instance lock, Hono request listener, and graceful shutdown.
+- Max's interactive shell defines `lathe()` in `~/.zshrc` as `tsx /Users/max/Sites/lathe/apps/lathe-cli/src/index.ts "$@"`. Non-interactive agent shells do not source that function; use `pnpm exec tsx apps/lathe-cli/src/index.ts <args>` from the Lathe repo root.
 
 ### Re-running convergence manually
 
@@ -128,6 +129,14 @@ Lathe's lifecycle is owned by domain/application use cases and persisted state. 
 - `SqliteStoreAdapter` is the sole `Store` implementation. The file-based store has been removed.
 - The live packet (`runs/<runId>/packet.md`) remains file-backed. Everything else — meta, queue, rejected, staged, campaigns, decisions, checkpoints, gate state, review state, outcome ledger, convergence log, reports, nits, journal/events, and active pointers — is in `lathe.db`.
 - The daemon is the single owner of run state. CLI commands proxy to it over HTTP.
+
+### `lathe db` — direct SQLite inspector
+
+- `lathe db` opens `lathe.db` directly in read-only mode (WAL = safe concurrent reads). It does NOT go through the daemon. This is deliberate: when the daemon is broken, you still need to inspect state.
+- Subcommands that take `[runId]` default to the active run when omitted.
+- Subcommands: `run`, `events`, `gate`, `decisions`, `convergence`, `campaign`, `queue`, `active`, `query <sql>`.
+- `--json` on any subcommand for raw JSON output.
+- Implementation: `apps/lathe-cli/src/db.ts`.
 
 ## Inspection Checklist
 

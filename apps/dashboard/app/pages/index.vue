@@ -12,13 +12,19 @@ import StagedChains from "./index/components/StagedChains.vue";
 import { useDaemonEvents } from "./index/composables/useDaemonEvents";
 import { useLatheActions } from "./index/composables/useLatheActions";
 import { useLatheStatus } from "./index/composables/useLatheStatus";
+import { usePacketValidation } from "./index/composables/usePacketValidation";
+import { useReviewData } from "./index/composables/useReviewData";
 import { provideDaemonEvents } from "./index/ports/daemon-events";
 import { provideLatheActions } from "./index/ports/lathe-actions";
 import { provideLatheStatus } from "./index/ports/lathe-status";
+import { providePacketValidation } from "./index/ports/packet-validation";
+import { provideReviewData } from "./index/ports/review-data";
 
 const latheStatus = provideLatheStatus(useLatheStatus());
 const latheActions = provideLatheActions(useLatheActions(latheStatus.refresh));
 provideDaemonEvents(useDaemonEvents());
+providePacketValidation(usePacketValidation());
+provideReviewData(useReviewData(latheStatus));
 
 onMounted(() => {
   void latheStatus.refresh();

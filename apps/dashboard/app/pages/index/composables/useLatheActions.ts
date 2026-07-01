@@ -1,8 +1,41 @@
 import type { LatheActions } from "../ports/lathe-actions";
-import { client } from "@lathe/contract";
+import type { RivetClient } from "@lathe/contract";
 import { computed, ref } from "vue";
 
-export const useLatheActions = (refresh: () => Promise<void>): LatheActions => {
+import { client } from "@lathe/contract";
+
+type MutationResult<T> = { data?: T; error?: unknown; response: Response };
+
+export const mapError = (err: unknown): string => {
+  if (typeof err === "string") return err;
+  if (err && typeof err === "object" && "message" in err && typeof (err as { message: unknown }).message === "string") {
+    return (err as { message: string }).message;
+  }
+  return String(err);
+};
+
+const performMutation = async <T>(
+  c: RivetClient,
+  fn: (client: RivetClient) => Promise<MutationResult<T>>,
+  loading: { value: boolean },
+  refresh: () => Promise<void>,
+): Promise<T | undefined> => {
+  loading.value = true;
+  try {
+    const result = await fn(c);
+    if (!result.response.ok || result.data === undefined) {
+      throw result.error;
+    }
+    void refresh();
+    return result.data;
+  } catch (err) {
+    throw err;
+  } finally {
+    loading.value = false;
+  }
+};
+
+export const useLatheActions = (refresh: () => Promise<void>, c: RivetClient = client): LatheActions => {
   const abortLoading = ref(false);
   const answerLoading = ref(false);
   const acceptLoading = ref(false);
@@ -19,106 +52,77 @@ export const useLatheActions = (refresh: () => Promise<void>): LatheActions => {
       enqueueContentLoading.value,
   );
 
-  const mapError = (err: unknown): string => {
-    if (typeof err === "string") return err;
-    if (err && typeof err === "object" && "message" in err && typeof (err as { message: unknown }).message === "string") {
-      return (err as { message: string }).message;
-    }
-    return String(err);
-  };
-
-  const handleMutation = async <T>(
-    fn: () => Promise<{ data?: T; error?: unknown; response: Response }>,
-    loading: typeof abortLoading,
-  ): Promise<T> => {
-    lastError.value = null;
-    loading.value = true;
-    try {
-      const result = await fn();
-      if (!result.response.ok || result.data === undefined) {
-        const msg = mapError(result.error);
-        lastError.value = msg;
-        throw result.error;
-      }
-      void refresh();
-      return result.data;
-    } catch (err) {
-      if (lastError.value === null) {
-        lastError.value = mapError(err);
-      }
-      throw err;
-    } finally {
-      loading.value = false;
-    }
-  };
-
   const abort = async (runId: string): Promise<boolean> => {
+    lastError.value = null;
     try {
-      await handleMutation(
-        () => client.POST("/runs/{runId}/abort", { params: { path: { runId } } }),
-        abortLoading,
-      );
+      await performMutation(c, (client) => client.POST("/runs/{runId}/abort", { params: { path: { runId } } }), abortLoading, refresh);
       return true;
-    } catch {
+    } catch (err) {
+      lastError.value = mapError(err);
       return false;
     }
   };
 
   const answer = async (runId: string, answer: string): Promise<boolean> => {
+    lastError.value = null;
     try {
-      await handleMutation(
-        () =>
-          client.POST("/runs/{runId}/answer", {
-            params: { path: { runId } },
-            body: { answer },
-          }),
+      await performMutation(c, (client) =>
+        client.POST("/runs/{runId}/answer", {
+          params: { path: { runId } },
+          body: { answer },
+        }),
         answerLoading,
+        refresh,
       );
       return true;
-    } catch {
+    } catch (err) {
+      lastError.value = mapError(err);
       return false;
     }
   };
 
   const accept = async (runId: string): Promise<boolean> => {
+    lastError.value = null;
     try {
-      await handleMutation(
-        () => client.POST("/runs/{runId}/accept", { params: { path: { runId } } }),
-        acceptLoading,
-      );
+      await performMutation(c, (client) => client.POST("/runs/{runId}/accept", { params: { path: { runId } } }), acceptLoading, refresh);
       return true;
-    } catch {
+    } catch (err) {
+      lastError.value = mapError(err);
       return false;
     }
   };
 
   const reject = async (runId: string, reason?: string): Promise<boolean> => {
+    lastError.value = null;
     try {
-      await handleMutation(
-        () =>
-          client.POST("/runs/{runId}/reject", {
-            params: { path: { runId } },
-            body: { reason: reason ?? "rejected" },
-          }),
+      await performMutation(c, (client) =>
+        client.POST("/runs/{runId}/reject", {
+          params: { path: { runId } },
+          body: { reason: reason ?? "rejected" },
+        }),
         rejectLoading,
+        refresh,
       );
       return true;
-    } catch {
+    } catch (err) {
+      lastError.value = mapError(err);
       return false;
     }
   };
 
   const enqueueContent = async (filename: string, content: string): Promise<boolean> => {
+    lastError.value = null;
     try {
-      await handleMutation(
-        () =>
-          client.POST("/runs/content", {
-            body: { content, filename },
-          }),
+      await performMutation(c, (client) =>
+        client.POST("/runs/content", {
+          body: { content, filename },
+        }),
         enqueueContentLoading,
+        refresh,
       );
       return true;
-    } catch {
+    } catch (err) {
+      lastError.value = mapError(err);
       return false;
     }
   };

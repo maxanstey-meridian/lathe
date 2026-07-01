@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import type { components } from "@lathe/contract";
 import { injectLatheActions } from "../ports/lathe-actions";
-import { usePacketValidation } from "../composables/usePacketValidation";
+import { injectPacketValidation } from "../ports/packet-validation";
 
-type ValidatePacketResponse = components["schemas"]["ValidatePacketResponse"];
 type ValidatePacketFrontmatter = components["schemas"]["ValidatePacketFrontmatter"];
 
-const { preview, previewError, validatePacket, clearPacket } = usePacketValidation();
+const { preview, previewError, validatePacket, clearPacket } = injectPacketValidation();
 const actions = injectLatheActions();
 
 const file = ref<File | null>(null);

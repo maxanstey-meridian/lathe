@@ -1,63 +1,35 @@
 <script setup lang="ts">
-import type { components } from "@lathe/contract";
 import { injectLatheActions } from "../ports/lathe-actions";
-import { injectLatheStatus } from "../ports/lathe-status";
 import { runStatusColor, truncate } from "../logic/formatters";
-import { client } from "@lathe/contract";
-import { onMounted, ref, watch } from "vue";
+import { useReviewData } from "../composables/useReviewData";
 
-type ReviewRun = components["schemas"]["ReviewRunDto"];
-
-const status = injectLatheStatus();
+const { reviewRuns, reviewError, removeRun } = useReviewData();
 const actions = injectLatheActions();
-
-const reviewRuns = ref<ReviewRun[]>([]);
-const reviewError = ref<string | null>(null);
-
-const fetchReview = async (): Promise<void> => {
-  reviewError.value = null;
-  try {
-    const result = await client.GET("/review");
-    if (result.data) {
-      reviewRuns.value = result.data.runs;
-    }
-  } catch {
-    reviewError.value = "Unable to fetch review data.";
-  }
-};
-
-onMounted(() => {
-  void fetchReview();
-});
-
-watch(status.status, () => {
-  void fetchReview();
-});
 
 const rejectReasons = ref<Record<string, string>>({});
 
-const openReject = (run: ReviewRun): void => {
+const openReject = (run: { runId: string }): void => {
   rejectReasons.value[run.runId] = "";
 };
 
-const cancelReject = (run: ReviewRun): void => {
+const cancelReject = (run: { runId: string }): void => {
   delete rejectReasons.value[run.runId];
 };
 
-const handleReject = async (run: ReviewRun): Promise<void> => {
+const handleReject = async (run: { runId: string; status: string; outcomes: string; branch: string; repo: string; base: string; blockedQuestion: string | null }): Promise<void> => {
   const reason = rejectReasons.value[run.runId] ?? "rejected";
   try {
     await actions.reject(run.runId, reason);
-    reviewRuns.value = reviewRuns.value.filter((r) => r.runId !== run.runId);
+    removeRun(run.runId);
   } catch {
     // Error surfaced via latheActions.lastError
   }
 };
 
-const handleAccept = async (run: ReviewRun): Promise<void> => {
+const handleAccept = async (run: { runId: string; status: string; outcomes: string; branch: string; repo: string; base: string; blockedQuestion: string | null }): Promise<void> => {
   try {
     await actions.accept(run.runId);
-    reviewRuns.value = reviewRuns.value.filter((r) => r.runId !== run.runId);
+    removeRun(run.runId);
   } catch {
     // Error surfaced via latheActions.lastError
   }

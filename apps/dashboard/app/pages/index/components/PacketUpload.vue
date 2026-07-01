@@ -1,16 +1,15 @@
 <script setup lang="ts">
 import type { components } from "@lathe/contract";
 import { injectLatheActions } from "../ports/lathe-actions";
-import { client } from "@lathe/contract";
+import { usePacketValidation } from "../composables/usePacketValidation";
 
 type ValidatePacketResponse = components["schemas"]["ValidatePacketResponse"];
 type ValidatePacketFrontmatter = components["schemas"]["ValidatePacketFrontmatter"];
 
+const { preview, previewError, validatePacket, clearPacket } = usePacketValidation();
 const actions = injectLatheActions();
 
 const file = ref<File | null>(null);
-const preview = ref<ValidatePacketResponse | null>(null);
-const previewError = ref<string | null>(null);
 const selectedFileName = ref<string | null>(null);
 const selectedFileContent = ref<string | null>(null);
 
@@ -31,10 +30,7 @@ const selectedFile = async (event: Event): Promise<void> => {
   try {
     const content = await uploadedFile.text();
     selectedFileContent.value = content;
-    const result = await client.POST("/packet", {
-      body: { content, filename: uploadedFile.name },
-    });
-    preview.value = result.data ?? null;
+    await validatePacket(content, uploadedFile.name);
   } catch {
     previewError.value = "Unable to validate packet.";
     preview.value = null;
@@ -50,6 +46,13 @@ const handleQueue = async (): Promise<void> => {
   } catch {
     // Error surfaced via latheActions.lastError
   }
+};
+
+const handleClear = (): void => {
+  file.value = null;
+  clearPacket();
+  selectedFileName.value = null;
+  selectedFileContent.value = null;
 };
 </script>
 
@@ -90,7 +93,7 @@ const handleQueue = async (): Promise<void> => {
         v-if="file"
         color="neutral"
         variant="soft"
-        @click="file = null; preview = null; previewError = null; selectedFileName = null; selectedFileContent = null;"
+        @click="handleClear"
       >
         Clear
       </UButton>

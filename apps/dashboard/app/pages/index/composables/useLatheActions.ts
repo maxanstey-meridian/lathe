@@ -28,18 +28,24 @@ export const useLatheActions = (refresh: () => Promise<void>): LatheActions => {
   };
 
   const handleMutation = async <T>(
-    fn: () => Promise<T>,
+    fn: () => Promise<{ data?: T; error?: unknown; response: Response }>,
     loading: typeof abortLoading,
   ): Promise<T> => {
     lastError.value = null;
     loading.value = true;
     try {
       const result = await fn();
+      if (!result.response.ok || result.data === undefined) {
+        const msg = mapError(result.error);
+        lastError.value = msg;
+        throw result.error;
+      }
       void refresh();
-      return result;
+      return result.data;
     } catch (err) {
-      const msg = mapError(err);
-      lastError.value = msg;
+      if (lastError.value === null) {
+        lastError.value = mapError(err);
+      }
       throw err;
     } finally {
       loading.value = false;

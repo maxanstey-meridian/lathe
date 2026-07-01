@@ -47,7 +47,7 @@ const handleAbort = async (runId: string): Promise<void> => {
           </span>
           <span class="font-mono text-sm">{{ entry.runId }}</span>
           <div class="ml-auto">
-            <UModal v-model:open="showAbortConfirm === entry.runId" title="Abort this run?" :persist="false">
+            <UModal :open="showAbortConfirm === entry.runId" @update:open="(val: boolean) => { if (!val) showAbortConfirm = null; }" title="Abort this run?" :persist="false">
               <template #body-content>
                 <p class="text-sm text-slate-600">
                   Are you sure you want to abort <code class="font-mono text-xs">{{ entry.runId }}</code>?

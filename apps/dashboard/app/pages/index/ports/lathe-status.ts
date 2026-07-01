@@ -10,6 +10,7 @@ export interface LatheStatus {
   readonly isLoading: Ref<boolean>;
   readonly errorMessage: Ref<string | null>;
   readonly isDaemonReachable: ComputedRef<boolean>;
+  readonly isLive: Ref<boolean>;
   readonly refresh: () => Promise<void>;
 }
 

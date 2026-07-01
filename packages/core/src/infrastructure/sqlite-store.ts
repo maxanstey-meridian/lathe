@@ -13,7 +13,7 @@
 // - PRAGMA user_version for schema versioning.
 // - Queue: unified into runs table — status = 'queued' IS the queue.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
@@ -361,10 +361,19 @@ export class SqliteStoreAdapter implements Store {
     this.db
       .prepare("INSERT OR REPLACE INTO active_run (key, run) VALUES ('1', ?)")
       .run(jsonStringify(run));
+    // Dual-write: the gate plugin runs inside Baby's opencode subprocess and
+    // reads active-run.json synchronously from disk. SQLite is authoritative,
+    // but the plugin has no daemon access — this file is the bridge.
+    writeTextAtomic(join(this.paths.root, "active-run.json"), jsonStringify(run));
   }
 
   clearActiveRun(): void {
     this.db.prepare("DELETE FROM active_run WHERE key = '1'").run();
+    try {
+      unlinkSync(join(this.paths.root, "active-run.json"));
+    } catch {
+      /* already gone */
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -590,6 +599,9 @@ export class SqliteStoreAdapter implements Store {
     this.db
       .prepare("INSERT OR REPLACE INTO gate_state (run_id, state) VALUES (?, ?)")
       .run(runId, jsonStringify(stamped));
+    // Dual-write: the gate plugin reads gate-state.json synchronously from the
+    // run directory. SQLite is authoritative, but the plugin has no daemon access.
+    writeTextAtomic(join(this.paths.runDir(runId), "gate-state.json"), jsonStringify(stamped));
   }
 
   // ---------------------------------------------------------------------------

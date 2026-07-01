@@ -19,7 +19,7 @@ import contract from "@lathe/contract/generated/api.contract.json" with { type: 
 
 import type { RunMeta } from "@lathe/core";
 import type { RunDtoCtx } from "./run-to-dto.js";
-import { RunNotAnswerableError, RunNotFoundError, NonChainTipError } from "./supervisor.js";
+import { RunNotAnswerableError, RunNotFoundError, NonChainTipError, TerminalRunError } from "./supervisor.js";
 import type { Supervisor } from "./supervisor.js";
 import { configToDto } from "./config-to-dto.js";
 import { runToSummary, runToDetail } from "./run-to-dto.js";
@@ -144,6 +144,9 @@ export const createApp = (
           if (err instanceof RunNotFoundError) {
             throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
           }
+          if (err instanceof TerminalRunError) {
+            throw rivetHttpError(409, { code: "terminal", message: err.message });
+          }
           throw err;
         }
         const meta = supervisor.getRun(params.runId);
@@ -180,6 +183,9 @@ export const createApp = (
         try {
           result = supervisor.acceptRun(params.runId);
         } catch (err) {
+          if (err instanceof RunNotFoundError) {
+            throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+          }
           if (err instanceof NonChainTipError) {
             throw rivetHttpError(409, {
               code: "chain_tip_required",
@@ -209,6 +215,9 @@ export const createApp = (
         } catch (err) {
           if (err instanceof RunNotFoundError) {
             throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+          }
+          if (err instanceof TerminalRunError) {
+            throw rivetHttpError(409, { code: "terminal", message: err.message });
           }
           throw err;
         }

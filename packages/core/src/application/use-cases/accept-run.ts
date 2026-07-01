@@ -31,6 +31,22 @@ export const acceptRun = (
     return 1;
   }
 
+  // 1b. Warn (not block) if convergence never produced an accept verdict for
+  // this run — the work is mergeable but was not reviewed by super-daddy, or
+  // super-daddy was unreachable. SKILL.md §Convergence: the clean path
+  // requires convergence before accept.
+  const convergence = store.readConvergence(runId);
+  const converged = convergence.some(
+    (e) => e.kind === "reviewed" && e.primary.verdict === "accept",
+  );
+  if (!converged) {
+    const hasUnreachable = convergence.some((e) => e.kind === "unreachable");
+    console.warn(
+      `warning: ${runId} has no convergence accept verdict` +
+        (hasUnreachable ? " (super-daddy was unreachable)" : " (never reviewed)"),
+    );
+  }
+
   // 2. Determine target: explicit arg or the run's base.
   const target = targetBranch ?? meta.base;
 

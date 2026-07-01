@@ -40,6 +40,7 @@ const input = (): SuperReviewInput => ({
     frontmatter: {
       repo: "/tmp",
       base: "main",
+      compare_commit: "main",
       outcomes: [],
       expected_surface: [],
       suspicious_surface: [],

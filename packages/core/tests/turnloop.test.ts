@@ -34,6 +34,7 @@ const RUN_ID = "20260101-000000-turnloop";
 const PACKET_RAW = `---
 repo: /tmp/test-repo
 base: main
+compare_commit: main
 summary: turn loop fixture
 outcomes:
   - id: test-outcome

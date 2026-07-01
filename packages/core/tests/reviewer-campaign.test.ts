@@ -64,6 +64,7 @@ const makeInput = (worktree: string, campaignId = "campaign-a"): SuperReviewInpu
     frontmatter: {
       repo: "/tmp/test",
       base: "main",
+      compare_commit: "main",
       outcomes: [],
       expected_surface: [],
       suspicious_surface: [],

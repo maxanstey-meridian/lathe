@@ -19,7 +19,6 @@ export type Paths = {
   opencodeConfigFile: string;
   serveLogFile: string;
   runDir: (runId: string) => string;
-  packetFile: (runId: string) => string;
   metaFile: (runId: string) => string;
   journalFile: (runId: string) => string;
   decisionsFile: (runId: string) => string;
@@ -56,7 +55,6 @@ export const makePaths = (stateRoot: string): Paths => {
     opencodeConfigFile: join(root, "xdg", "opencode", "opencode.json"),
     serveLogFile: join(root, "opencode-serve.log"),
     runDir,
-    packetFile: (runId) => join(runDir(runId), "packet.md"),
     metaFile: (runId) => join(runDir(runId), "meta.json"),
     journalFile: (runId) => join(runDir(runId), "journal.jsonl"),
     decisionsFile: (runId) => join(runDir(runId), "decisions.jsonl"),

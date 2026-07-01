@@ -63,8 +63,6 @@ const makeStore = (meta?: ReturnType<typeof makeMeta>): Store => {
     writeNits: () => {},
     appendConvergence: () => {},
     readConvergence: () => [],
-    freezePacket: () => {},
-    readFrozenPacket: () => "",
     readActiveRun: () => undefined,
     writeActiveRun: () => {},
     clearActiveRun: () => {},

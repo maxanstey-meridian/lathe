@@ -95,10 +95,6 @@ export type Store = {
   appendConvergence(runId: string, entry: ConvergenceLogEntry): void;
   readConvergence(runId: string): ConvergenceLogEntry[];
 
-  // Packet freeze
-  freezePacket(runId: string, raw: string): void;
-  readFrozenPacket(runId: string): string;
-
   // Active run pointer
   readActiveRun(): ActiveRun | undefined;
   writeActiveRun(run: ActiveRun): void;

@@ -629,6 +629,11 @@ ${constraintLines}
 Verification commands (RUN THESE — they must exit 0):
 ${verificationLines}
 
+## Review scope
+Inspect everything changed after \`compare_commit\` (\`${fm.compare_commit}\`). All of it
+is fair game for correctness, integration, and test-quality review — including files
+from earlier passes in this campaign.
+
 ## Delivered work — the run's own report (supplementary; verify against the tree)
 ${input.reportText}
 
@@ -658,10 +663,9 @@ relevant rubric rule in grounding.ref) when you find:
     direct test exercising it. The assembler being covered does not cover the use
     case that calls it.
 Both are P1 grounded blockers that drive a follow-up pass — name the exact
-untested symbol or the mock-asserting test in evidence. Stay in scope: judge only
-what THIS run added or touched; pre-existing untested code is not your remit
-(repairs-only). If the tests are honest and the new surface is directly covered,
-say so explicitly in notes — do not invent a gap to look thorough.
+untested symbol or the mock-asserting test in evidence. If the tests are honest and
+the new surface is directly covered, say so explicitly in notes — do not invent a
+gap to look thorough.
 
 ## Scope — repairs only
 You judge against the ORIGINAL intent. A gap against the packet or doctrine is a
@@ -877,9 +881,9 @@ const renderBlockerLines = (blockers: Finding[]): string =>
 // bigger, final-authority author. Two adaptations for the convergence context:
 // it emits the packet markdown as its reply (the engine admits + validates it,
 // rather than it writing a file and running `lathe queue add`), and it omits all
-// lineage/infra (the engine stamps repo/base/campaign_id/parent_run_id/pass
-// and seals regression_outcomes — the same fields the skill says never
-// to author).
+// lineage/infra (the engine stamps repo/base/compare_commit/campaign_id/
+// parent_run_id/pass and carries regression_outcomes — the same fields the
+// skill says never to author).
 export const renderFollowupAuthoring = (input: AuthorFollowupInput): string => {
   const receivedBlock = input.priorRawSnippet
     ? `\nFor reference, this is the START of what you actually sent last time — it is NOT a clean packet (a packet must BEGIN with \`---\`, with no prose or code fence before it):
@@ -898,12 +902,13 @@ ${receivedBlock}
 `
       : "";
 
-  const sealedBlock =
+  const regressionBlock =
     input.priorOutcomes.length > 0
-      ? `## Already delivered — sealed, do NOT touch
-These outcomes were delivered and converged by earlier passes; their files are
-sealed. Integrate against them; do NOT modify, re-implement, or re-test them. The
-engine seals them as regression_outcomes for you — you do not author that field.
+      ? `## Prior outcomes — regression obligations
+These outcomes were delivered by earlier passes. They must still pass — touch their
+files when a grounded finding requires it, but the behaviour they describe must hold
+after your repair. The engine carries them as regression_outcomes — you do not
+author that field.
 
 ${input.priorOutcomes.map((o) => `- ${o.id}: ${o.description}`).join("\n")}
 `
@@ -923,11 +928,11 @@ discipline and body sections. TWO adaptations for this convergence context:
   1. You are NOT writing a file or running \`lathe queue add\` — reply with the
      packet markdown itself (a YAML frontmatter block, then the body). The engine
      admits and validates it; if it fails admission you get the problems back to fix.
-  2. Do NOT author lineage/infra: omit \`repo\`, \`base\`, \`campaign_id\`,
-      \`parent_run_id\`, \`pass\`, and \`regression_outcomes\`. The engine
-     stamps every one of them. Author ONLY: \`summary\`, \`outcomes\`,
-     \`expected_surface\`, \`suspicious_surface\` (if any), \`verification\`,
-     \`constraints\` (if any), and the prose body.
+  2. Do NOT author lineage/infra: omit \`repo\`, \`base\`, \`compare_commit\`,
+       \`campaign_id\`, \`parent_run_id\`, \`pass\`, and \`regression_outcomes\`. The
+      engine stamps every one of them. Author ONLY: \`summary\`, \`outcomes\`,
+      \`expected_surface\`, \`suspicious_surface\` (if any), \`verification\`,
+      \`constraints\` (if any), and the prose body.
 
 <<<PACKET-SKILL
 ${input.packetSkillText}
@@ -940,7 +945,7 @@ fixes actually live.
 
 ${renderBlockerLines(input.blockers)}
 
-${sealedBlock}
+${regressionBlock}
 ## Output
 Reply with ONLY the packet — the YAML frontmatter block (\`---\` … \`---\`) followed
 by the markdown body. The FIRST character of your reply must be \`---\`. No prose, no

@@ -15,6 +15,7 @@ import { dispatch, type CliDeps } from "../src/interfaces/cli/dispatch.js";
 const PACKET_RAW = `---
 repo: /tmp/test-repo
 base: main
+compare_commit: main
 summary: smoke packet
 outcomes:
   - id: o1

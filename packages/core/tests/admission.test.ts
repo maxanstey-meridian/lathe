@@ -112,6 +112,7 @@ const initGitRepo = (path: string): void => {
 const validPacket = `---
 repo: /tmp/test-repo
 base: main
+compare_commit: main
 summary: valid packet
 outcomes:
   - id: test-outcome
@@ -127,6 +128,7 @@ body
 
 const invalidNoRepoPacket = `---
 base: main
+compare_commit: main
 summary: no repo
 outcomes:
   - id: o1
@@ -143,6 +145,7 @@ body
 const invalidNoOutcomesPacket = `---
 repo: /tmp/test-repo
 base: main
+compare_commit: main
 summary: no outcomes
 expected_surface:
   - src/index.ts
@@ -196,6 +199,7 @@ test("admitPacket: valid packet without base → stamped from HEAD", () => {
     const store = StoreAdapter.create(makePaths(tmp), repo, clock);
     const packet = `---
 repo: ${repoPath}
+compare_commit: main
 summary: no base
 outcomes:
   - id: o1

@@ -140,42 +140,15 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
       let meta = store.readMeta(runId);
 
       // --- Load packet --------------------------------------------------------
-      let packet: Packet;
-
-      let frozenRaw: string | undefined;
-      try {
-        frozenRaw = store.readFrozenPacket(runId);
-      } catch {
-        frozenRaw = undefined;
+      const queueRaw = store.readQueuePacket(runId);
+      if (!queueRaw) {
+        throw new Error(`convergeRun: no queue packet for ${runId}`);
       }
-
-      if (frozenRaw) {
-        const parsed = parsePacketShape(frozenRaw, runId);
-        if (!parsed.ok) {
-          throw new Error(`convergeRun: cannot parse frozen packet: ${parsed.problems.join("; ")}`);
-        }
-        packet = parsed.packet;
-      } else {
-        // Fresh queue entry with no frozen packet — derive from meta.
-        packet = {
-          runId: meta.runId,
-          frontmatter: {
-            repo: meta.repo,
-            base: meta.base,
-            outcomes: [],
-            expected_surface: [],
-            suspicious_surface: [],
-            verification: [],
-            constraints: [],
-            autofix_commands: [],
-            pass: 1,
-            regression_outcomes: [],
-            promoted: false,
-          },
-          body: "",
-          raw: "",
-        };
+      const parsed = parsePacketShape(queueRaw, runId);
+      if (!parsed.ok) {
+        throw new Error(`convergeRun: cannot parse queue packet: ${parsed.problems.join("; ")}`);
       }
+      const packet: Packet = parsed.packet;
 
       const campaignId = campaignIdForRun(packet, runId);
       const campaign = store.readCampaign(campaignId);
@@ -367,6 +340,7 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
             const lineage = {
               repo: packet.frontmatter.repo,
               baseBranch: meta.branch,
+              compareCommit: packet.frontmatter.compare_commit,
               campaignId,
               parentRunId: runId,
               pass: pass + 1,

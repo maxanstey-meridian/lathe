@@ -14,6 +14,7 @@ test("parse: valid packet with runId returns ok", () => {
   const raw = `---
 repo: /tmp/repo
 base: main
+compare_commit: main
 outcomes:
   - id: feature-a
     description: Adds feature A
@@ -41,6 +42,7 @@ test("parse: valid packet without runId still returns ok", () => {
   const raw = `---
 repo: /tmp/repo
 base: main
+compare_commit: main
 outcomes:
   - id: feature-a
     description: Adds feature A
@@ -73,6 +75,7 @@ test("parse: invalid YAML in frontmatter returns error", () => {
   const raw = `---
 repo: /tmp
 base: [invalid yaml
+compare_commit: main
 ---
 body
 `;
@@ -98,6 +101,7 @@ test("parse: duplicate outcome ids returns error", () => {
   const raw = `---
 repo: /tmp/repo
 base: main
+compare_commit: main
 outcomes:
   - id: feature-a
     description: First
@@ -120,6 +124,7 @@ test("parse: bad runId format returns error", () => {
   const raw = `---
 repo: /tmp/repo
 base: main
+compare_commit: main
 outcomes:
   - id: feature-a
     description: Adds fe
@@ -140,6 +145,7 @@ test("parse: valid runId format passes", () => {
   const raw = `---
 repo: /tmp/repo
 base: main
+compare_commit: main
 outcomes:
   - id: feature-a
     description: Adds feature
@@ -158,6 +164,7 @@ test("parse: promoted defaults false, explicit true round-trips", () => {
   const rawWithoutPromoted = `---
 repo: /tmp/repo
 base: main
+compare_commit: main
 outcomes:
   - id: feature-a
     description: Adds feature A
@@ -177,6 +184,7 @@ body
   const rawWithPromoted = `---
 repo: /tmp/repo
 base: main
+compare_commit: main
 outcomes:
   - id: feature-a
     description: Adds feature A
@@ -199,6 +207,7 @@ test("parse: negative outcomes count rejected by schema", () => {
   const raw = `---
 repo: /tmp/repo
 base: main
+compare_commit: main
 outcomes: []
 expected_surface:
   - src/**
@@ -217,6 +226,7 @@ test("redact: strips all six infra keys", () => {
   const raw = `---
 repo: /home/user/proj
 base: main
+compare_commit: main
 campaign_id: my-campaign
 parent_run_id: 20260617-010000-parent
 pass: 2
@@ -250,6 +260,7 @@ test("redact: parsed packet carries promoted=true; redaction strips the key (two
   const raw = `---
 repo: /tmp/repo
 base: main
+compare_commit: main
 outcomes:
   - id: feature-a
     description: Adds feature A
@@ -326,6 +337,7 @@ test("stampBase: honors explicit base override", () => {
   const raw = `---
 repo: /tmp/repo
 base: feature/x
+compare_commit: main
 outcomes:
   - id: feature-a
     description: Does things
@@ -386,6 +398,7 @@ test("stampBase: returns raw when no frontmatter", () => {
 const BARE = `---
 repo: /tmp/repo
 base: main
+compare_commit: main
 outcomes:
   - id: feature-a
     description: Adds feature A

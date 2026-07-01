@@ -27,6 +27,7 @@ test("packet: PacketFrontmatter parses valid object", () => {
   const valid = {
     repo: "/tmp/my-repo",
     base: "main",
+    compare_commit: "main",
     outcomes: [{ id: "my-feature", description: "Adds the feature" }],
     expected_surface: ["src/**"],
     verification: [{ command: "pnpm test" }],

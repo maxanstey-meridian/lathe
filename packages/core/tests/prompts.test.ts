@@ -35,6 +35,7 @@ const minPacket = (): Packet => ({
   frontmatter: {
     repo: "test/repo",
     base: "main",
+    compare_commit: "main",
     outcomes: [{ id: "test-outcome", description: "a test outcome" }],
     expected_surface: ["src/**"],
     verification: [{ command: "pnpm test" }],

@@ -148,21 +148,16 @@ export type Decision = z.infer<typeof Decision>;
 // ---------------------------------------------------------------------------
 // Run start decision — fresh vs resume (CONTRACT §3, §5 R10 sibling)
 //
-// Pure function, no I/O. Replaces the naive `babySessionId !== undefined`
-// heuristic in execute-run.ts. Rules:
+// Pure function, no I/O. The queue dir is the single live source of truth —
+// if a dev edits the packet between runs, the next run picks it up. Rules:
 //   - no prior meta or no babySessionId → fresh (nothing to resume)
-//   - a queue packet that EXISTS and DIFFERS from the frozen snapshot →
-//     fresh (the spec was edited; a session must never continue under a
-//     changed packet — sharpens K3 "fail closed if the file changed")
-//   - otherwise → resume (live session + unchanged packet)
+//   - otherwise → resume (live session exists)
 // ---------------------------------------------------------------------------
 
 export type RunStartDecision = { mode: "resume" } | { mode: "fresh"; reason: string };
 
 export const decideRunStart = (
   priorMeta: { babySessionId?: string; daddySessionId?: string; attempt?: number } | undefined,
-  frozenPacket: string,
-  queuePacket: string | undefined,
 ): RunStartDecision => {
   // No prior state — nothing to resume.
   if (!priorMeta) {
@@ -174,24 +169,6 @@ export const decideRunStart = (
     return { mode: "fresh", reason: "no prior baby session" };
   }
 
-  // No frozen packet AND no queue packet — fresh (shouldn't happen in practice,
-  // but if there's no packet at all, we can't resume meaningfully).
-  if (!frozenPacket && !queuePacket) {
-    return { mode: "fresh", reason: "no packet available" };
-  }
-
-  // Queue packet exists and differs from the frozen snapshot — the spec was
-  // edited between runs. Restart fresh on the current packet.
-  if (queuePacket && frozenPacket && queuePacket !== frozenPacket) {
-    return { mode: "fresh", reason: "queue packet differs from frozen snapshot" };
-  }
-
-  // Queue packet exists but no frozen packet — the frozen snapshot is absent,
-  // so we have nothing to resume from. Use the queue packet fresh.
-  if (queuePacket && !frozenPacket) {
-    return { mode: "fresh", reason: "no frozen snapshot, using queue packet" };
-  }
-
-  // Otherwise — prior session exists, packet is unchanged → resume.
+  // Otherwise — prior session exists → resume.
   return { mode: "resume" };
 };

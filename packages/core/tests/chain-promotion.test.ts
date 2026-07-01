@@ -78,6 +78,7 @@ const cleanTemp = async (dir: string) => {
 
 const stagedChildPacket = `---
 repo: /tmp/repo
+compare_commit: main
 outcomes:
   - id: o1
     description: outcome 1
@@ -191,6 +192,7 @@ test("promoteStaged: parent converged → promote-with-base", () => {
 
     const childPacket = `---
 repo: /tmp/repo
+compare_commit: main
 parent_run_id: 20260101-000000-parent
 outcomes:
   - id: o1
@@ -240,6 +242,7 @@ test("promoteStaged: tip already accepted → base off acceptedInto, no fetch", 
 
     const childPacket = `---
 repo: /tmp/repo
+compare_commit: main
 parent_run_id: 20260101-000000-parent
 outcomes:
   - id: o1
@@ -289,6 +292,7 @@ test("promoteStaged: parent needs_max → hold", () => {
 
     const childPacket = `---
 repo: /tmp/repo
+compare_commit: main
 parent_run_id: 20260101-000000-parent
 outcomes:
   - id: o1
@@ -325,6 +329,7 @@ test("promoteStaged: parent not converged → wait", () => {
 
     const childPacket = `---
 repo: /tmp/repo
+compare_commit: main
 parent_run_id: 20260101-000000-parent
 outcomes:
   - id: o1
@@ -361,6 +366,7 @@ test("promoteStaged: parent campaign not found → wait", () => {
 
     const childPacket = `---
 repo: /tmp/repo
+compare_commit: main
 parent_run_id: 20260101-000000-parent
 outcomes:
   - id: o1
@@ -420,6 +426,7 @@ test("promoteStaged: multiple staged → mixed decisions", () => {
     // Child with converged parent → promote-with-base
     const childWithParent = `---
 repo: /tmp/repo
+compare_commit: main
 parent_run_id: 20260101-000000-parent
 outcomes:
   - id: o1

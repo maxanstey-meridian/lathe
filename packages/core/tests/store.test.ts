@@ -69,6 +69,7 @@ const makeTestPacket = (override?: Record<string, unknown>): Packet => {
   const raw = `---
 repo: /tmp/test-repo
 base: main
+compare_commit: main
 summary: test packet
 outcomes:
   - id: test-outcome
@@ -84,6 +85,7 @@ body
   const fm = {
     repo: "/tmp/test-repo",
     base: "main",
+    compare_commit: "main",
     summary: "test packet",
     outcomes: [{ id: "test-outcome", description: "A test outcome" }],
     expected_surface: ["src/index.ts"],
@@ -412,18 +414,6 @@ test("store: convergence rejects bad schema", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Packet freeze
-
-test("store: packet freeze round-trip", async () => {
-  const tmp = await mkdtemp(join(tmpdir(), "store-freeze-"));
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
-  store.freezePacket("20260101-000000-test", "---\nfrontmatter\n---\n\nfrozen body");
-  equal(store.readFrozenPacket("20260101-000000-test"), "---\nfrontmatter\n---\n\nfrozen body");
-  equal(store.readFrozenPacket("nonexistent"), "");
-  await cleanTemp(tmp);
-});
-
-// ---------------------------------------------------------------------------
 // Active run
 
 test("store: active run lifecycle", async () => {
@@ -506,6 +496,7 @@ test("store: listQueue returns fresh packets", async () => {
   const packet1 = `---
 repo: /tmp/repo
 base: main
+compare_commit: main
 summary: p1
 outcomes:
   - id: o1
@@ -519,6 +510,7 @@ verification:
   const packet2 = `---
 repo: /tmp/repo
 base: main
+compare_commit: main
 summary: p2
 outcomes:
   - id: o1
@@ -561,6 +553,7 @@ test("store: listQueue requeued runs come before fresh", async () => {
   const packet = `---
 repo: /tmp/repo
 base: main
+compare_commit: main
 summary: fresh
 outcomes:
   - id: o1
@@ -589,6 +582,7 @@ test("store: admitQueue rejects packet with no repo in frontmatter", async () =>
   const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   const packet = `---
 base: main
+compare_commit: main
 summary: no repo
 outcomes:
   - id: o1
@@ -621,6 +615,7 @@ test("store: admitQueue with explicit base — headBranch NOT called", async () 
   const packet = `---
 repo: ${tmp}/test-repo
 base: stable-branch
+compare_commit: main
 summary: explicit base
 outcomes:
   - id: o1
@@ -647,6 +642,7 @@ test("store: admitQueue without base — headBranch called and stamped", async (
   const store = StoreAdapter.create(makePaths(tmp), repo, clock);
   const packet = `---
 repo: ${tmp}/test-repo
+compare_commit: main
 summary: no explicit base
 outcomes:
   - id: o1
@@ -673,6 +669,7 @@ test("store: admitQueue rejects when headBranch throws", async () => {
   const store = StoreAdapter.create(makePaths(tmp), repo, clock);
   const packet = `---
 repo: /tmp/nowhere
+compare_commit: main
 summary: headBranch fails
 outcomes:
   - id: o1
@@ -701,6 +698,7 @@ test("store: admitQueue rejects invalid packet shape", async () => {
   const packet = `---
 repo: /tmp/test-repo
 base: main
+compare_commit: main
 summary: missing outcomes
 expected_surface:
   - src/index.ts
@@ -726,6 +724,7 @@ test("store: admitQueue rejects when repoValid returns false", async () => {
   const packet = `---
 repo: ${tmp}/test-repo
 base: main
+compare_commit: main
 summary: repoValid fails
 outcomes:
   - id: o1
@@ -755,6 +754,7 @@ test("store: archiveQueue moves packet to rejected", async () => {
   const packet = `---
 repo: /tmp/test-repo
 base: main
+compare_commit: main
 summary: archive me
 outcomes:
   - id: o1
@@ -788,6 +788,7 @@ test("store: staged write/read/list/remove", async () => {
   const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
   const packet = `---
 repo: /tmp/test-repo
+compare_commit: main
 summary: staged child
 parent_run_id: 20260101-000000-parent
 outcomes:
@@ -1064,16 +1065,6 @@ const runContractTests = async (
     await cleanTemp(tmp);
   }
 
-  // Packet freeze round-trip
-  {
-    const tmp = await mkdtemp(join(tmpdir(), `${label}-freeze-`));
-    const store = createStore(tmp, fakeRepo(), fixedClock());
-    store.freezePacket("20260101-000000-test", "---\nfrontmatter\n---\n\nfrozen body");
-    equal(store.readFrozenPacket("20260101-000000-test"), "---\nfrontmatter\n---\n\nfrozen body");
-    equal(store.readFrozenPacket("nonexistent"), "");
-    await cleanTemp(tmp);
-  }
-
   // Active run lifecycle
   {
     const tmp = await mkdtemp(join(tmpdir(), `${label}-active-`));
@@ -1154,6 +1145,7 @@ const runContractTests = async (
     const packet = `---
 repo: /tmp/test-repo
 base: main
+compare_commit: main
 summary: packet
 outcomes:
   - id: o1
@@ -1222,6 +1214,7 @@ verification:
     const unrelated = `---
 repo: /tmp/test-repo
 base: main
+compare_commit: main
 summary: unrelated packet
 outcomes:
   - id: unrelated
@@ -1235,6 +1228,7 @@ verification:
     const chainChild = `---
 repo: /tmp/test-repo
 base: main
+compare_commit: main
 parent_run_id: 20260101-000000-parent
 summary: dependent chain packet
 outcomes:
@@ -1249,6 +1243,7 @@ verification:
     const repair = `---
 repo: /tmp/test-repo
 base: meridian/20260101-000000-parent
+compare_commit: main
 campaign_id: 20260101-000000-parent
 parent_run_id: 20260101-000000-parent
 pass: 2
@@ -1283,6 +1278,7 @@ verification:
     const packet = `---
 repo: /tmp/test-repo
 base: main
+compare_commit: main
 summary: admit me
 outcomes:
   - id: o1
@@ -1307,6 +1303,7 @@ verification:
     const packet = `---
 repo: /tmp/test-repo
 base: main
+compare_commit: main
 summary: archive me
 outcomes:
   - id: o1
@@ -1331,6 +1328,7 @@ verification:
     const store = createStore(tmp, fakeRepo(), fixedClock());
     const packet = `---
 repo: /tmp/test-repo
+compare_commit: main
 summary: staged child
 parent_run_id: 20260101-000000-parent
 outcomes:

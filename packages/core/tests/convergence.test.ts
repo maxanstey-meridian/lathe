@@ -347,6 +347,7 @@ Repair it.
 const LINEAGE = {
   repo: "/tmp/repo",
   baseBranch: "meridian/parent",
+  compareCommit: "main",
   campaignId: "feature",
   parentRunId: "20260614-100000-feature",
   pass: 2,
@@ -586,6 +587,7 @@ test("assembleCommitMessage: empty body → subject only", () => {
 const stagedChild = (extra = "") =>
   `---
 repo: /tmp/whatever
+compare_commit: main
 ${extra}outcomes:
   - id: a
     description: do a thing

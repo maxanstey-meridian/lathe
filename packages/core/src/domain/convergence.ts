@@ -232,6 +232,7 @@ export const extractAuthoredPacket = (text: string): string => {
 export type FollowupLineage = {
   repo: string; // parent repo — infra, never authored
   baseBranch: string; // base for the follow-up = parent run's branch tip
+  compareCommit: string; // cumulative review base — carried forward unchanged
   campaignId: string;
   parentRunId: string; // the run super-daddy just reviewed
   pass: number; // the NEW pass number (parent pass + 1)
@@ -299,6 +300,7 @@ export const stampFollowupLineage = (authoredRaw: string, lineage: FollowupLinea
     ...authored,
     repo: lineage.repo,
     base: lineage.baseBranch,
+    compare_commit: lineage.compareCommit,
     campaign_id: lineage.campaignId,
     parent_run_id: lineage.parentRunId,
     pass: lineage.pass,

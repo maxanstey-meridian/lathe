@@ -486,6 +486,7 @@ test("acceptRun (real supervisor) refuses a mid-chain run and names the chain ti
         "---",
         "repo: /tmp/test-repo",
         `base: meridian/${parentRunId}`,
+        "compare_commit: main",
         `parent_run_id: ${parentRunId}`,
         "outcomes:",
         "  - id: child-outcome",

@@ -92,18 +92,13 @@ export const makeExecuteRun =
     const { repo: repoPath, worktree, base, branch } = runMeta as RunMetaPaths;
 
     const priorMeta = store.readMetaIfExists(runId);
-    const frozenPacket = store.readFrozenPacket(runId);
     const queuePacket = store.readQueuePacket(runId);
 
     // Decide whether this run resumes a prior session or starts fresh.
-    const startDecision = decideRunStart(priorMeta, frozenPacket, queuePacket);
+    const startDecision = decideRunStart(priorMeta);
 
-    // Packet selection: fresh → queue packet wins (re-freeze current spec);
-    // resume → frozen snapshot wins (immune to mid-flight edits, K3).
-    const raw =
-      startDecision.mode === "resume"
-        ? frozenPacket || queuePacket || ""
-        : queuePacket || frozenPacket || "";
+    // Packet selection: the queue dir is the single live source of truth.
+    const raw = queuePacket ?? "";
     const shape = parsePacketShape(raw, runId);
     if (!shape.ok) {
       if (priorMeta) {
@@ -121,7 +116,6 @@ export const makeExecuteRun =
       // fresh durable state so a later unchanged-packet pickup cannot resume
       // from pre-fresh checkpoint/decision/review state.
       store.clearResumeArtifacts(runId);
-      store.freezePacket(runId, packet.raw);
       store.writeLedger(store.initialLedger(packet));
       store.replaceObligations(runId, []);
       store.writeGateState(

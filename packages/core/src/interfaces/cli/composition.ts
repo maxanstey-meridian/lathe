@@ -324,10 +324,9 @@ export const superReviewOnce = async (
       return 1;
     }
     let raw: string;
-    try {
-      raw = store.readFrozenPacket(runId);
-    } catch {
-      console.error(`run ${runId} has no frozen packet to review`);
+    raw = store.readQueuePacket(runId) ?? "";
+    if (!raw) {
+      console.error(`run ${runId} has no packet to review`);
       return 1;
     }
     const shape = parsePacketShape(raw, runId);

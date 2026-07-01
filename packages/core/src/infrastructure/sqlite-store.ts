@@ -361,22 +361,6 @@ export class SqliteStoreAdapter implements Store {
   // (already handled by appendConvergence / readConvergence above)
 
   // ---------------------------------------------------------------------------
-  // Packet freeze (markdown — file-backed)
-
-  freezePacket(runId: string, raw: string): void {
-    const dir = this.paths.runDir(runId);
-    mkdirSync(dir, { recursive: true });
-    writeAtomic(this.paths.packetFile(runId), raw);
-  }
-
-  readFrozenPacket(runId: string): string {
-    if (!existsSync(this.paths.packetFile(runId))) {
-      return "";
-    }
-    return readFileSync(this.paths.packetFile(runId), "utf-8");
-  }
-
-  // ---------------------------------------------------------------------------
   // Active run pointer
 
   readActiveRun(): ActiveRun | undefined {

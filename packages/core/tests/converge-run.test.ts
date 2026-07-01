@@ -32,6 +32,7 @@ const CAMPAIGN_ID = "converge";
 const PACKET_RAW = `---
 repo: /tmp/test-repo
 base: main
+compare_commit: main
 summary: converge-run fixture
 outcomes:
   - id: test-outcome
@@ -155,7 +156,7 @@ const makeFakePorts = (
       writeMeta: (m: RunMeta) => {
         metaStore = m;
       },
-      readFrozenPacket: (_runId: string) => PACKET_RAW,
+      readQueuePacket: (_runId: string) => PACKET_RAW,
       readCampaign: (_campaignId: string) => campaign,
       writeCampaign: (c: Campaign) => {
         campaign = c;
@@ -1082,7 +1083,7 @@ test("convergeRun: escalate at the cap when ALREADY promoted → parks (no secon
   thresholds.maxPasses = 1;
   thresholds.promoteAtCap = true;
   // This run IS the promoted pass — its frozen packet carries promoted: true.
-  ports.store.readFrozenPacket = () => PACKET_RAW.replace("pass: 1", "pass: 1\npromoted: true");
+  ports.store.readQueuePacket = () => PACKET_RAW.replace("pass: 1", "pass: 1\npromoted: true");
 
   const runner = convergeRun({
     store: ports.store,
@@ -1160,7 +1161,7 @@ test("convergeRun: stop with meta already ready_for_review — no unnecessary wr
       writeMeta: () => {
         metaWrites++;
       },
-      readFrozenPacket: () => PACKET_RAW,
+      readQueuePacket: () => PACKET_RAW,
       readCampaign: () => undefined,
       writeCampaign: () => {},
       admitQueue: () => {},
@@ -1375,6 +1376,7 @@ test("convergeRun: autofix with commands runs with expected_surface args", async
   const PACKET_WITH_AUTOFIX = `---
 repo: /tmp/test-repo
 base: main
+compare_commit: main
 summary: converge-run fixture
 outcomes:
   - id: test-outcome
@@ -1413,8 +1415,8 @@ body
     raw: "ok",
   });
 
-  // Override readFrozenPacket to return the packet with autofix.
-  (ports.store as any).readFrozenPacket = () => PACKET_WITH_AUTOFIX;
+  // Override readQueuePacket to return the packet with autofix.
+  (ports.store as any).readQueuePacket = () => PACKET_WITH_AUTOFIX;
 
   ports.verify = {
     ...ports.verify,
@@ -1532,7 +1534,7 @@ test("convergeRun: records reviewerSessionId from the real adapter and preserves
         stored = m;
         metaWrites++;
       },
-      readFrozenPacket: () => PACKET_RAW,
+      readQueuePacket: () => PACKET_RAW,
       readCampaign: () => undefined,
       writeCampaign: () => {},
       admitQueue: () => {},

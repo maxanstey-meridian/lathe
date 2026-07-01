@@ -61,6 +61,7 @@ const makeTestPacket = (overrides?: Record<string, unknown>): Packet => {
   const raw = `---
 repo: /tmp/test-repo
 base: main
+compare_commit: main
 summary: test packet
 outcomes:
   - id: test-outcome
@@ -76,6 +77,7 @@ body
   const fm = {
     repo: "/tmp/test-repo",
     base: "main",
+    compare_commit: "main",
     summary: "test packet",
     outcomes: [{ id: "test-outcome", description: "A test outcome" }],
     expected_surface: ["src/index.ts"],

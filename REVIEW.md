@@ -12,8 +12,8 @@ This is a fix to the existing convergence review protocol, not a new feature.
 - `base` is used as the sandbox execution base.
 - Staged chain promotion stamps child `base` from the parent campaign tip or accepted target.
 - Super-daddy is not passed a diff. It gets the worktree and is expected to inspect directly.
-- `renderSuperReview` currently contains packet-local language, including “judge only what THIS run added or touched” and “pre-existing untested code is not your remit”.
-- `renderFollowupAuthoring` currently treats prior outcomes as “sealed, do NOT touch”.
+- `renderSuperReview` currently contains packet-local language, including "judge only what THIS run added or touched" and "pre-existing untested code is not your remit".
+- `renderFollowupAuthoring` currently treats prior outcomes as "sealed, do NOT touch".
 - Follow-up packet frontmatter is not solely model-authored. `stampFollowupLineage` overwrites infra fields such as `repo`, `base`, `campaign_id`, `parent_run_id`, `pass`, `regression_outcomes`, and `promoted`.
 - There is no separate campaign-final audit hook today. `convergeRun` marks a campaign `converged` immediately on an `accept` verdict from the same super-daddy pass.
 
@@ -27,53 +27,64 @@ This is a fix to the existing convergence review protocol, not a new feature.
 
 ## Implementation Plan
 
-1. Add `compare_commit` to packet frontmatter.
-   - Require `compare_commit: z.string().min(1)` in `PacketFrontmatter`.
-   - Keep `base` required.
-   - Do not redact `compare_commit`; models need to see it.
-   - For synthetic degraded packet construction in convergence fallback paths, use `meta.base` as a fallback value.
+### A. Add `compare_commit` field
 
-2. Enforce it for authored/staged packets.
-   - Keep staged packets allowed to omit `base` only.
-   - Staged packets must include `compare_commit`.
-   - Missing `compare_commit` should reject at admission/parse time.
+1. Add `compare_commit: z.string().min(1)` to `PacketFrontmatter` (`domain/packet.ts:26`), right after `base`. Required — author must provide it explicitly. Do NOT add to `INFRA_KEYS_RE` (L78); models need to see it.
+2. No changes to `StagedFrontmatter` (`domain/chain.ts:19`). It extends `PacketFrontmatter` and only relaxes `base` to optional. `compare_commit` is inherited as required — staged packets must include it even when `base` is omitted.
+3. Add `compareCommit: string` to `FollowupLineage` (`domain/convergence.ts:232-240`).
+4. Add `compare_commit: lineage.compareCommit` to the stamped frontmatter in `stampFollowupLineage` (`domain/convergence.ts:298-310`).
+5. Add `compareCommit: packet.frontmatter.compare_commit` to the lineage object in `convergeRun` (`converge-run.ts:367-375`).
 
-3. Stamp it for super-daddy follow-up packets.
-   - Add `compareCommit` to `FollowupLineage`.
-   - Pass `packet.frontmatter.compare_commit` into lineage from `convergeRun`.
-   - Have `stampFollowupLineage` stamp `compare_commit` over any model-authored value.
-   - Update follow-up authoring prompt so super-daddy does not author `compare_commit`; the engine stamps it with the rest of lineage.
+### B. Remove freeze/snapshot mechanism
 
-4. Fix super-daddy review prompt scope.
-   - Add a review-base section explaining `base` vs `compare_commit`.
-   - State that convergence review must inspect the cumulative work after `compare_commit`.
-   - Remove or replace packet-local exemptions such as “pre-existing untested code is not your remit”.
-   - Keep scope bounded by original intent and doctrine; do not invite unrelated wishlist work.
+The queue directory is the single live source of truth. If a dev Ctrl+C's and edits the packet, they get the edit on resume. No snapshot, no diff detection.
 
-5. Fix follow-up authoring prompt scope.
-   - Replace “sealed, do NOT touch” with “prior outcomes are regression obligations”.
-   - Say repair packets may touch any file changed after `compare_commit` when needed to fix a grounded finding.
-   - Tell super-daddy to choose `expected_surface` from the real files needed for the fix, not from the parent packet surface.
+1. **`execute-run.ts:94-124`** — Remove `readFrozenPacket` call. Simplify packet selection to `const raw = queuePacket ?? "";`. Remove `store.freezePacket(runId, packet.raw)`.
+2. **`domain/run.ts:162-197`** — Simplify `decideRunStart`: drop `frozenPacket` and `queuePacket` params. Resume decision is just: priorMeta + babySessionId exists? Delete all frozen-vs-queue diff detection (L179-193).
+3. **`converge-run.ts:145-178`** — Replace `readFrozenPacket` with `readQueuePacket`. Delete the `if (frozenRaw) {} else {}` split and synthetic degraded packet entirely. Parse queue packet directly; throw if missing.
+4. **`interfaces/cli/composition.ts:328`** — Replace `readFrozenPacket` with `readQueuePacket`.
+5. **`application/ports/store.ts:99-100`** — Remove `freezePacket` and `readFrozenPacket` from port interface.
+6. **`infrastructure/sqlite-store.ts:363-377`** — Delete `freezePacket` and `readFrozenPacket`.
+7. **`infrastructure/store.ts:340-350`** — Delete same (legacy store, kept in lockstep).
+8. **`config/paths.ts:22,59`** — Remove `packetFile` from interface and default impl (dead after freeze removal).
 
-6. Update packet authoring docs/skills.
-   - Packet examples must include both `base` and `compare_commit`.
-   - Document that chained packets may have `base` equal to a prior packet tip while `compare_commit` remains the original work-item comparison ref.
+### C. Prompt changes
 
-7. Update tests.
-   - Schema tests: valid packets include `compare_commit`; missing field rejects.
-   - Packet parsing tests: valid fixtures include `compare_commit`; redaction preserves it.
-   - Staged parsing tests: staged packets require `compare_commit` even when `base` is omitted.
-   - Follow-up lineage tests: stamped output includes `compare_commit`; authored values are overwritten.
-   - Prompt tests: super-daddy prompt contains cumulative fair-game wording; follow-up authoring no longer says prior files are untouchable.
+1. **`domain/prompts.ts` reviewBody (~L631)** — Add after "Original packet" section:
+   ```
+   ## Review scope
+   Inspect everything changed after `compare_commit` ({fm.compare_commit}). All of it
+   is fair game for correctness, integration, and test-quality review.
+   ```
+2. **`domain/prompts.ts:661-664`** — Delete "Stay in scope: judge only what THIS run added or touched; pre-existing untested code is not your remit."
+3. **`domain/prompts.ts:901-910`** — Replace sealed block with just:
+   ```
+   ## Prior outcomes — regression obligations
+   {prior outcome list}
+   ```
+4. **`domain/prompts.ts:926-930`** — Add `compare_commit` to the "do NOT author" list.
+5. **`domain/prompts.ts` `renderFinalReview` (~L752-837)** — Leave alone. Daddy's per-run review IS per-run by design.
 
-## Open Design Choice
+### D. Tests
 
-Current code has no separate final audit stage. Changing `renderSuperReview` makes every convergence review cumulative when `compare_commit` exists. That is the smaller fix and directly addresses the miss, but it may make repair loops more expensive and cause old defects to be repeatedly rediscovered until fixed.
+1. Schema/parsing: valid fixtures include `compare_commit`; missing field rejects. Staged packets require `compare_commit` even when `base` omitted.
+2. Freeze removal: delete all `store.freezePacket(...)` calls and `readFrozenPacket` assertions. Execute-run tests rely on `readQueuePacket`. Converge-run tests' `readFrozenPacket` mock changes to `readQueuePacket`.
+3. Lineage: `stampFollowupLineage` output includes `compare_commit`; authored values overwritten.
+4. Prompts: super-review contains `compare_commit` cumulative wording, no "not your remit"; follow-up no "sealed".
 
-A larger alternative is to add an explicit final campaign audit before marking a campaign `converged`, while keeping repair-loop reviews packet-local. That requires lifecycle changes beyond the prompt/schema fix.
+### E. Docs/skills (separate PR)
+
+- Packet examples must include both `base` and `compare_commit`.
+- For single packets, `compare_commit` is the same as `base`'s parent. For chained campaigns, it stays fixed at the original work-item base while `base` advances to each packet's execution tip.
+
+## What does NOT change
+
+- `readQueuePacket` — already exists, already returns the live queue file.
+- `stampBase` — queue-packet stamping, not freeze-related.
+- `INFRA_KEYS_RE` — `compare_commit` intentionally excluded (models see it).
 
 ## Risks
 
 - Existing queued/staged packets without `compare_commit` will reject once the schema is enforced.
-- Follow-up authoring will fail unless the engine stamps `compare_commit`; prompt-only propagation conflicts with the current lineage-stamping model.
+- Freeze removal changes resume semantics: a packet edited mid-run between crash and resume now takes effect. This is intended — the queue dir is live.
 - Cumulative review can broaden repair packets beyond the immediate parent packet surface. That is intended for correctness, but it changes convergence dynamics.

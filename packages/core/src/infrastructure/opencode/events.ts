@@ -48,30 +48,57 @@ export const createEvents = (config: Config): Events => ({
     // The feed is per-instance, scoped by directory exactly like sessions — an
     // unscoped subscription sees only its own server.connected handshake.
     const url = `http://127.0.0.1:${config.opencode.port}/event?directory=${encodeURIComponent(directory)}`;
-    const req = httpRequest(url, { method: "GET" }, (res) => {
-      let buffer = "";
-      res.on("data", (chunk: Buffer) => {
-        buffer += chunk.toString("utf-8");
-        let idx: number;
-        while ((idx = buffer.indexOf("\n")) !== -1) {
-          const line = buffer.slice(0, idx).trim();
-          buffer = buffer.slice(idx + 1);
-          if (!line.startsWith("data:")) {
-            continue;
+    let closed = false;
+    let req: ReturnType<typeof httpRequest> | undefined;
+    let reconnect: ReturnType<typeof setTimeout> | undefined;
+
+    const scheduleReconnect = (): void => {
+      if (closed || reconnect) {
+        return;
+      }
+      req?.destroy();
+      reconnect = setTimeout(() => {
+        reconnect = undefined;
+        connect();
+      }, 1_000);
+    };
+
+    const connect = (): void => {
+      req = httpRequest(url, { method: "GET" }, (res) => {
+        let buffer = "";
+        res.on("data", (chunk: Buffer) => {
+          buffer += chunk.toString("utf-8");
+          let idx: number;
+          while ((idx = buffer.indexOf("\n")) !== -1) {
+            const line = buffer.slice(0, idx).trim();
+            buffer = buffer.slice(idx + 1);
+            if (!line.startsWith("data:")) {
+              continue;
+            }
+            try {
+              onEvent(JSON.parse(line.slice(5).trim()) as OpencodeEvent);
+            } catch {
+              /* partial or non-JSON frame — skip */
+            }
           }
-          try {
-            onEvent(JSON.parse(line.slice(5).trim()) as OpencodeEvent);
-          } catch {
-            /* partial or non-JSON frame — skip */
-          }
-        }
+        });
+        res.on("end", scheduleReconnect);
+        res.on("close", scheduleReconnect);
       });
-    });
-    req.on("error", () => {
-      /* server gone — tail falls back to journal-only polling */
-    });
-    req.end();
-    return { close: () => req.destroy() };
+      req.on("error", scheduleReconnect);
+      req.end();
+    };
+
+    connect();
+    return {
+      close: () => {
+        closed = true;
+        if (reconnect) {
+          clearTimeout(reconnect);
+        }
+        req?.destroy();
+      },
+    };
   },
 });
 

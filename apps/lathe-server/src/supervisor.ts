@@ -968,6 +968,10 @@ export const createSupervisor = (
     },
 
     acceptRun(runId: string): number {
+      // Missing run → 404, not a generic accept refusal.
+      if (!store.readMetaIfExists(runId)) {
+        throw new RunNotFoundError(runId);
+      }
       // Chain-tip guard: refuse a non-chain-tip run (mid-chain accept deletes
       // the branch the next link forks off).
       if (!isChainTip(runId)) {
@@ -999,7 +1003,13 @@ export const createSupervisor = (
         return;
       }
 
-      // Running/terminal runs: mark as blocked with reason.
+      // Irreversible terminal states: accepted/aborted/failed cannot be
+      // rewritten to blocked — the work is merged/gone or already failed.
+      if (meta.status === "accepted" || meta.status === "aborted" || meta.status === "failed") {
+        throw new TerminalRunError(runId, meta.status);
+      }
+
+      // Running/ready_for_review/blocked runs: mark as blocked with reason.
       store.writeMeta({
         ...meta,
         status: "blocked" as const,

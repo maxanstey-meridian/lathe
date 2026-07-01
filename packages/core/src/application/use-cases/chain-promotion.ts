@@ -6,7 +6,7 @@
 // domain decision (decidePromotion). No infrastructure imports.
 // ---------------------------------------------------------------------------
 
-import { decidePromotion } from "../../domain/chain.js";
+import { childBaseFromTip, decidePromotion } from "../../domain/chain.js";
 import { stampBase } from "../../domain/packet.js";
 import type { Repo } from "../ports/repo.js";
 import type { Store } from "../ports/store.js";
@@ -38,7 +38,11 @@ export const promoteStaged = (store: Store, repo: Repo): void => {
       }
 
       case "promote-with-base": {
-        // Parent converged → fetch tip branch into source repo, stamp base, admit.
+        // Parent converged → base the child on the tip. If the tip is NOT yet
+        // accepted, its work lives only in its clone sandbox, so fetch the tip
+        // branch into the source repo first. If it IS accepted, accept already
+        // merged it into the canonical repo (and destroyed the clone + branch),
+        // so skip the fetch and base off the branch it was merged into.
         try {
           const raw = store.readStaged(child.runId);
           if (raw === undefined) {
@@ -49,8 +53,11 @@ export const promoteStaged = (store: Store, repo: Repo): void => {
             // Tip run meta not found — leave staged, retry next sweep.
             continue;
           }
-          repo.fetchBranchFromClone(child.repo, tipMeta.worktree, decision.base);
-          const stamped = stampBase(raw, decision.base);
+          const childBase = childBaseFromTip(tipMeta);
+          if (childBase.fetchFromClone !== undefined) {
+            repo.fetchBranchFromClone(child.repo, childBase.fetchFromClone, childBase.base);
+          }
+          const stamped = stampBase(raw, childBase.base);
           store.admitQueue(child.runId, stamped);
           store.removeStaged(child.runId);
         } catch {

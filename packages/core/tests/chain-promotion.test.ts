@@ -8,7 +8,7 @@ import type { Repo } from "../src/application/ports/repo.js";
 import { promoteStaged } from "../src/application/use-cases/chain-promotion.js";
 import { makePaths } from "../src/config/paths.js";
 import { Campaign, CampaignStatus } from "../src/domain/campaign.js";
-import { StoreAdapter } from "../src/infrastructure/store.js";
+import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -37,10 +37,12 @@ const fakeRepo = (opts?: {
   diffStat: () => "",
   readDiffStats: () => ({}),
   fetchBranchFromClone: () => {
-    opts && (opts.fetchBranchFromCloneCalled = true);
-    opts && (opts.fetchBranchFromCloneRepo = "repo");
-    opts && (opts.fetchBranchFromCloneFrom = "from");
-    opts && (opts.fetchBranchFromCloneBranch = "branch");
+    if (opts) {
+      opts.fetchBranchFromCloneCalled = true;
+      opts.fetchBranchFromCloneRepo = "repo";
+      opts.fetchBranchFromCloneFrom = "from";
+      opts.fetchBranchFromCloneBranch = "branch";
+    }
     return undefined;
   },
   removeSandbox: () => {
@@ -76,6 +78,7 @@ const cleanTemp = async (dir: string) => {
 
 const stagedChildPacket = `---
 repo: /tmp/repo
+compare_commit: main
 outcomes:
   - id: o1
     description: outcome 1
@@ -88,11 +91,24 @@ verification:
 body
 `;
 
-const parentRunMeta = makeMeta({ runId: "20260101-000000-parent", status: "accepted" as const });
+// Tip whose campaign converged but `lathe accept` has NOT run yet: its branch
+// still lives only in the clone sandbox, so promotion must fetch it.
 const tipRunMeta = makeMeta({
   runId: "20260101-000000-tip",
-  status: "accepted" as const,
+  status: "ready_for_review" as const,
   worktree: "/tmp/worktree-tip",
+});
+
+// Tip already accepted: accept merged it into `acceptedInto` (here, "main") and
+// destroyed the clone + the meridian/<tip> branch. Promotion must base off
+// `acceptedInto` and skip the fetch — the canonical repo already has the work.
+const tipRunMetaAccepted = makeMeta({
+  runId: "20260101-000000-tip",
+  status: "accepted" as const,
+  base: "meridian/20260101-000000-tip-prev",
+  branch: "meridian/20260101-000000-tip",
+  worktree: "/tmp/worktree-tip",
+  acceptedInto: "main",
 });
 
 const parentCampaignConverged = (tipRunId: string): Campaign => ({
@@ -149,7 +165,7 @@ test("promoteStaged: no parent → promote-now", () => {
     const tmp = await mkdtempP(join(tmpdir(), "chain-promo-pnow-"));
     const clock = fixedClock();
     const repo = fakeRepo();
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
     store.writeStaged("20260101-000000-child", stagedChildPacket);
 
@@ -172,10 +188,11 @@ test("promoteStaged: parent converged → promote-with-base", () => {
     const clock = fixedClock();
     const fetchOpts = { fetchBranchFromCloneCalled: false };
     const repo = fakeRepo(fetchOpts);
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
     const childPacket = `---
 repo: /tmp/repo
+compare_commit: main
 parent_run_id: 20260101-000000-parent
 outcomes:
   - id: o1
@@ -200,6 +217,65 @@ body
     equal(queue[0].runId, "20260101-000000-child");
     strictEqual(store.readStaged("20260101-000000-child"), undefined);
     ok(fetchOpts.fetchBranchFromCloneCalled, "fetchBranchFromClone should be called");
+    // Base off the tip branch — its work lives only in the clone until accept.
+    ok(
+      store
+        .readQueuePacket("20260101-000000-child")
+        ?.includes("base: meridian/20260101-000000-tip"),
+      "child should be based on the tip branch",
+    );
+    await cleanTemp(tmp);
+  })();
+});
+
+// ---------------------------------------------------------------------------
+// promoteStaged — accepted tip: base off acceptedInto, no fetch (regression for
+// the strand where an accepted tip's deleted sandbox branch failed every sweep).
+
+test("promoteStaged: tip already accepted → base off acceptedInto, no fetch", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "chain-promo-accepted-"));
+    const clock = fixedClock();
+    const fetchOpts = { fetchBranchFromCloneCalled: false };
+    const repo = fakeRepo(fetchOpts);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
+
+    const childPacket = `---
+repo: /tmp/repo
+compare_commit: main
+parent_run_id: 20260101-000000-parent
+outcomes:
+  - id: o1
+    description: outcome 1
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+
+body
+`;
+
+    store.writeStaged("20260101-000000-child", childPacket);
+    store.writeCampaign(parentCampaignConverged("20260101-000000-tip"));
+    store.writeMeta(tipRunMetaAccepted);
+
+    promoteStaged(store, repo);
+
+    const queue = store.listQueue();
+    equal(queue.length, 1);
+    equal(queue[0].runId, "20260101-000000-child");
+    strictEqual(store.readStaged("20260101-000000-child"), undefined);
+    // The work is already in the canonical repo on `acceptedInto` — never fetch
+    // the destroyed sandbox branch.
+    ok(
+      !fetchOpts.fetchBranchFromCloneCalled,
+      "fetchBranchFromClone must NOT be called for an accepted tip",
+    );
+    ok(
+      store.readQueuePacket("20260101-000000-child")?.includes("base: main"),
+      "child should be based on the branch the tip was accepted into",
+    );
     await cleanTemp(tmp);
   })();
 });
@@ -212,10 +288,11 @@ test("promoteStaged: parent needs_max → hold", () => {
     const tmp = await mkdtempP(join(tmpdir(), "chain-promo-hold-"));
     const clock = fixedClock();
     const repo = fakeRepo();
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
     const childPacket = `---
 repo: /tmp/repo
+compare_commit: main
 parent_run_id: 20260101-000000-parent
 outcomes:
   - id: o1
@@ -248,10 +325,11 @@ test("promoteStaged: parent not converged → wait", () => {
     const tmp = await mkdtempP(join(tmpdir(), "chain-promo-wait-"));
     const clock = fixedClock();
     const repo = fakeRepo();
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
     const childPacket = `---
 repo: /tmp/repo
+compare_commit: main
 parent_run_id: 20260101-000000-parent
 outcomes:
   - id: o1
@@ -284,10 +362,11 @@ test("promoteStaged: parent campaign not found → wait", () => {
     const tmp = await mkdtempP(join(tmpdir(), "chain-promo-wait-nocamp-"));
     const clock = fixedClock();
     const repo = fakeRepo();
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
     const childPacket = `---
 repo: /tmp/repo
+compare_commit: main
 parent_run_id: 20260101-000000-parent
 outcomes:
   - id: o1
@@ -319,7 +398,7 @@ test("promoteStaged: staged child not found → skip", () => {
     const tmp = await mkdtempP(join(tmpdir(), "chain-promo-skip-"));
     const clock = fixedClock();
     const repo = fakeRepo();
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
     // Write campaign but no staged child — promoteStaged reads staged, finds nothing.
     store.writeCampaign(parentCampaignConverged("20260101-000000-tip"));
@@ -339,7 +418,7 @@ test("promoteStaged: multiple staged → mixed decisions", () => {
     const tmp = await mkdtempP(join(tmpdir(), "chain-promo-multi-"));
     const clock = fixedClock();
     const repo = fakeRepo();
-    const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
     // Child without parent → promote-now
     store.writeStaged("20260101-000000-no-parent", stagedChildPacket);
@@ -347,6 +426,7 @@ test("promoteStaged: multiple staged → mixed decisions", () => {
     // Child with converged parent → promote-with-base
     const childWithParent = `---
 repo: /tmp/repo
+compare_commit: main
 parent_run_id: 20260101-000000-parent
 outcomes:
   - id: o1

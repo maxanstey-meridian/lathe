@@ -6,6 +6,8 @@
 import type { DiffStats } from "./gate-classification.js";
 import { editTargetOutOfSurface } from "./gate-tools.js";
 import type { GateState } from "./gate.js";
+import { ACCEPTED_STATUSES, type PlannerStatus } from "./review.js";
+import type { Decision } from "./run.js";
 
 type DeltaInput = { files: string[]; loc: number };
 
@@ -21,35 +23,26 @@ export const clearedGateState = (
   nowIso: string,
 ): GateState => ({
   ...state,
-  latched: false,
-  latchReason: undefined,
-  firstEditApproved: true,
-  reconciliationRequired: false,
+  phase: { phase: "cleared" },
   lastAcceptedDecisionAt: nowIso,
   baselineDiffStats,
   updatedAt: nowIso,
 });
 
-// G5: trigger evaluation — first match wins.
-// The in-worktree surface gate is GONE (only absolute-path-outside
-// is blocked). The checkpoint cadence is no longer a gate trigger
-// (demoted to non-blocking NOTICE). Gate latches for first-edit
-// approval exactly once per session, plus crash-path reconciliation.
+// G5: trigger evaluation — only fires for the initial phase (first edit).
+// Reconciliation is now a latched phase; the caller checks isLatched(gate)
+// before calling this, so reconciliation states never reach here.
 export const gateTriggerReason = (state: GateState, delta: DeltaInput): string | undefined => {
-  if (!state.firstEditApproved && delta.files.length > 0) {
+  if (state.phase.phase === "initial" && delta.files.length > 0) {
     return "first edit of the run requires an accepted planner decision";
-  }
-  if (state.reconciliationRequired) {
-    return "reconciliation required: no valid checkpoint from the previous session";
   }
   return undefined;
 };
 
 // The volume reminder, evaluated at the turn boundary for the driver's VISIBLE
 // journal event (§10). Tool calls OR files OR LoC since the last planner check-in,
-// whichever crosses first — the work-interval cadence reborn as a shout. Pure;
-// returns the same reason string the plugin appends to Baby. Returns the reason
-// when due, else undefined.
+// whichever crosses first. Pure; returns the same reason string the plugin appends
+// to executor output. Returns the reason when due, else undefined.
 export const volumeCheckpointReason = (
   toolCalls: number,
   delta: { files: string[]; loc: number },
@@ -66,32 +59,60 @@ export const volumeCheckpointReason = (
 
 // O5: the gate state a replaced session inherits.
 // First-edit is re-latched on EVERY rotation.
-// Crash path (no checkpoint) stacks reconciliation on top.
+// needsReconciliation stacks reconciliation on top (crash path: no checkpoint
+// AND no prior accepted reconciliation).
 // The driver writes the result; this function is pure.
 export const rotationGateState = (
   state: GateState,
-  hasCheckpoint: boolean,
+  needsReconciliation: boolean,
 ): {
   next: GateState;
   reason: string;
 } => {
-  const reason = hasCheckpoint
-    ? "first edit of the new session requires an accepted planner decision"
-    : "reconciliation required: no valid checkpoint from the previous session";
+  const reason = needsReconciliation
+    ? "reconciliation required: no valid checkpoint from the previous session"
+    : "first edit of the new session requires an accepted planner decision";
   return {
     next: {
       ...state,
-      latched: true,
-      firstEditApproved: false,
-      reconciliationRequired: !hasCheckpoint,
-      latchReason: reason,
+      phase: needsReconciliation
+        ? { phase: "reconciliation-latched", reason }
+        : { phase: "first-edit-latched", reason },
     },
     reason,
   };
 };
 
+// Re-latch an unlatched gate mid-run (checkpoint demand). Only called from
+// unlatched states (initial or cleared). From cleared, produces
+// checkpoint-demand-latched; from initial, produces first-edit-latched.
+export const relatchGate = (state: GateState, reason: string): GateState => {
+  if (state.phase.phase === "cleared") {
+    return {
+      ...state,
+      phase: { phase: "checkpoint-demand-latched", reason },
+    };
+  }
+  return {
+    ...state,
+    phase: { phase: "first-edit-latched", reason },
+  };
+};
+
+// O6 skip: if the most recent decision was a Daddy-accepted reconciliation,
+// the state was already validated — don't force the successor session to
+// re-reconcile. Scoped to the LAST decision only: a recon from turn 1 must
+// not suppress a legitimately needed recon at turn 9.
+export const priorReconciliationAccepted = (decisions: Decision[]): boolean => {
+  const last = decisions.at(-1);
+  return (
+    last?.questionType === "reconciliation" &&
+    ACCEPTED_STATUSES.some((s) => s === (last.status as PlannerStatus))
+  );
+};
+
 // G5 (deny): mutation deny reason, first match wins.
-// Order: out-of-surface absolute > latched > memory-latch > first-edit > reconciliation.
+// Order: out-of-surface absolute > latched > memory-latch (initial/cleared) > first-edit.
 // This calls editTargetOutOfSurface from gate-tools; both files are
 // pure, so this cross-module import has no I/O.
 export const mutationDenyReason = (
@@ -105,23 +126,26 @@ export const mutationDenyReason = (
   if (surfaceTarget) {
     return `attempted edit outside the handoff's expected change surface: ${surfaceTarget}`;
   }
-  if (state.latched) {
-    return state.latchReason ?? "planner checkpoint required";
+  switch (state.phase.phase) {
+    case "initial":
+      if (memoryLatchReason) {
+        return memoryLatchReason;
+      }
+      return "first edit of the run requires an accepted planner decision";
+    case "first-edit-latched":
+    case "reconciliation-latched":
+    case "checkpoint-demand-latched":
+      return state.phase.reason;
+    case "cleared":
+      if (memoryLatchReason) {
+        return memoryLatchReason;
+      }
+      return undefined;
   }
-  if (memoryLatchReason) {
-    return memoryLatchReason;
-  }
-  if (!state.firstEditApproved) {
-    return "first edit of the run requires an accepted planner decision";
-  }
-  if (state.reconciliationRequired) {
-    return "reconciliation required: no valid checkpoint from the previous session";
-  }
-  return undefined;
 };
 
 // L1 (soft checkpoint reminder): time-based, non-blocking.
-// Once `intervalMs` has elapsed since Baby's last accepted decision,
+// Once `intervalMs` has elapsed since the executor's last accepted decision,
 // returns the elapsed whole minutes when due, else undefined.
 // Deliberately NOT throttled — repetition is the point (G10).
 export const checkpointNudgeDue = (
@@ -129,7 +153,7 @@ export const checkpointNudgeDue = (
   nowMs: number,
   intervalMs: number,
 ): number | undefined => {
-  if (!state.firstEditApproved || !state.lastAcceptedDecisionAt) {
+  if (state.phase.phase !== "cleared" || !state.lastAcceptedDecisionAt) {
     return undefined;
   }
   const elapsed = nowMs - Date.parse(state.lastAcceptedDecisionAt);
@@ -139,11 +163,11 @@ export const checkpointNudgeDue = (
   return Math.round(elapsed / 60_000);
 };
 
-// G10 (NOTICE): the checkpoint cadence reborn as a SHOUT on the
-// ALLOW path. Returns the notice string when due, else undefined.
-// The driver appends this to Baby's per-mutation results.
+// G10 (NOTICE): non-blocking checkpoint reminder on the ALLOW path.
+// Returns the notice string when due, else undefined.
+// The driver appends this to executor per-mutation results.
 export const checkpointNudgeNotice = (state: GateState, nowMs: number): string | undefined => {
-  if (!state.firstEditApproved || !state.lastAcceptedDecisionAt) {
+  if (state.phase.phase !== "cleared" || !state.lastAcceptedDecisionAt) {
     return undefined;
   }
   const intervalMs = state.checkpointNudgeMs ?? 20 * 60 * 1000;
@@ -152,14 +176,12 @@ export const checkpointNudgeNotice = (state: GateState, nowMs: number): string |
     return undefined;
   }
   const minutes = Math.round(elapsed / 60_000);
-  return `MERIDIAN GATE NOTICE: ~${minutes} min since your last planner check-in. You are NOT blocked — this is a reminder, keep working with full tool access. If your direction could use Daddy's eyes, call ask_planner; otherwise carry on and call submit_report once the packet is complete.`;
+  return `LATHE GATE NOTICE: ~${minutes} min since your last planner check-in. You are NOT blocked — this is a reminder, keep working with full tool access. If stuck, guessing, surprised by code, repeating a failed fix, or your plan changed, call ask_planner now. Prose is not a routed question. Otherwise carry on and call submit_report once the packet is complete.`;
 };
 
-// NON-BLOCKING VOLUME reminder (G10). The work-interval cadence
-// reborn as a shout on a COUNT axis. Pure: takes delta precomputed
-// by the caller (not readDiffStats). Tool-call axis checked first;
-// then if isMutationCall, files/LoC delta. Same wording as
-// volumeCheckpointReason for cross-file consistency.
+// NON-BLOCKING VOLUME reminder (G10). Pure: takes delta precomputed by the caller
+// (not readDiffStats). Tool-call axis checked first; then if isMutationCall,
+// files/LoC delta. Same wording as volumeCheckpointReason for cross-file consistency.
 export const volumeNoticeReason = (
   state: GateState,
   toolCallCount: number,
@@ -185,13 +207,17 @@ export const volumeNoticeReason = (
   }
   return undefined;
 };
-// --- messages (all carry the MERIDIAN GATE marker the driver journals on) ----
+// --- messages (all carry the LATHE GATE marker the driver journals on) ----
 
-export const denyMessage = (reason: string): string =>
-  `MERIDIAN GATE BLOCKED: ${reason}. Your next tool call must be ask_planner — and it must state exactly what you were about to change (file and intended edit), WHY, and where the work stands overall. The planner can correct your direction even while approving, but only if you show it the real intent, not a summary that flatters it. Continue only on proceed or proceed_with_constraints. Reads stay available for gathering evidence.`;
+export const denyMessage = (reason: string): string => {
+  if (reason.startsWith("reconciliation required:")) {
+    return `LATHE GATE BLOCKED: ${reason}. The first mutation after a no-checkpoint resume is blocked. Do not inspect, compare, reconstruct, or prove the run state. Your next tool call must be ask_planner with questionType "reconciliation"; Baby is only triggering Daddy-owned reconciliation. The driver will supply durable state and git evidence. Continue only on proceed or proceed_with_constraints.`;
+  }
+  return `LATHE GATE BLOCKED: ${reason}. Your next tool call must be ask_planner — and it must state exactly what you were about to change (file and intended edit), WHY, and where the work stands overall. The planner can correct your direction even while approving, but only if you show it the real intent, not a summary that flatters it. Continue only on proceed or proceed_with_constraints. Reads stay available for gathering evidence.`;
+};
 
-export const QUESTION_MESSAGE = `MERIDIAN GATE BLOCKED: interactive questions are disabled — Max is not present during a run. Route it: implementation/architecture/procedure/scope questions go to ask_planner; decisions only Max can make go into submit_report with status "blocked" and the exact question.`;
+export const QUESTION_MESSAGE = `LATHE GATE BLOCKED: interactive questions are disabled — Max is not present during a run. Route it: implementation/architecture/procedure/scope questions go to ask_planner; decisions only Max can make go into submit_report with status "blocked" and the exact question.`;
 
-export const SUBAGENT_MESSAGE = `MERIDIAN GATE BLOCKED: exploration subagents are disabled during a run. Broad discovery routes to ask_planner; bounded inspection of files the packet names stays available in this session.`;
+export const SUBAGENT_MESSAGE = `LATHE GATE BLOCKED: exploration subagents are disabled during a run. Broad discovery routes to ask_planner; bounded inspection of files the packet names stays available in this session.`;
 
-export const GIT_MESSAGE = `MERIDIAN GATE BLOCKED: git mutations are not yours — the driver owns commits, branches, and worktrees. Work in the files; the driver commits at the end of the run.`;
+export const GIT_MESSAGE = `LATHE GATE BLOCKED: git mutations are not yours — the driver owns commits, branches, and worktrees. Work in the files; the driver commits at the end of the run.`;

@@ -9,9 +9,17 @@
 // effects. Reads top-to-bottom as the per-turn lifecycle it owns.
 // ---------------------------------------------------------------------------
 
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { babyContextBudget } from "../../config/config.js";
 import type { Config } from "../../config/schemas.js";
-import { extractText, extractReasoning, gateDeniedPart } from "../../domain/agent-response.js";
+import {
+  extractText,
+  extractReasoning,
+  gateDeniedPart,
+  isContextOverflowError,
+  messageError,
+} from "../../domain/agent-response.js";
 import type { TurnResponse, MessagePart } from "../../domain/agent-response.js";
 import { diffDelta } from "../../domain/gate-classification.js";
 import {
@@ -19,8 +27,12 @@ import {
   volumeCheckpointReason,
   checkpointNudgeDue,
   clearedGateState,
+  relatchGate,
+  priorReconciliationAccepted,
 } from "../../domain/gate-decisions.js";
+import { isLatched, gateReason } from "../../domain/gate.js";
 import { checkReorientBound } from "../../domain/liveness.js";
+import type { OutcomeLedger } from "../../domain/outcomes.js";
 import type { Packet } from "../../domain/packet.js";
 import {
   q2RotationSeed,
@@ -30,19 +42,28 @@ import {
   q6ReportProperly,
   q7ReportRejected,
   q8ReconciliationSeed,
+  q8ResumeSeed,
   qReorientSeed,
   ladderNudge,
   softCheckpointNudge,
   qPlannerDecision,
   qPlannerUnavailable,
 } from "../../domain/prompts.js";
+import {
+  buildReconciliationEvidence,
+  renderReconciliationEvidence,
+  lastAcceptedReconciliation,
+  summarizeLedger,
+} from "../../domain/reconciliation.js";
 import type { SubmitReport } from "../../domain/report.js";
 import { ACCEPTED_STATUSES } from "../../domain/review.js";
-import type { FinalReview } from "../../domain/review.js";
+import type { FinalReview, PlannerResponse } from "../../domain/review.js";
 import { evaluateTurn } from "../../domain/turn.js";
+import type { ModelConfig } from "../ports/executor.js";
 import { rotateSession } from "./rotation.js";
 import {
   journal,
+  buildHandoffInject,
   type RunPorts,
   type RunChannel,
   type RunOutcome,
@@ -57,8 +78,82 @@ import {
 type TurnObservations = {
   text: string;
   contextTokens: number;
+  contextOverflow: boolean;
   hadAllowedToolCall: boolean;
   toolCalls: number;
+};
+
+type TurnPartHarvest = {
+  parts: MessagePart[];
+  responsePartCount: number;
+  responsePartTypes: string[];
+  listMessageCount?: number;
+  listStart?: number;
+  listPartCount?: number;
+  listError?: string;
+};
+
+const isCompleteFinalStepLedger = (ledger: OutcomeLedger): boolean =>
+  ledger.outcomes.length > 0 && ledger.outcomes.every((outcome) => outcome.status === "done");
+
+const finalReviewWasUnavailable = (review: FinalReview): boolean =>
+  review.findings.some((finding) => finding.startsWith("final review unavailable:"));
+
+type DaddySyncState = {
+  lastSyncedMaxDecisionAt?: string;
+};
+
+const daddySyncFile = (worktree: string): string => join(dirname(worktree), "daddy-sync.json");
+
+const readDaddySyncState = (worktree: string): DaddySyncState => {
+  const path = daddySyncFile(worktree);
+  if (!existsSync(path)) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf-8")) as Partial<DaddySyncState>;
+    return typeof parsed.lastSyncedMaxDecisionAt === "string"
+      ? { lastSyncedMaxDecisionAt: parsed.lastSyncedMaxDecisionAt }
+      : {};
+  } catch {
+    return {};
+  }
+};
+
+const writeDaddySyncState = (worktree: string, state: DaddySyncState): void => {
+  writeFileSync(daddySyncFile(worktree), `${JSON.stringify(state, null, 2)}\n`, "utf-8");
+};
+
+const syncPendingMaxDecisionsToDaddy = async (
+  ports: RunPorts,
+  runId: string,
+  worktree: string,
+  turn: number,
+): Promise<void> => {
+  if (!ports.planner.syncMaxDecisions) {
+    return;
+  }
+  const state = readDaddySyncState(worktree);
+  const pending = ports.store
+    .readDecisions(runId)
+    .filter((d) => d.source === "max")
+    .filter((d) => !state.lastSyncedMaxDecisionAt || d.timestamp > state.lastSyncedMaxDecisionAt)
+    .map((d) => ({ timestamp: d.timestamp, question: d.question, answer: d.answer }));
+
+  if (pending.length === 0) {
+    return;
+  }
+
+  await ports.planner.syncMaxDecisions(pending);
+  const last = pending.at(-1);
+  if (!last) {
+    return;
+  }
+  writeDaddySyncState(worktree, { lastSyncedMaxDecisionAt: last.timestamp });
+  journal(ports, runId, turn, {
+    event: "driver_note",
+    note: `synced ${pending.length} Max decision(s) to Daddy through ${last.timestamp}`,
+  });
 };
 
 // opencode's POST /message returns only the FINAL assistant message's parts, so
@@ -71,16 +166,30 @@ const collectTurnParts = async (
   sessionId: string,
   lastSeenMessageId: string | undefined,
   response: TurnResponse,
-): Promise<MessagePart[]> => {
+): Promise<TurnPartHarvest> => {
+  const responsePartCount = response.parts.length;
+  const responsePartTypes = response.parts.map((p) => p.type);
   try {
     const messages = await ports.executor.listMessages(sessionId);
     const start = lastSeenMessageId
       ? messages.findIndex((m) => m.info.id === lastSeenMessageId) + 1
       : 0;
     const parts = messages.slice(start).flatMap((m) => m.parts);
-    return parts.length > 0 ? parts : response.parts;
-  } catch {
-    return response.parts;
+    return {
+      parts: parts.length > 0 ? parts : response.parts,
+      responsePartCount,
+      responsePartTypes,
+      listMessageCount: messages.length,
+      listStart: start,
+      listPartCount: parts.length,
+    };
+  } catch (err) {
+    return {
+      parts: response.parts,
+      responsePartCount,
+      responsePartTypes,
+      listError: err instanceof Error ? err.message : String(err),
+    };
   }
 };
 
@@ -92,17 +201,20 @@ const journalTurn = (
   runId: string,
   turn: number,
   response: TurnResponse,
-  turnParts: MessagePart[],
+  harvest: TurnPartHarvest,
 ): TurnObservations => {
   const text = extractText(response);
   const reasoning = extractReasoning(response);
   const tokens = response.info.tokens ?? {};
   const contextTokens = (tokens.input ?? 0) + (tokens.cache?.read ?? 0) + (tokens.output ?? 0);
+  const contextOverflow = isContextOverflowError(response.info);
+  const responseError = messageError(response.info);
+  const rawResponseError = response.info.error;
 
   let hadAllowedToolCall = false;
   let toolCalls = 0;
 
-  for (const part of turnParts) {
+  for (const part of harvest.parts) {
     if (part.type !== "tool") {
       continue;
     }
@@ -151,11 +263,33 @@ const journalTurn = (
       cacheWrite: tokens.cache?.write ?? 0,
     },
     contextTokens,
+    responsePartCount: harvest.responsePartCount,
+    responsePartTypes: harvest.responsePartTypes,
+    ...(responseError ? { responseError } : {}),
+    ...(rawResponseError
+      ? {
+          responseErrorDetail: {
+            ...(rawResponseError.name ? { name: rawResponseError.name } : {}),
+            ...(rawResponseError.data?.statusCode !== undefined
+              ? { statusCode: rawResponseError.data.statusCode }
+              : {}),
+            ...(rawResponseError.data?.message ? { message: rawResponseError.data.message } : {}),
+            ...(rawResponseError.data?.responseBody
+              ? { responseBodyPreview: rawResponseError.data.responseBody.slice(0, 1000) }
+              : {}),
+          },
+        }
+      : {}),
+    ...(harvest.listMessageCount !== undefined
+      ? { harvestMessageCount: harvest.listMessageCount }
+      : {}),
+    ...(harvest.listStart !== undefined ? { harvestStart: harvest.listStart } : {}),
+    ...(harvest.listPartCount !== undefined ? { harvestPartCount: harvest.listPartCount } : {}),
     text: text.slice(0, 2000),
     ...(reasoning ? { reasoning: reasoning.slice(0, 1000) } : {}),
   });
 
-  return { text, contextTokens, hadAllowedToolCall, toolCalls };
+  return { text, contextTokens, contextOverflow, hadAllowedToolCall, toolCalls };
 };
 
 // A prose "all done" without submit_report → the report-properly nudge (Q6).
@@ -165,52 +299,122 @@ const looksLikeProseFinish = (text: string): boolean =>
   );
 
 // Pick the rotation/resume seed from durable state: latest checkpoint → Q2
-// (gate clears on the new session's first accepted decision), none → Q8
-// reconciliation (the gate stacks reconciliation). Returns whether a checkpoint
-// was found so the caller re-latches the matching gate (O5/O6).
+// (gate clears on the new session's first accepted decision); no checkpoint but
+// the last decision was an accepted reconciliation → Q8b (skip redundant recon);
+// otherwise → Q8 reconciliation (the gate stacks reconciliation). If a handoff
+// artifact exists on disk, prepend an inject message to the seed and set awaitingVerification.
+// Returns whether reconciliation is needed so the caller can set the matching gate (O5/O6).
+
 const reseedFromCheckpoint = (
   ports: RunPorts,
   packet: Packet,
   worktree: string,
-): { seed: Seed; hasCheckpoint: boolean } => {
+): { seed: Seed; needsReconciliation: boolean; handoffInjected: boolean } => {
   const runId = packet.runId;
   const ledger = ports.store.readLedger(runId);
   const review = ports.store.readReviewState(runId);
   const decisions = ports.store.readDecisions(runId);
-  const diff = ports.repo.diffStat(worktree, packet.frontmatter.base);
   const checkpoint = ports.store.latestCheckpoint(runId);
+
+  const reconAccepted = priorReconciliationAccepted(decisions);
+  let seedText: string;
+  let seedName: string;
   if (checkpoint) {
-    return {
-      seed: {
-        name: "Q2",
-        text: q2RotationSeed(packet, ledger, checkpoint, review, decisions, diff),
-      },
-      hasCheckpoint: true,
-    };
+    seedName = "Q2";
+    seedText = q2RotationSeed(packet, ledger, checkpoint, review, decisions);
+  } else if (reconAccepted) {
+    seedName = "Q8b";
+    seedText = q8ResumeSeed(packet, ledger, review, decisions);
+  } else {
+    seedName = "Q8";
+    seedText = q8ReconciliationSeed(packet, ledger, review, decisions);
   }
+
+  // Handoff inject: if the predecessor wrote handoff.json, prepend a system
+  // message so the recycled baby calls verify_handoff first.
+  let injectText = "";
+  try {
+    const runDir = dirname(worktree);
+    const handoffPath = join(runDir, "handoff.json");
+    const raw = readFileSync(handoffPath, "utf-8");
+    injectText = buildHandoffInject(raw);
+  } catch {
+    /* no handoff — graceful degradation */
+  }
+  if (injectText) {
+    seedName = `${seedName}+handoff`;
+    seedText = `${injectText}\n\n${seedText}`;
+  }
+
   return {
-    seed: { name: "Q8", text: q8ReconciliationSeed(packet, ledger, review, decisions, diff) },
-    hasCheckpoint: false,
+    seed: { name: seedName, text: seedText },
+    needsReconciliation: !checkpoint && !reconAccepted,
+    handoffInjected: injectText.length > 0,
   };
 };
 
 // ---------------------------------------------------------------------------
-// resolveBabyModel — pure helper for the promoted round model swap
+// Model helpers — baby's normal model and the promoteTo fallback.
 
-import type { ModelConfig } from "../ports/executor.js";
+export const babyModelConfig = (config: Config): ModelConfig => ({
+  providerId: config.baby.providerId,
+  modelId: config.baby.modelId,
+  agent: config.baby.agent,
+});
 
-export const resolveBabyModel = (config: Config, promoted: boolean): ModelConfig =>
-  promoted
-    ? {
-        providerId: config.daddy.providerId,
-        modelId: config.daddy.modelId,
-        agent: config.baby.agent,
-      }
-    : {
-        providerId: config.baby.providerId,
-        modelId: config.baby.modelId,
-        agent: config.baby.agent,
-      };
+// The promoted (strong) model: baby's promoteTo override if set, else daddy's
+// configured model — so promotion can't drift onto a stale/unavailable model
+// when daddy is reconfigured. The agent stays "baby"; only inference changes.
+export const promotedModelConfig = (config: Config): ModelConfig => ({
+  providerId: config.baby.promoteTo?.providerId ?? config.daddy.providerId,
+  modelId: config.baby.promoteTo?.modelId ?? config.daddy.modelId,
+  agent: config.baby.agent,
+});
+
+export const promotedModelLabel = (config: Config): string => {
+  const m = promotedModelConfig(config);
+  return `${m.providerId}/${m.modelId}`;
+};
+
+const buildDriverReconciliation = (
+  ports: RunPorts,
+  packet: Packet,
+  worktree: string,
+): ReturnType<typeof buildReconciliationEvidence> => {
+  const runId = packet.runId;
+  const ledger = ports.store.readLedger(runId);
+  const review = ports.store.readReviewState(runId);
+  const decisions = ports.store.readDecisions(runId);
+  const diffStats = ports.repo.readDiffStats(worktree, packet.frontmatter.base);
+  return buildReconciliationEvidence({
+    git: ports.repo.reconciliationGitState(worktree),
+    packet,
+    ledger,
+    review,
+    decisions,
+    diffStats,
+    diffSummary: ports.repo.reviewableDiffAgainst(worktree, packet.frontmatter.base, 20_000),
+  });
+};
+
+const buildPlannerConsultContext = (
+  ports: RunPorts,
+  runId: string,
+): Parameters<RunPorts["planner"]["consult"]>[1] => {
+  const meta = ports.store.readMeta(runId);
+  const ledger = ports.store.readLedger(runId);
+  const rotations =
+    (meta.crashRetries ?? 0) + (meta.stallRetries ?? 0) + (meta.reorientRetries ?? 0);
+
+  return {
+    reviewState: ports.store.readReviewState(runId),
+    facts: {
+      attempt: meta.attempt,
+      rotations,
+      ledgerSummary: summarizeLedger(ledger),
+    },
+  };
+};
 
 // ---------------------------------------------------------------------------
 // turnLoop — run one attempt to a terminal outcome.
@@ -227,10 +431,17 @@ export const turnLoop = async (
   channel: RunChannel,
   seed: Seed,
   deadlineMs: number,
+  signal?: AbortSignal,
 ): Promise<TurnLoopResult> => {
   const { config, store, repo, executor, planner, clock } = ports;
   const runId = packet.runId;
-  const babyModel = resolveBabyModel(config, packet.frontmatter.promoted);
+  // Run Baby's harness on Daddy's model from turn 1 — same task, stronger engine —
+  // when this run is already promoted. Two persisted sources: a promoted follow-up
+  // packet (the convergence cap escape hatch, in frontmatter) OR a stall-cap/
+  // review-reject promotion latched in meta and carried across the requeue.
+  // Otherwise we start on Baby's normal model and may still promote mid-loop below.
+  let promoted = packet.frontmatter.promoted || (store.readMetaIfExists(runId)?.promoted ?? false);
+  let babyModel = promoted ? promotedModelConfig(config) : babyModelConfig(config);
   const contextBudget = babyContextBudget(config);
 
   let next = seed;
@@ -238,6 +449,7 @@ export const turnLoop = async (
   let turn = 0;
   let ladder = 0;
   let sendFailures = 0;
+  let consecutiveContextOverflows = 0;
   // Previous turn's measured context — lets the dead-session guard tell a
   // recoverable overflow (real context was in flight) from a dead reseed.
   let priorContextTokens = 0;
@@ -258,6 +470,16 @@ export const turnLoop = async (
     journal(ports, runId, turn, { event: "ladder_step", count: ladder });
   };
 
+  // Surface a packet-level promotion the same way the mid-loop promotion is logged,
+  // so the tail shows this whole pass running on Daddy's model from the first turn.
+  if (promoted) {
+    journal(ports, runId, turn, {
+      event: "model_promoted",
+      from: `${config.baby.providerId}/${config.baby.modelId}`,
+      to: promotedModelLabel(config),
+    });
+  }
+
   for (;;) {
     turn += 1;
     channel.turn = turn;
@@ -275,6 +497,26 @@ export const turnLoop = async (
     });
 
     channel.turnComplete = false;
+    let stopRequested = false;
+    let stopResult: Promise<void> | undefined;
+    channel.stopTurn = (): Promise<void> => {
+      if (stopResult) {
+        return stopResult;
+      }
+      stopRequested = true;
+      stopResult = (async () => {
+        journal(ports, runId, turn, {
+          event: "driver_note",
+          note: `opencode abort requested for session ${sessionId}`,
+        });
+        await executor.abortSession(sessionId);
+        journal(ports, runId, turn, {
+          event: "driver_note",
+          note: `opencode abort completed for session ${sessionId}`,
+        });
+      })();
+      return stopResult;
+    };
 
     let response: TurnResponse;
     try {
@@ -283,54 +525,105 @@ export const turnLoop = async (
         next.text,
         babyModel,
         config.baby.timeoutMs,
+        signal,
       );
       sendFailures = 0;
     } catch (err) {
-      // A dead/timed-out turn is the crash path (R10): rotate to a fresh session
-      // via reconciliation (O6) once; a second consecutive failure parks wedged.
-      sendFailures += 1;
-      const detail = err instanceof Error ? err.message : String(err);
-      journal(ports, runId, turn, {
-        event: "driver_note",
-        note: `turn send failed (${sendFailures}): ${detail}`,
-      });
-      if (sendFailures >= 2) {
-        return finish({
-          status: "blocked",
-          reason: "wedged",
-          question:
-            "Two consecutive executor turns failed to complete (model/session failure). See journal.",
-        });
+      delete channel.stopTurn;
+      let bridgeStopCompleted = false;
+      if (stopRequested && channel.turnComplete && stopResult) {
+        try {
+          await stopResult;
+          bridgeStopCompleted = true;
+        } catch {
+          bridgeStopCompleted = false;
+        }
       }
-      sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, false);
-      const ledger = store.readLedger(runId);
-      const review = store.readReviewState(runId);
-      const decisions = store.readDecisions(runId);
-      next = {
-        name: "Q8",
-        text: q8ReconciliationSeed(
+      if (bridgeStopCompleted) {
+        response = {
+          info: {
+            id: `bridge-stop-${turn}`,
+            sessionID: sessionId,
+            error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+          },
+          parts: [],
+        };
+        sendFailures = 0;
+      } else {
+        // Signal-aborted by caller (supervisor.abortRun) — terminate the run
+        // immediately, NOT as a dead-session failure (the opencode adapter fires
+        // req.destroy with a plain Error, not AbortError).
+        if (signal?.aborted) {
+          return finish({ status: "aborted" });
+        }
+        // A dead/timed-out turn is the crash path (R10): rotate to a fresh session
+        // via reconciliation (O6) once; a second consecutive failure parks wedged.
+        sendFailures += 1;
+        const detail = err instanceof Error ? err.message : String(err);
+        journal(ports, runId, turn, {
+          event: "driver_note",
+          note: `turn send failed (${sendFailures}): ${detail}`,
+        });
+        if (sendFailures >= 2) {
+          return finish({
+            status: "blocked",
+            reason: "wedged",
+            question:
+              "Two consecutive executor turns failed to complete (model/session failure). See journal.",
+          });
+        }
+        const {
+          seed: reseed,
+          needsReconciliation,
+          handoffInjected,
+        } = reseedFromCheckpoint(ports, packet, worktree);
+        sessionId = await rotateSession(
+          ports,
           packet,
-          ledger,
-          review,
-          decisions,
-          repo.diffStat(worktree, packet.frontmatter.base),
-        ),
-      };
-      continue;
+          worktree,
+          sessionId,
+          turn,
+          needsReconciliation,
+        );
+        next = reseed;
+        if (handoffInjected) {
+          channel.awaitingVerification = true;
+        }
+        continue;
+      }
     }
+    delete channel.stopTurn;
 
     // --- gather --------------------------------------------------------------
     const turnParts = await collectTurnParts(ports, sessionId, lastSeenMessageId, response);
+    if (turnParts.listError) {
+      journal(ports, runId, turn, {
+        event: "turn_harvest_failed",
+        messageId: response.info.id,
+        detail: turnParts.listError,
+      });
+    }
     lastSeenMessageId = response.info.id;
     const obs = journalTurn(ports, runId, turn, response, turnParts);
     toolCallsSinceDecision += obs.toolCalls;
 
     const intents = channel.intents;
+
+    // Re-arm orphaned consult: pendingConsult is sticky (set by ask_planner,
+    // cleared by run_consult). But the consult-requested INTENT is per-turn.
+    // If a higher-precedence branch shadowed it on a prior turn (e.g.
+    // report-rejected, branch 4 > branch 5), the consult was never sent.
+    // Re-push it so the consult runs this turn — same pattern as the
+    // pendingFinalReview re-arm in the submit_report handler.
+    if (channel.pendingConsult && !intents.some((i) => i.kind === "consult-requested")) {
+      intents.push({ kind: "consult-requested" });
+    }
+
     const worktreeChanged = JSON.stringify(repo.readDiffStats(worktree)) !== diffBefore;
     const gate = store.readGateState(runId);
     const delta = diffDelta(gate.baselineDiffStats, repo.readDiffStats(worktree));
-    const gateReason = gate.latched
-      ? (gate.latchReason ?? "planner checkpoint required")
+    const reason = isLatched(gate)
+      ? (gateReason(gate) ?? "planner checkpoint required")
       : gateTriggerReason(gate, delta);
     const softNudgeDue =
       checkpointNudgeDue(gate, clock.now(), config.thresholds.checkpointNudgeMs) !== undefined;
@@ -340,11 +633,12 @@ export const turnLoop = async (
       watchdogPastDeadline: clock.now() >= deadlineMs,
       contextTokens: obs.contextTokens,
       contextBudget,
+      contextOverflow: obs.contextOverflow,
       contextTokensFloor: config.thresholds.contextTokensFloor,
       priorContextTokens,
       isFirstTurn: turn === 1,
-      gateDemandsCheckpoint: gateReason !== undefined,
-      gateReason,
+      gateDemandsCheckpoint: reason !== undefined,
+      gateReason: reason,
       hadAllowedToolCall: obs.hadAllowedToolCall,
       worktreeChanged,
       rotationPending,
@@ -362,6 +656,9 @@ export const turnLoop = async (
     // Carry this turn's context into the next iteration BEFORE any branch
     // continues/returns — the dead-session guard reads it as priorContextTokens.
     priorContextTokens = obs.contextTokens;
+    if (decision.kind !== "recover_overflow") {
+      consecutiveContextOverflows = 0;
+    }
 
     // --- execute -------------------------------------------------------------
     switch (decision.kind) {
@@ -410,9 +707,51 @@ export const turnLoop = async (
           continue;
         }
 
-        let plannerResponse;
+        let effectiveSubmission = submission;
+        let reconciliation = undefined as
+          | ReturnType<typeof buildReconciliationEvidence>
+          | undefined;
+        let reconciliationReused = false;
+        let plannerResponse: PlannerResponse;
         try {
-          plannerResponse = await planner.consult(submission);
+          await syncPendingMaxDecisionsToDaddy(ports, runId, worktree, turn);
+          if (submission.questionType === "reconciliation") {
+            reconciliation = buildDriverReconciliation(ports, packet, worktree);
+            const prior = lastAcceptedReconciliation(store.readDecisions(runId));
+            if (prior?.reconciliation?.fingerprint === reconciliation.fingerprint.value) {
+              reconciliationReused = true;
+              plannerResponse = {
+                status: prior.status as PlannerResponse["status"],
+                answer: prior.answer,
+                constraints: prior.constraints,
+                evidence_used: [
+                  `reused accepted reconciliation for unchanged fingerprint ${reconciliation.fingerprint.value}`,
+                ],
+                safe_next_action:
+                  prior.safeNextAction ?? "Continue from the accepted reconciliation.",
+                human_decision_needed: prior.humanDecisionNeeded ?? null,
+              };
+            } else {
+              effectiveSubmission = {
+                questionType: "reconciliation",
+                currentSlice: "reconciliation",
+                question:
+                  "Reconcile this resumed run from driver-built durable state and git evidence. Decide Baby's next safe action.",
+                approach:
+                  "Driver-owned reconciliation. Baby only triggered this request; do not treat Baby prose as state reconstruction.",
+                evidence: renderReconciliationEvidence(reconciliation),
+              };
+              plannerResponse = await planner.consult(
+                effectiveSubmission,
+                buildPlannerConsultContext(ports, runId),
+              );
+            }
+          } else {
+            plannerResponse = await planner.consult(
+              effectiveSubmission,
+              buildPlannerConsultContext(ports, runId),
+            );
+          }
         } catch (err) {
           const detail = err instanceof Error ? err.message : String(err);
           journal(ports, runId, turn, {
@@ -428,25 +767,43 @@ export const turnLoop = async (
         store.appendDecision(runId, {
           timestamp: clock.nowIso(),
           source: "daddy",
-          questionType: submission.questionType,
-          currentSlice: submission.currentSlice,
-          question: submission.question,
-          approach: submission.approach,
-          evidence: submission.evidence,
+          questionType: effectiveSubmission.questionType,
+          currentSlice: effectiveSubmission.currentSlice,
+          question: effectiveSubmission.question,
+          approach: effectiveSubmission.approach,
+          evidence: effectiveSubmission.evidence,
           status: plannerResponse.status,
           answer: plannerResponse.answer,
           constraints: plannerResponse.constraints,
+          evidenceUsed: plannerResponse.evidence_used,
+          safeNextAction: plannerResponse.safe_next_action,
+          humanDecisionNeeded: plannerResponse.human_decision_needed,
+          ...(reconciliation
+            ? {
+                reconciliation: {
+                  fingerprint: reconciliation.fingerprint.value,
+                  reused: reconciliationReused,
+                  deltaKind: reconciliation.deltaKind,
+                },
+              }
+            : {}),
         });
         journal(ports, runId, turn, {
           event: "planner_exchange",
-          questionType: submission.questionType,
-          question: submission.question,
+          questionType: effectiveSubmission.questionType,
+          question: effectiveSubmission.question,
           status: plannerResponse.status,
           answer: plannerResponse.answer,
           constraints: plannerResponse.constraints,
           evidence_used: plannerResponse.evidence_used,
           safe_next_action: plannerResponse.safe_next_action,
           human_decision_needed: plannerResponse.human_decision_needed,
+          ...(reconciliation
+            ? {
+                reconciliation_fingerprint: reconciliation.fingerprint.value,
+                reconciliation_reused: reconciliationReused,
+              }
+            : {}),
         });
         ladder = 0;
         toolCallsSinceDecision = 0;
@@ -464,6 +821,29 @@ export const turnLoop = async (
             store.writeMeta({ ...meta, reorientRetries: 0, updatedAt: clock.nowIso() });
           }
           next = { name: "Qp", text: qPlannerDecision(plannerResponse) };
+          continue;
+        }
+
+        if (plannerResponse.status === "promote_run") {
+          const meta = store.readMeta(runId);
+          if (promoted || meta.promoted) {
+            return finish({
+              status: "blocked",
+              reason: "human_decision",
+              question: `Daddy requested promote_run after this run was already promoted — needs Max. Requested next action: ${plannerResponse.safe_next_action}`,
+            });
+          }
+
+          promoted = true;
+          babyModel = promotedModelConfig(config);
+          store.writeMeta({ ...meta, promoted: true, updatedAt: clock.nowIso() });
+          journal(ports, runId, turn, {
+            event: "model_promoted",
+            from: `${config.baby.providerId}/${config.baby.modelId}`,
+            to: promotedModelLabel(config),
+          });
+          sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, false);
+          next = { name: "Qp-promote", text: qPlannerDecision(plannerResponse) };
           continue;
         }
 
@@ -489,14 +869,7 @@ export const turnLoop = async (
           const decisions = store.readDecisions(runId);
           next = {
             name: "Q9",
-            text: qReorientSeed(
-              packet,
-              ledger,
-              review,
-              decisions,
-              repo.diffStat(worktree, packet.frontmatter.base),
-              plannerResponse,
-            ),
+            text: qReorientSeed(packet, ledger, review, decisions, plannerResponse),
           };
           continue;
         }
@@ -524,10 +897,10 @@ export const turnLoop = async (
           continue;
         }
         const ledger = store.readLedger(runId);
-        const diff = repo.reviewableDiff(worktree, config.superdaddy.diffCapBytes);
         let review: FinalReview;
         try {
-          review = await planner.finalReview(packet, diff, ledger, report);
+          await syncPendingMaxDecisionsToDaddy(ports, runId, worktree, turn);
+          review = await planner.finalReview(packet, ledger, report);
         } catch (err) {
           const detail = err instanceof Error ? err.message : String(err);
           review = {
@@ -568,6 +941,53 @@ export const turnLoop = async (
           const problems = review.findings.map((f) => `final review: ${f}`);
           journal(ports, runId, turn, { event: "report_rejected", problems });
           if (channel.reportRejectionCount >= config.thresholds.reportRejectionParkAt) {
+            // Promotion: daddy rejected baby's report reportRejectionParkAt times.
+            // Swap to the promoteTo model (a bigger inference engine under baby's
+            // harness) and give baby one more set of retries. Ephemeral — the next
+            // run starts fresh on baby's normal model. Only fires once per run.
+            if (!promoted && config.thresholds.promoteAtCap) {
+              promoted = true;
+              babyModel = promotedModelConfig(config);
+              channel.reportRejectionCount = 0;
+              // Latch the promotion in meta so it survives any later requeue and a
+              // subsequent stall escalates instead of re-promoting (one per run).
+              const pm = store.readMetaIfExists(runId);
+              if (pm) {
+                store.writeMeta({ ...pm, promoted: true, updatedAt: clock.nowIso() });
+              }
+              journal(ports, runId, turn, {
+                event: "model_promoted",
+                from: `${config.baby.providerId}/${config.baby.modelId}`,
+                to: promotedModelLabel(config),
+              });
+              const {
+                seed: reseed,
+                needsReconciliation,
+                handoffInjected,
+              } = reseedFromCheckpoint(ports, packet, worktree);
+              sessionId = await rotateSession(
+                ports,
+                packet,
+                worktree,
+                sessionId,
+                turn,
+                needsReconciliation,
+              );
+              next = reseed;
+              if (handoffInjected) {
+                channel.awaitingVerification = true;
+              }
+              continue;
+            }
+            if (isCompleteFinalStepLedger(ledger) && !finalReviewWasUnavailable(review)) {
+              acceptedReport = report;
+              finalReview = review;
+              journal(ports, runId, turn, {
+                event: "driver_note",
+                note: `final review rejected ${channel.reportRejectionCount} times at the completed final step; sending to convergence instead of failing baby`,
+              });
+              return finish({ status: "ready_for_review" });
+            }
             return finish({
               status: "failed",
               note: `report rejected ${channel.reportRejectionCount} times; last problems: ${problems.join("; ")}`,
@@ -598,9 +1018,23 @@ export const turnLoop = async (
             contextTokens: obs.contextTokens,
           });
         }
-        const { seed: reseed, hasCheckpoint } = reseedFromCheckpoint(ports, packet, worktree);
-        sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, hasCheckpoint);
+        const {
+          seed: reseed,
+          needsReconciliation,
+          handoffInjected,
+        } = reseedFromCheckpoint(ports, packet, worktree);
+        sessionId = await rotateSession(
+          ports,
+          packet,
+          worktree,
+          sessionId,
+          turn,
+          needsReconciliation,
+        );
         next = reseed;
+        if (handoffInjected) {
+          channel.awaitingVerification = true;
+        }
         continue;
       }
 
@@ -610,17 +1044,56 @@ export const turnLoop = async (
         // to a fresh session that reseeds LOW — Q2 from the latest durable
         // checkpoint, else Q8 worktree reconciliation; the worktree (committed +
         // uncommitted work) survives the rotation, so progress is not lost. No
-        // ladder climb: the wall was the window, not a stall. If the reseed
-        // itself overflows, the next turn lands at 0 with priorContextTokens 0,
-        // which falls through to the dead-session park — so this cannot spin.
+        // ladder climb: the wall was the window, not a stall. Repeated explicit
+        // provider overflow stays in this path; watchdog/backstops own livelock.
         journal(ports, runId, turn, {
           event: "rotation",
           phase: "context_overflow",
           contextTokens: priorContextTokens,
         });
-        const { seed: reseed, hasCheckpoint } = reseedFromCheckpoint(ports, packet, worktree);
-        sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, hasCheckpoint);
+        consecutiveContextOverflows += 1;
+
+        if (consecutiveContextOverflows >= 2) {
+          if (!promoted && config.thresholds.promoteAtCap) {
+            promoted = true;
+            babyModel = promotedModelConfig(config);
+            consecutiveContextOverflows = 0;
+            const pm = store.readMetaIfExists(runId);
+            if (pm) {
+              store.writeMeta({ ...pm, promoted: true, updatedAt: clock.nowIso() });
+            }
+            journal(ports, runId, turn, {
+              event: "model_promoted",
+              from: `${config.baby.providerId}/${config.baby.modelId}`,
+              to: promotedModelLabel(config),
+            });
+          } else {
+            return finish({
+              status: "blocked",
+              reason: "wedged",
+              question: promoted
+                ? "Two consecutive context-overflow recoveries occurred on the promoted model. The packet is still too large for the strong model; needs Max."
+                : "Two consecutive context-overflow recoveries occurred and promotion is disabled. The packet is too large for Baby; needs Max.",
+            });
+          }
+        }
+        const {
+          seed: reseed,
+          needsReconciliation,
+          handoffInjected,
+        } = reseedFromCheckpoint(ports, packet, worktree);
+        sessionId = await rotateSession(
+          ports,
+          packet,
+          worktree,
+          sessionId,
+          turn,
+          needsReconciliation,
+        );
         next = reseed;
+        if (handoffInjected) {
+          channel.awaitingVerification = true;
+        }
         continue;
       }
 
@@ -642,8 +1115,8 @@ export const turnLoop = async (
       case "demand_gate_checkpoint": {
         climb();
         const g = store.readGateState(runId);
-        if (!g.latched) {
-          store.writeGateState(runId, { ...g, latched: true, latchReason: decision.reason });
+        if (!isLatched(g)) {
+          store.writeGateState(runId, relatchGate(g, decision.reason));
           journal(ports, runId, turn, { event: "gate_latched", reason: decision.reason });
         }
         next = {
@@ -662,9 +1135,8 @@ export const turnLoop = async (
 
       case "continue": {
         ladder = 0;
-        // Volume reminder VISIBILITY (§10): the plugin already shouts the same
-        // message per tool call; journal a visible event when work crosses the
-        // interval so Max sees it in the tail.
+        // Volume reminder visibility (§10): journal a visible event when work
+        // crosses the interval so it appears in the tail.
         const volumeReason = volumeCheckpointReason(
           toolCallsSinceDecision,
           diffDelta(gate.baselineDiffStats, repo.readDiffStats(worktree)),

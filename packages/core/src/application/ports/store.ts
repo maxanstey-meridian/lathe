@@ -13,6 +13,7 @@ import type {
   Checkpoint,
   GateState,
   ActiveRun,
+  ActiveConvergence,
   OutcomeLedger,
   Packet,
   Campaign,
@@ -24,8 +25,7 @@ import type { VerificationResult } from "./verify.js";
 // Queue entry — inline; no domain function consumes it.
 export type QueueEntry = { runId: string; admittedAt: string };
 
-// Convergence log entry — shape from reference/src/converge.ts:331-346.
-// A discriminated union so an UNREACHABLE attempt (transport drop, no verdict)
+// Convergence log entry — a discriminated union so an UNREACHABLE attempt (transport drop, no verdict)
 // is logged honestly instead of forging an escalate SuperReview. The shared head
 // (at/runId/campaignId/pass/maxPasses/verification) is on both branches.
 type ConvergenceLogHead = {
@@ -95,14 +95,15 @@ export type Store = {
   appendConvergence(runId: string, entry: ConvergenceLogEntry): void;
   readConvergence(runId: string): ConvergenceLogEntry[];
 
-  // Packet freeze
-  freezePacket(runId: string, raw: string): void;
-  readFrozenPacket(runId: string): string;
-
   // Active run pointer
   readActiveRun(): ActiveRun | undefined;
   writeActiveRun(run: ActiveRun): void;
   clearActiveRun(): void;
+
+  // Active convergence pointer
+  readActiveConvergence(): ActiveConvergence | undefined;
+  writeActiveConvergence(convergence: ActiveConvergence): void;
+  clearActiveConvergence(): void;
 
   // Campaign
   readCampaign(campaignId: string): Campaign | undefined;
@@ -129,4 +130,13 @@ export type Store = {
   // Journal (append-only event log, CONTRACT §3)
   appendJournal(runId: string, event: JournalEvent): void;
   readJournal(runId: string): JournalEvent[];
+
+  // Global resumable journal — cross-run, gap-free, sorted by seq.
+  // The daemon's /events SSE spine consumes this for a single resuming stream.
+  readJournalSince(seq: number): { seq: number; runId: string; event: JournalEvent }[];
+
+  // Fresh-start cleanup: remove checkpoint files, decisions, review state
+  // that a prior session wrote — a fresh attempt must not inherit resume-only
+  // durable state for a later unchanged-packet pickup to mistake for in-progress.
+  clearResumeArtifacts(runId: string): void;
 };

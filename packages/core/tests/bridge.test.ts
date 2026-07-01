@@ -1,16 +1,16 @@
 // Tests for the MCP bridge tool handlers (CONTRACT §9, §8 O2/O4).
-// Uses real StoreAdapter with temp dirs — matches store.test.ts pattern.
+// Uses real SqliteStoreAdapter with temp dirs — matches store.test.ts pattern.
 
 import { execSync } from "child_process";
 import { equal, strictEqual, ok, deepStrictEqual, match, rejects } from "node:assert";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import type { Clock } from "../src/application/ports/clock.js";
 import type { Repo } from "../src/application/ports/repo.js";
 import { makePaths } from "../src/config/paths.js";
-import { OutcomeStatus } from "../src/domain/outcomes.js";
 import type { Packet } from "../src/domain/packet.js";
 import {
   buildMcpServer,
@@ -22,14 +22,7 @@ import {
   startBridgeServer,
   listenBridge,
 } from "../src/infrastructure/bridge.js";
-import type {
-  AskPlannerInput,
-  UpdateOutcomesInput,
-  WriteCheckpointInput,
-  SubmitReportInput,
-  GetDecisionsInput,
-} from "../src/infrastructure/bridge.js";
-import { StoreAdapter } from "../src/infrastructure/store.js";
+import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 
 // ===========================================================================
 // Test helpers
@@ -52,6 +45,13 @@ const fakeRepo = (): Repo => ({
   readDiffStats: () => ({}),
   reviewableDiff: () => "",
   reviewableDiffAgainst: () => "",
+  reconciliationGitState: () => ({
+    head: "head",
+    status: [],
+    diffHash: "diff",
+    untracked: [],
+    changedFiles: [],
+  }),
   fetchBranchFromClone: () => {
     throw new Error("unimplemented");
   },
@@ -70,6 +70,7 @@ const makeTestPacket = (overrides?: Record<string, unknown>): Packet => {
   const raw = `---
 repo: /tmp/test-repo
 base: main
+compare_commit: main
 summary: test packet
 outcomes:
   - id: test-outcome
@@ -85,6 +86,7 @@ body
   const fm = {
     repo: "/tmp/test-repo",
     base: "main",
+    compare_commit: "main",
     summary: "test packet",
     outcomes: [{ id: "test-outcome", description: "A test outcome" }],
     expected_surface: ["src/index.ts"],
@@ -105,18 +107,26 @@ const cleanTemp = async (dir: string) => {
   }
 };
 
-const makeRef = (overrides?: { packet?: Packet }) => {
+const makeRef = (overrides?: {
+  packet?: Packet;
+  awaitingVerification?: boolean;
+  stopTurn?: () => Promise<void>;
+}) => {
   const tmp = join(tmpdir(), `bridge-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  mkdirSync(tmp, { recursive: true });
   const clock = fixedClock();
   const packet = overrides?.packet ?? makeTestPacket();
   const paths = makePaths(tmp);
-  const store = StoreAdapter.create(paths, fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), clock);
   const ctx = {
     intents: [] as any[],
     pendingConsult: null,
     pendingFinalReview: null,
     reportRejectionCount: 0,
     checkpointBounceCount: 0,
+    turnComplete: false,
+    ...(overrides?.stopTurn ? { stopTurn: overrides.stopTurn } : {}),
+    awaitingVerification: overrides?.awaitingVerification ?? false,
     config: {
       thresholds: {
         checkpointToolCalls: 50,
@@ -136,12 +146,27 @@ const makeRef = (overrides?: { packet?: Packet }) => {
         "task contracts",
         "dotnet-rivet",
       ],
+      daddy: {
+        providerId: "test",
+        modelId: "test",
+        agent: "test",
+        timeoutMs: 300000,
+        transportRetries: 3,
+      },
     },
     paths,
     worktree: tmp,
     packet,
     store,
     turn: 1,
+    executor: {
+      createSession: async () => "session",
+      sendMessage: async () => ({ info: { tokens: {} }, parts: [{ type: "text", text: "ok" }] }),
+      listMessages: async () => [],
+      abortSession: async () => {},
+      deleteSession: async () => {},
+    },
+    verifyModel: { providerId: "test", modelId: "test", agent: "test" },
   };
   const ref = { current: ctx };
   // Initialize ledger and gate state
@@ -159,9 +184,7 @@ const makeRef = (overrides?: { packet?: Packet }) => {
   store.writeLedger(ledger);
   store.writeGateState(packet.runId, {
     runId: packet.runId,
-    latched: false,
-    firstEditApproved: false,
-    reconciliationRequired: false,
+    phase: { phase: "initial" },
     expectedGlobs: ["src/**"],
     suspiciousGlobs: [],
     baselineDiffStats: {},
@@ -191,7 +214,12 @@ test("buildMcpServer: exposes five tools", () => {
 // ===========================================================================
 
 test("ask_planner: records consult-requested intent on valid call", async () => {
-  const { ref, tmp } = makeRef();
+  let stopCalls = 0;
+  const { ref, tmp } = makeRef({
+    stopTurn: async () => {
+      stopCalls += 1;
+    },
+  });
   const result = await handleAskPlanner(ref, {
     questionType: "repo_procedure",
     currentSlice: "tests/bridge.test.ts",
@@ -204,6 +232,8 @@ test("ask_planner: records consult-requested intent on valid call", async () => 
   equal(body.status, "submitted");
   strictEqual(ref.current.intents.length, 1);
   equal(ref.current.intents[0].kind, "consult-requested");
+  strictEqual(ref.current.turnComplete, true);
+  strictEqual(stopCalls, 1);
   deepStrictEqual(ref.current.pendingConsult, {
     questionType: "repo_procedure",
     currentSlice: "tests/bridge.test.ts",
@@ -211,8 +241,7 @@ test("ask_planner: records consult-requested intent on valid call", async () => 
     approach: "I'll follow the store.test.ts pattern.",
     evidence: ["tests/store.test.ts"],
   });
-  // pendingConsult is cleared after handling — actually it's NOT cleared,
-  // the driver drains it on the next turn. So it should still be set.
+  // The driver drains pendingConsult on the next turn.
   ok(ref.current.pendingConsult);
   await cleanTemp(tmp);
 });
@@ -315,6 +344,22 @@ test("ask_planner: rejects empty evidence array", async () => {
   const body = JSON.parse(result.content[0].text);
   ok(body.problems.includes("evidence is empty"));
   strictEqual(ref.current.intents.length, 0);
+  await cleanTemp(tmp);
+});
+
+test("ask_planner: accepts minimal reconciliation trigger without evidence", async () => {
+  const { ref, tmp } = makeRef();
+  const result = await handleAskPlanner(ref, {
+    questionType: "reconciliation",
+    currentSlice: "reconciliation",
+    question: "Please reconcile this resumed run from driver-built evidence.",
+    approach: " ",
+    evidence: [],
+  });
+  equal(result.isError, false);
+  strictEqual(ref.current.intents.length, 1);
+  equal(ref.current.pendingConsult?.questionType, "reconciliation");
+  deepStrictEqual(ref.current.pendingConsult?.evidence, []);
   await cleanTemp(tmp);
 });
 
@@ -507,14 +552,19 @@ test("submit_report: failed records report-accepted intent", async () => {
 // ===========================================================================
 
 test("submit_report: sets final-review-requested intent when ready_for_review succeeds", async () => {
-  const { ref, tmp } = makeRef();
-  // Mark outcome done, gate clear (already latched=false by default), verification green (echo ok passes)
+  let stopCalls = 0;
+  const { ref, tmp } = makeRef({
+    stopTurn: async () => {
+      stopCalls += 1;
+    },
+  });
+  // Mark outcome done, gate clear (initial phase by default), verification green (echo ok passes)
   await handleUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
   // Verify gate is clear
   const gateState = ref.current.store.readGateState(ref.current.packet.runId);
-  equal(gateState.latched, false);
+  equal(gateState.phase.phase, "initial");
   const result = await handleSubmitReport(ref, {
     status: "ready_for_review",
     summary: "All done.",
@@ -526,6 +576,35 @@ test("submit_report: sets final-review-requested intent when ready_for_review su
   equal(ref.current.intents[0].kind, "outcomes-updated");
   equal(ref.current.intents[ref.current.intents.length - 1].kind, "final-review-requested");
   strictEqual(ref.current.pendingFinalReview !== null, true);
+  strictEqual(ref.current.turnComplete, true);
+  strictEqual(stopCalls, 1);
+  await cleanTemp(tmp);
+});
+
+test("submit_report: ready_for_review is not blocked by a latched edit gate", async () => {
+  const { ref, tmp, clock } = makeRef();
+  ref.current.store.writeGateState(ref.current.packet.runId, {
+    runId: ref.current.packet.runId,
+    phase: { phase: "first-edit-latched", reason: "first edit of the new session" },
+    expectedGlobs: ["src/**"],
+    suspiciousGlobs: [],
+    baselineDiffStats: {},
+    updatedAt: clock.nowIso(),
+    mutationCommandPatterns: [],
+  });
+  await handleUpdateOutcomes(ref, {
+    outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
+  });
+
+  const result = await handleSubmitReport(ref, {
+    status: "ready_for_review",
+    summary: "All done.",
+  });
+
+  equal(result.isError, false);
+  const body = JSON.parse(result.content[0].text);
+  equal(body.status, "review_pending");
+  equal(ref.current.intents[ref.current.intents.length - 1].kind, "final-review-requested");
   await cleanTemp(tmp);
 });
 
@@ -709,7 +788,7 @@ const seedWorktreeGit = async (worktree: string, addedFile: string) => {
 };
 
 test("submit_report: pass-2 naming a real changed test file → floor clean", async () => {
-  const { ref, tmp, clock } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
+  const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
   await handleUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
@@ -773,10 +852,7 @@ test("submit_report: named test in COMMITTED work (diff HEAD clean) → floor cl
 });
 
 test("submit_report: pass-2 with non-empty justification and no test → floor clean", async () => {
-  // For this test we need the worktree to have a git repo with some changed
-  // test file (to pass anti-fabrication: no tests to check) and pass >= 2.
-  // Actually, if no tests are named, there's nothing to anti-fabricate-check.
-  // We just need justification to be present.
+  // With no named tests, anti-fabrication only requires a justification.
   const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
   await handleUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
@@ -934,10 +1010,7 @@ test("get_decisions: clears gate on accepted decision newer than lastAcceptedDec
   // Overwrite with a dirty gate so post-clear assertions are non-vacuous
   ref.current.store.writeGateState(ref.current.packet.runId, {
     runId: ref.current.packet.runId,
-    latched: true,
-    latchReason: "work in progress",
-    firstEditApproved: false,
-    reconciliationRequired: true,
+    phase: { phase: "reconciliation-latched", reason: "work in progress" },
     expectedGlobs: ["src/**"],
     suspiciousGlobs: [],
     // Seed a stale sentinel so the post-clear value is provably a fresh read,
@@ -960,10 +1033,7 @@ test("get_decisions: clears gate on accepted decision newer than lastAcceptedDec
   });
   await handleGetDecisions(ref, {});
   const gateState = ref.current.store.readGateState(ref.current.packet.runId);
-  equal(gateState.latched, false);
-  equal(gateState.latchReason, undefined);
-  equal(gateState.firstEditApproved, true);
-  equal(gateState.reconciliationRequired, false);
+  strictEqual(gateState.phase.phase, "cleared");
   ok(
     gateState.lastAcceptedDecisionAt &&
       gateState.lastAcceptedDecisionAt > "2025-01-01T00:00:00.000Z",
@@ -979,10 +1049,7 @@ test("get_decisions: gate unchanged for non-accepted decision", async () => {
   const { ref, tmp, clock } = makeRef();
   ref.current.store.writeGateState(ref.current.packet.runId, {
     runId: ref.current.packet.runId,
-    latched: true,
-    latchReason: "work in progress",
-    firstEditApproved: false,
-    reconciliationRequired: true,
+    phase: { phase: "reconciliation-latched", reason: "work in progress" },
     expectedGlobs: ["src/**"],
     suspiciousGlobs: [],
     baselineDiffStats: {},
@@ -1002,10 +1069,8 @@ test("get_decisions: gate unchanged for non-accepted decision", async () => {
   });
   await handleGetDecisions(ref, {});
   const gateState = ref.current.store.readGateState(ref.current.packet.runId);
-  equal(gateState.latched, true);
-  strictEqual(gateState.latchReason, "work in progress");
-  equal(gateState.firstEditApproved, false);
-  equal(gateState.reconciliationRequired, true);
+  strictEqual(gateState.phase.phase, "reconciliation-latched");
+  strictEqual(gateState.phase.reason, "work in progress");
   strictEqual(gateState.lastAcceptedDecisionAt, "2025-01-01T00:00:00.000Z");
   await cleanTemp(tmp);
 });
@@ -1014,10 +1079,7 @@ test("get_decisions: gate unchanged for stale accepted decision", async () => {
   const { ref, tmp, clock } = makeRef();
   ref.current.store.writeGateState(ref.current.packet.runId, {
     runId: ref.current.packet.runId,
-    latched: true,
-    latchReason: "work in progress",
-    firstEditApproved: false,
-    reconciliationRequired: true,
+    phase: { phase: "reconciliation-latched", reason: "work in progress" },
     expectedGlobs: ["src/**"],
     suspiciousGlobs: [],
     baselineDiffStats: {},
@@ -1037,10 +1099,8 @@ test("get_decisions: gate unchanged for stale accepted decision", async () => {
   });
   await handleGetDecisions(ref, {});
   const gateState = ref.current.store.readGateState(ref.current.packet.runId);
-  equal(gateState.latched, true);
-  strictEqual(gateState.latchReason, "work in progress");
-  equal(gateState.firstEditApproved, false);
-  equal(gateState.reconciliationRequired, true);
+  strictEqual(gateState.phase.phase, "reconciliation-latched");
+  strictEqual(gateState.phase.reason, "work in progress");
   strictEqual(gateState.lastAcceptedDecisionAt, "2027-01-01T00:00:00.000Z");
   await cleanTemp(tmp);
 });
@@ -1050,7 +1110,7 @@ test("get_decisions: gate unchanged for stale accepted decision", async () => {
 // ===========================================================================
 
 test("update_outcomes: ledger persists through store read", async () => {
-  const { ref, tmp, clock } = makeRef();
+  const { ref, tmp } = makeRef();
   await handleUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
@@ -1084,4 +1144,70 @@ test("listenBridge: second bind on same port fails with one-driver error", async
     server1.close();
     server2.close();
   }
+});
+
+// ===========================================================================
+// Verification gate: blocks all non-verify_handoff bridge handlers
+// when awaitingVerification is true.
+// ===========================================================================
+
+test("verification gate: ask_planner blocked when awaitingVerification is true", async () => {
+  const { ref, tmp } = makeRef({ awaitingVerification: true });
+  const result = await handleAskPlanner(ref, {
+    questionType: "other",
+    currentSlice: "src/foo.ts",
+    question: "what is x?",
+    approach: "doing stuff",
+    evidence: ["src/foo.ts"],
+  });
+  equal(result.isError, true);
+  const body = JSON.parse(result.content[0].text);
+  match(body.error, /Handoff verification required/);
+  strictEqual(ref.current.intents.length, 0);
+  await cleanTemp(tmp);
+});
+
+test("verification gate: update_outcomes blocked when awaitingVerification is true", async () => {
+  const { ref, tmp } = makeRef({ awaitingVerification: true });
+  const result = await handleUpdateOutcomes(ref, {
+    outcomes: [{ id: "test-outcome", status: "in_progress" }],
+  });
+  equal(result.isError, true);
+  const body = JSON.parse(result.content[0].text);
+  match(body.error, /Handoff verification required/);
+  strictEqual(ref.current.intents.length, 0);
+  await cleanTemp(tmp);
+});
+
+test("verification gate: write_checkpoint blocked when awaitingVerification is true", async () => {
+  const { ref, tmp } = makeRef({ awaitingVerification: true });
+  const result = await handleWriteCheckpoint(ref, { summary: "halfway" });
+  equal(result.isError, true);
+  const body = JSON.parse(result.content[0].text);
+  match(body.error, /Handoff verification required/);
+  strictEqual(ref.current.intents.length, 0);
+  await cleanTemp(tmp);
+});
+
+test("verification gate: submit_report blocked when awaitingVerification is true", async () => {
+  const { ref, tmp } = makeRef({ awaitingVerification: true });
+  const result = await handleSubmitReport(ref, {
+    status: "ready_for_review",
+    summary: "All done.",
+  });
+  equal(result.isError, true);
+  const body = JSON.parse(result.content[0].text);
+  match(body.error, /Handoff verification required/);
+  strictEqual(ref.current.intents.length, 0);
+  await cleanTemp(tmp);
+});
+
+test("verification gate: get_decisions blocked when awaitingVerification is true", async () => {
+  const { ref, tmp } = makeRef({ awaitingVerification: true });
+  const result = await handleGetDecisions(ref, {});
+  equal(result.isError, true);
+  const body = JSON.parse(result.content[0].text);
+  match(body.error, /Handoff verification required/);
+  strictEqual(ref.current.intents.length, 0);
+  await cleanTemp(tmp);
 });

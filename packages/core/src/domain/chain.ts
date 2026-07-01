@@ -2,7 +2,8 @@ import { basename } from "path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { type Campaign } from "./campaign.js";
-import { PacketFrontmatter, FRONTMATTER_RE } from "./packet.js";
+import { PacketFrontmatter, extractFrontmatter } from "./packet.js";
+import { type RunMeta } from "./run.js";
 
 // ---------------------------------------------------------------------------
 // Inter-campaign chaining (CONTRACT §19). Pure helpers — no I/O.
@@ -32,13 +33,13 @@ export const parseStaged = (raw: string, fileName: string): StageParse => {
       problems: [`packet filename must be YYYYMMDD-HHMMSS-<slug>.md, got: ${fileName}`],
     };
   }
-  const match = FRONTMATTER_RE.exec(raw);
-  if (!match || match[1] === undefined) {
+  const parts = extractFrontmatter(raw);
+  if (!parts) {
     return { ok: false, problems: ["no YAML frontmatter block (--- ... ---) at top of packet"] };
   }
   let yamlValue: unknown;
   try {
-    yamlValue = parseYaml(match[1]);
+    yamlValue = parseYaml(parts.yaml);
   } catch (err) {
     return {
       ok: false,
@@ -61,7 +62,7 @@ export const parseStaged = (raw: string, fileName: string): StageParse => {
 };
 
 // The converged tip of a campaign is the run whose pass `accept`ed — the branch
-// `meridian accept` would merge. A super-daddy repair pass can be the tip, so a
+// `lathe accept` would merge. A super-daddy repair pass can be the tip, so a
 // child bases off the LATEST accepted pass, not necessarily parent_run_id itself.
 export const convergedTip = (campaign: Campaign): string | undefined =>
   [...campaign.passes].reverse().find((p) => p.verdict === "accept")?.runId;
@@ -103,3 +104,26 @@ export const decidePromotion = (
   }
   return { action: "promote-with-base", tipRunId: tip, base: branchOf(tip) };
 };
+
+// How a staged child actually bases off its converged tip, given the tip's LIVE
+// run meta. decidePromotion is pure over the campaign and so can only name the
+// tip's nominal branch (meridian/<tip>, legacy prefix); whether that branch still exists depends
+// on the tip's status, which is I/O. This refines the decision with that fact:
+//
+//   - tip NOT yet accepted: the campaign converged but `lathe accept` hasn't run,
+//     so the tip's work lives only in its self-rooted clone sandbox. Base off the
+//     tip branch and fetch it from the clone first (fetchFromClone = clone path).
+//   - tip ALREADY accepted: accept merged it into `acceptedInto` and destroyed the
+//     clone + the meridian/<tip> branch (legacy prefix). The canonical repo already has the work
+//     on that branch, so base off it and do NOT fetch (fetchFromClone undefined).
+//     Fall back to the run's own base for metas predating the acceptedInto field.
+//
+// This is the fix for the strand: without it, an accepted tip still routes through
+// the fetch path, the fetch throws every sweep (branch + clone gone), and the
+// child stays staged forever.
+export type ChildBase = { base: string; fetchFromClone: string | undefined };
+
+export const childBaseFromTip = (tip: RunMeta): ChildBase =>
+  tip.status === "accepted"
+    ? { base: tip.acceptedInto ?? tip.base, fetchFromClone: undefined }
+    : { base: branchOf(tip.runId), fetchFromClone: tip.worktree };

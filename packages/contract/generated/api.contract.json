@@ -1,6 +1,20 @@
 {
   "types": [
     {
+      "name": "AnswerRunRequest",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "answer",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
       "name": "ConfigDto",
       "typeParameters": [],
       "properties": [
@@ -172,6 +186,88 @@
       ]
     },
     {
+      "name": "ReviewDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "runs",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "ReviewRunDto"
+            }
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "ReviewRunDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "status",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "outcomes",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "branch",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "repo",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "base",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "blockedQuestion",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
       "name": "RunDetailDto",
       "typeParameters": [],
       "properties": [
@@ -319,6 +415,36 @@
             }
           },
           "optional": false
+        },
+        {
+          "name": "outcomes",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "blockedReason",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "blockedQuestion",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
         }
       ]
     },
@@ -415,6 +541,515 @@
           "optional": false
         }
       ]
+    },
+    {
+      "name": "StatusActiveRunDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "outcomes",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "gateLatched",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "recentEvents",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "inlineObject",
+              "properties": [
+                {
+                  "name": "at",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "string"
+                  }
+                },
+                {
+                  "name": "event",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "string"
+                  }
+                }
+              ]
+            }
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "StatusCampaignDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "campaignId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "status",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "pass",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "maxPasses",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "originalIntent",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "StatusDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "activeRun",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "ref",
+              "name": "StatusActiveRunDto"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "queued",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "StatusQueuedRunDto"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "parked",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "StatusParkedRunDto"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "campaigns",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "StatusCampaignDto"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "staged",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "StatusStagedRunDto"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "review",
+          "type": {
+            "kind": "ref",
+            "name": "StatusReviewSummaryDto"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "StatusParkedRunDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "blockedReason",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "blockedQuestion",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "stallRetries",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "StatusQueuedRunDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "StatusReviewSummaryDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "readyForReview",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "failed",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "StatusStagedRunDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "parentRunId",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "TailJournalLineDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "seq",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "at",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "line",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "event",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "driver",
+          "type": {
+            "kind": "primitive",
+            "type": "boolean"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "TailModelsDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "baby",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "promoted",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "daddy",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "super",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "TailSnapshotDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "summary",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "status",
+          "type": {
+            "kind": "ref",
+            "name": "TailRunStatus"
+          },
+          "optional": false
+        },
+        {
+          "name": "startedAt",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "models",
+          "type": {
+            "kind": "ref",
+            "name": "TailModelsDto"
+          },
+          "optional": false
+        },
+        {
+          "name": "promoted",
+          "type": {
+            "kind": "primitive",
+            "type": "boolean"
+          },
+          "optional": false
+        },
+        {
+          "name": "budget",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "worktree",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "outcomesDone",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "outcomesTotal",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "gateReason",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "contextTokens",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "turn",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "rotations",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "journal",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "TailJournalLineDto"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "lastSeq",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        }
+      ]
     }
   ],
   "enums": [
@@ -426,9 +1061,21 @@
         "paused",
         "converged",
         "accepted",
-        "rejected",
         "aborted",
         "failed"
+      ]
+    },
+    {
+      "name": "TailRunStatus",
+      "values": [
+        "queued",
+        "running",
+        "interrupted",
+        "ready_for_review",
+        "blocked",
+        "failed",
+        "accepted",
+        "aborted"
       ]
     }
   ],
@@ -556,6 +1203,46 @@
       ]
     },
     {
+      "name": "getStatus",
+      "httpMethod": "GET",
+      "routeTemplate": "/status",
+      "params": [],
+      "returnType": {
+        "kind": "ref",
+        "name": "StatusDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "ref",
+            "name": "StatusDto"
+          }
+        }
+      ]
+    },
+    {
+      "name": "getReview",
+      "httpMethod": "GET",
+      "routeTemplate": "/review",
+      "params": [],
+      "returnType": {
+        "kind": "ref",
+        "name": "ReviewDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "ref",
+            "name": "ReviewDto"
+          }
+        }
+      ]
+    },
+    {
       "name": "abortRun",
       "httpMethod": "POST",
       "routeTemplate": "/runs/{runId}/abort",
@@ -567,6 +1254,45 @@
             "type": "string"
           },
           "source": "route",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "ref",
+        "name": "RunSummaryDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 201,
+          "dataType": {
+            "kind": "ref",
+            "name": "RunSummaryDto"
+          }
+        }
+      ]
+    },
+    {
+      "name": "answerRun",
+      "httpMethod": "POST",
+      "routeTemplate": "/runs/{runId}/answer",
+      "params": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "source": "route",
+          "isOptional": false
+        },
+        {
+          "name": "body",
+          "type": {
+            "kind": "ref",
+            "name": "AnswerRunRequest"
+          },
+          "source": "body",
           "isOptional": false
         }
       ],
@@ -670,6 +1396,62 @@
           "dataType": {
             "kind": "ref",
             "name": "ConfigDto"
+          }
+        }
+      ]
+    },
+    {
+      "name": "getActiveTail",
+      "httpMethod": "GET",
+      "routeTemplate": "/tail/active",
+      "params": [],
+      "returnType": {
+        "kind": "nullable",
+        "inner": {
+          "kind": "ref",
+          "name": "TailSnapshotDto"
+        }
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "ref",
+              "name": "TailSnapshotDto"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "getTail",
+      "httpMethod": "GET",
+      "routeTemplate": "/tail/{runId}",
+      "params": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "source": "route",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "ref",
+        "name": "TailSnapshotDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "ref",
+            "name": "TailSnapshotDto"
           }
         }
       ]

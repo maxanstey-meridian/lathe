@@ -14,13 +14,16 @@
 // ---------------------------------------------------------------------------
 
 import type { Config } from "../../config/schemas.js";
-import { decideStallRecovery } from "../../domain/liveness.js";
+import { decideStallRecovery, decideCrashRecovery } from "../../domain/liveness.js";
+import type { StallRecoveryDecision } from "../../domain/liveness.js";
 import type { BridgePort } from "../ports/bridge.js";
 import type { Caffeinate } from "../ports/caffeinate.js";
 import type { Clock } from "../ports/clock.js";
 import type { Repo } from "../ports/repo.js";
 import type { Store } from "../ports/store.js";
 import { promoteStaged } from "./chain-promotion.js";
+import { journal } from "./run-runtime.js";
+import { promotedModelLabel } from "./turn-loop.js";
 
 // ---------------------------------------------------------------------------
 // Callback interfaces — owned by the caller (future CLI entry point or
@@ -33,6 +36,7 @@ export type ExecuteRunCallback<Ref = unknown> = (
   meta: { repo: string; worktree: string; base: string; branch: string },
   ref: Ref,
   clock: Clock,
+  signal?: AbortSignal,
 ) => Promise<void>;
 
 export type ConvergeCallback = (runId: string) => Promise<void>;
@@ -42,6 +46,13 @@ export type WaitForWorkCallback = (signal: AbortSignal) => Promise<void>;
 // ---------------------------------------------------------------------------
 // Entry point — the always-on driver loop
 // ---------------------------------------------------------------------------
+
+export type RunLoopSeams = {
+  /** If present, wired to waitForWork and used as loop-exit condition. runLoop does NOT register a SIGINT handler. */
+  readonly stopSignal?: AbortSignal;
+  /** Per-run AbortController map keyed by runId. runLoop creates controllers and populates it; supervisor reads and fires them. */
+  readonly abortMap?: Map<string, AbortController>;
+};
 
 export const runLoop = async <Ref>(
   config: Config,
@@ -53,10 +64,11 @@ export const runLoop = async <Ref>(
   executeRun: ExecuteRunCallback<Ref>,
   convergeStep: ConvergeCallback,
   waitForWork: WaitForWorkCallback,
+  seams?: RunLoopSeams,
 ): Promise<void> => {
   // R1: bind the bridge port FIRST — the single-driver lock.
   // Must resolve before any call to store.readMetaIfExists, store.listRunIds,
-  // store.listQueue, or any other state read/write.
+  // or any other state read/write.
   const ref = await bridge.bind();
 
   // T3: hold the power assertion for the lifetime of the loop.
@@ -64,23 +76,44 @@ export const runLoop = async <Ref>(
 
   // Recovery sweeps — behind the lock, before draining.
   recoverOrphanedRuns(store, repo, clock);
-  recoverStalledRunsAtStartup(store, config.thresholds.maxStallRetries, clock);
+  recoverStalledRunsAtStartup(
+    store,
+    config.thresholds.maxStallRetries,
+    clock,
+    config.thresholds.promoteAtCap,
+  );
 
   // Chain promotion at startup.
   promoteStaged(store, repo);
 
   // --- Main loop ---
+  const abortMap = seams?.abortMap ?? new Map<string, AbortController>();
+
   let stopRequested = false;
   let currentAbort: AbortController | undefined;
+  let onSigint: (() => void) | undefined;
 
-  const onSigint = () => {
-    if (stopRequested) {
-      process.exit(130);
-    }
-    stopRequested = true;
-    currentAbort?.abort();
-  };
-  process.on("SIGINT" as NodeJS.Signals, onSigint);
+  // When an external stopSignal is provided (supervisor-owned), do NOT register
+  // our own SIGINT handler — the supervisor owns process-signal handling.
+  // Normalise both paths to stopRequested as the single loop-exit flag.
+  if (seams?.stopSignal) {
+    seams.stopSignal.addEventListener(
+      "abort",
+      () => {
+        stopRequested = true;
+      },
+      { once: true },
+    );
+  } else {
+    onSigint = () => {
+      if (stopRequested) {
+        process.exit(130);
+      }
+      stopRequested = true;
+      currentAbort?.abort();
+    };
+    process.on("SIGINT" as NodeJS.Signals, onSigint);
+  }
 
   try {
     while (!stopRequested) {
@@ -100,6 +133,8 @@ export const runLoop = async <Ref>(
           store.writeMeta({ ...meta, status: "running" as const, updatedAt: clock.nowIso() });
 
           try {
+            const runAbort = new AbortController();
+            abortMap.set(runId, runAbort);
             await executeRun(
               runId,
               {
@@ -110,7 +145,9 @@ export const runLoop = async <Ref>(
               },
               ref,
               clock,
+              runAbort.signal,
             );
+            abortMap.delete(runId);
           } catch (err: unknown) {
             // ^C-during-run is NOT a crash. A SIGINT tears down the opencode server,
             // which fails the in-flight turn send with a connection error that lands
@@ -119,7 +156,7 @@ export const runLoop = async <Ref>(
               if (store.readMetaIfExists(runId)?.worktree) {
                 repo.wipCommit(
                   store.readMetaIfExists(runId)!.worktree,
-                  `meridian: WIP ${runId} [interrupted]`,
+                  `lathe: WIP ${runId} [interrupted]`,
                 );
               }
               store.writeMeta({
@@ -130,20 +167,51 @@ export const runLoop = async <Ref>(
               break;
             }
 
-            // A real crash: park as blocked/crashed — NOT wedged, so the R10
-            // recovery does NOT auto-retry it (a systemic driver fault would
-            // hot-loop on the same packet) — and move on.
+            // A real crash: consult the bounded crash-recovery decision.
+            // Requeue under the cap (front of the line), escalate at the cap.
             const message = err instanceof Error ? err.message : String(err);
             const crashMeta = store.readMeta(runId);
-            store.writeMeta({
+            const crashedMeta = {
               ...crashMeta,
               status: "blocked" as const,
               blockedReason: "crashed" as const,
               blockedQuestion: `Driver-level failure: ${message}. See journal and opencode-serve.log.`,
               updatedAt: clock.nowIso(),
+            };
+            store.writeMeta(crashedMeta);
+            const crashDecision = decideCrashRecovery(
+              crashedMeta,
+              config.thresholds.maxCrashRetries,
+            );
+            if (crashDecision.action === "requeue") {
+              if (crashMeta.worktree) {
+                repo.wipCommit(crashMeta.worktree, `lathe: WIP ${runId} [crashed]`);
+              }
+              store.writeMeta({
+                ...crashedMeta,
+                status: "queued" as const,
+                crashRetries: crashDecision.crashRetries,
+                blockedReason: undefined,
+                blockedQuestion: undefined,
+                updatedAt: clock.nowIso(),
+              });
+              continue;
+            }
+
+            // Cap reached (or none — meta no longer crashed, fall through) — escalate to Max.
+            const crashCount =
+              crashDecision.action === "none"
+                ? (crashedMeta.crashRetries ?? 0)
+                : crashDecision.crashRetries;
+            store.writeMeta({
+              ...crashedMeta,
+              status: "blocked" as const,
+              blockedReason: "crashed" as const,
+              blockedQuestion: `Driver-level failure: ${message}. Crash retry cap hit (${crashCount}). See journal and opencode-serve.log.`,
+              updatedAt: clock.nowIso(),
             });
             if (crashMeta.worktree) {
-              repo.wipCommit(crashMeta.worktree, `meridian: WIP ${runId} [crashed]`);
+              repo.wipCommit(crashMeta.worktree, `lathe: WIP ${runId} [crashed]`);
             }
             continue;
           }
@@ -156,18 +224,38 @@ export const runLoop = async <Ref>(
           if (status === "blocked") {
             // R10: wedged runs recover immediately.
             if (terminalMeta.blockedReason === "wedged") {
-              recoverStalledRun(store, runId, config.thresholds.maxStallRetries, clock);
+              const stall = recoverStalledRun(
+                store,
+                runId,
+                config.thresholds.maxStallRetries,
+                clock,
+                config.thresholds.promoteAtCap,
+              );
+              if (stall.action === "promote") {
+                journal({ store, clock }, runId, 0, {
+                  event: "model_promoted",
+                  from: `${config.baby.providerId}/${config.baby.modelId}`,
+                  to: promotedModelLabel(config),
+                });
+              }
             }
             // R6: a blocked run parks and driver moves on.
             if (terminalMeta.worktree) {
-              repo.wipCommit(terminalMeta.worktree, `meridian: WIP ${runId} [${status}]`);
+              repo.wipCommit(terminalMeta.worktree, `lathe: WIP ${runId} [${status}]`);
             }
             continue;
           }
 
           if (status === "failed") {
             if (terminalMeta.worktree) {
-              repo.wipCommit(terminalMeta.worktree, `meridian: WIP ${runId} [${status}]`);
+              repo.wipCommit(terminalMeta.worktree, `lathe: WIP ${runId} [${status}]`);
+            }
+            continue;
+          }
+
+          if (status === "aborted") {
+            if (terminalMeta.worktree) {
+              repo.wipCommit(terminalMeta.worktree, `lathe: WIP ${runId} [${status}]`);
             }
             continue;
           }
@@ -177,7 +265,7 @@ export const runLoop = async <Ref>(
           } else {
             // Unexpected status — treat as park.
             if (terminalMeta.worktree) {
-              repo.wipCommit(terminalMeta.worktree, `meridian: WIP ${runId} [${status}]`);
+              repo.wipCommit(terminalMeta.worktree, `lathe: WIP ${runId} [${status}]`);
             }
             continue;
           }
@@ -185,7 +273,20 @@ export const runLoop = async <Ref>(
           // Post-run steps: convergence, chain promotion, stall recovery.
           await convergeStep(runId);
           promoteStaged(store, repo);
-          recoverStalledRun(store, runId, config.thresholds.maxStallRetries, clock);
+          const stall = recoverStalledRun(
+            store,
+            runId,
+            config.thresholds.maxStallRetries,
+            clock,
+            config.thresholds.promoteAtCap,
+          );
+          if (stall.action === "promote") {
+            journal({ store, clock }, runId, 0, {
+              event: "model_promoted",
+              from: `${config.baby.providerId}/${config.baby.modelId}`,
+              to: promotedModelLabel(config),
+            });
+          }
 
           // Clear the bridge context so the next run starts fresh.
           bridge.clearActive(ref);
@@ -194,11 +295,18 @@ export const runLoop = async <Ref>(
       }
 
       // Queue empty — wait for new work (fs.watch + poll fallback).
-      // SIGINT aborts the in-flight wait via the mutable currentAbort.
-      currentAbort = new AbortController();
+      // When stopSignal is provided (supervisor-owned), use it; otherwise
+      // SIGINT aborts via the mutable currentAbort.
+      let waitSignal: AbortSignal;
+      if (seams?.stopSignal) {
+        waitSignal = seams.stopSignal;
+      } else {
+        currentAbort = new AbortController();
+        waitSignal = currentAbort.signal;
+      }
 
       try {
-        await waitForWork(currentAbort.signal);
+        await waitForWork(waitSignal);
       } catch (err: unknown) {
         // AbortError from signal.abort() is expected; swallow it.
         if ((err as Error)?.name !== "AbortError") {
@@ -212,7 +320,16 @@ export const runLoop = async <Ref>(
     }
   } finally {
     // Cleanup: release the power assertion, close the bridge server.
-    process.off("SIGINT" as NodeJS.Signals, onSigint);
+    if (!seams?.stopSignal) {
+      process.off("SIGINT" as NodeJS.Signals, onSigint!);
+    }
+    // Abort any in-flight per-run controller (e.g. a run still executing
+    // when stopSignal fires). The supervisor itself fires per-run controllers
+    // via abortMap for the explicit abortRun path.
+    for (const [, ac] of abortMap) {
+      ac.abort();
+    }
+    abortMap.clear();
     bridge.close();
   }
 };
@@ -231,7 +348,7 @@ export const recoverOrphanedRuns = (store: Store, repo: Repo, clock: Clock): voi
       continue;
     }
     if (meta.worktree) {
-      repo.wipCommit(meta.worktree, `meridian: WIP ${runId} [interrupted]`);
+      repo.wipCommit(meta.worktree, `lathe: WIP ${runId} [interrupted]`);
     }
     store.writeMeta({
       ...meta,
@@ -251,15 +368,16 @@ export const recoverStalledRun = (
   runId: string,
   maxStallRetries: number,
   clock: Clock,
-): void => {
+  promoteAtCap = true,
+): StallRecoveryDecision => {
   const meta = store.readMetaIfExists(runId);
   if (!meta) {
-    return;
+    return { action: "none" };
   }
 
-  const decision = decideStallRecovery(meta, maxStallRetries);
+  const decision = decideStallRecovery(meta, maxStallRetries, promoteAtCap);
   if (decision.action === "none") {
-    return;
+    return decision;
   }
 
   if (decision.action === "requeue") {
@@ -270,16 +388,35 @@ export const recoverStalledRun = (
       stallRetries: decision.stallRetries,
       updatedAt: clock.nowIso(),
     });
-    return;
+    return decision;
   }
 
-  // Cap reached — escalate to Max.
+  if (decision.action === "promote") {
+    // Cap reached on baby's normal model: requeue with the strong model latched
+    // (promoted) and a fresh retry budget. The requeued attempt resumes from the
+    // latest checkpoint — same task, bigger inference.
+    const { blockedReason: _r, blockedQuestion: _q, ...rest } = meta;
+    store.writeMeta({
+      ...rest,
+      status: "queued" as const,
+      stallRetries: decision.stallRetries,
+      promoted: true,
+      updatedAt: clock.nowIso(),
+    });
+    return decision;
+  }
+
+  // Cap reached — escalate to Max. After a promotion the strong model also
+  // stalled out, so say so.
   store.writeMeta({
     ...meta,
     blockedReason: "human_decision" as const,
-    blockedQuestion: `Auto-retried ${decision.stallRetries}× after stalling and stalled again — needs Max. Last stall: ${meta.blockedQuestion ?? "(no detail)"}`,
+    blockedQuestion: meta.promoted
+      ? `Stalled to the retry cap even after promoting baby to the strong model — needs Max. Last stall: ${meta.blockedQuestion ?? "(no detail)"}`
+      : `Auto-retried ${decision.stallRetries}× after stalling and stalled again — needs Max. Last stall: ${meta.blockedQuestion ?? "(no detail)"}`,
     updatedAt: clock.nowIso(),
   });
+  return decision;
 };
 
 // Startup sweep for stalled runs (R10): a wedge that outlived its process —
@@ -292,6 +429,7 @@ export const recoverStalledRunsAtStartup = (
   store: Store,
   maxStallRetries: number,
   clock: Clock,
+  promoteAtCap = true,
 ): void => {
   const runs = store.listRunIds();
 
@@ -301,7 +439,7 @@ export const recoverStalledRunsAtStartup = (
       continue;
     }
 
-    const decision = decideStallRecovery(meta, maxStallRetries);
+    const decision = decideStallRecovery(meta, maxStallRetries, promoteAtCap);
     if (decision.action === "none") {
       continue;
     }
@@ -315,11 +453,23 @@ export const recoverStalledRunsAtStartup = (
         blockedQuestion: undefined,
         updatedAt: clock.nowIso(),
       });
+    } else if (decision.action === "promote") {
+      store.writeMeta({
+        ...meta,
+        status: "queued" as const,
+        stallRetries: decision.stallRetries,
+        promoted: true,
+        blockedReason: undefined,
+        blockedQuestion: undefined,
+        updatedAt: clock.nowIso(),
+      });
     } else if (decision.action === "escalate") {
       store.writeMeta({
         ...meta,
         blockedReason: "human_decision" as const,
-        blockedQuestion: `stall retry cap reached (${maxStallRetries}) for run ${runId}`,
+        blockedQuestion: meta.promoted
+          ? `stall retry cap reached on the promoted (strong) model for run ${runId}`
+          : `stall retry cap reached (${maxStallRetries}) for run ${runId}`,
         updatedAt: clock.nowIso(),
       });
     }

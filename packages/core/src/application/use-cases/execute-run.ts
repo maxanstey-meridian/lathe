@@ -12,7 +12,10 @@
 // loop and the bridge's concrete Ref (the application cannot import the bridge).
 // ---------------------------------------------------------------------------
 
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import type { TurnResponse } from "../../domain/agent-response.js";
+import { priorReconciliationAccepted, rotationGateState } from "../../domain/gate-decisions.js";
 import { initialGateState } from "../../domain/gate.js";
 import { parsePacketShape } from "../../domain/packet.js";
 import type { Packet } from "../../domain/packet.js";
@@ -20,12 +23,15 @@ import {
   q1InitialSeed,
   q2RotationSeed,
   q8ReconciliationSeed,
+  q8ResumeSeed,
   renderDaddySeed,
 } from "../../domain/prompts.js";
 import { renderReportMarkdown } from "../../domain/report.js";
+import { decideRunStart } from "../../domain/run.js";
 import type { ExecuteRunCallback } from "./run-loop.js";
 import {
   journal,
+  buildHandoffInject,
   type RunPorts,
   type RunChannel,
   type Seed,
@@ -44,32 +50,72 @@ export type BridgeBinding<Ref> = {
 
 type RunMetaPaths = { repo: string; worktree: string; base: string; branch: string };
 
+const daddySessionIsStale = async (
+  executor: RunPorts["executor"],
+  sessionId: string,
+): Promise<boolean> => {
+  let messages: TurnResponse[];
+  try {
+    messages = await executor.listMessages(sessionId);
+  } catch {
+    return true;
+  }
+
+  return messages.some((m) => m.info.role === "assistant" && !m.info.error && m.parts.length === 0);
+};
+
+const replaceStaleDaddySession = async (
+  ports: RunPorts,
+  packet: Packet,
+  worktree: string,
+  staleSessionId: string,
+): Promise<string> => {
+  const { executor, planner } = ports;
+  try {
+    await executor.abortSession(staleSessionId);
+  } catch {
+    /* best effort: a stuck or already-dead session should not block recovery */
+  }
+  try {
+    await executor.deleteSession(staleSessionId);
+  } catch {
+    /* best effort: stale session cleanup is not required for correctness */
+  }
+
+  return planner.handshake(renderDaddySeed(packet.raw), worktree);
+};
+
 export const makeExecuteRun =
   <Ref>(ports: RunPorts, bridge: BridgeBinding<Ref>): ExecuteRunCallback<Ref> =>
-  async (runId, runMeta, ref): Promise<void> => {
+  async (runId, runMeta, ref, _clock, signal): Promise<void> => {
     const { store, repo, executor, planner, config, clock } = ports;
     const { repo: repoPath, worktree, base, branch } = runMeta as RunMetaPaths;
 
-    // K3: re-validate at run start, fail closed even if the file changed.
-    // Fresh queue entries have no frozen packet — fall back to the queue dir.
-    const raw = store.readFrozenPacket(runId) || store.readQueuePacket(runId) || "";
+    const priorMeta = store.readMetaIfExists(runId);
+    const queuePacket = store.readQueuePacket(runId);
+
+    // Decide whether this run resumes a prior session or starts fresh.
+    const startDecision = decideRunStart(priorMeta);
+
+    // Packet selection: read the current live run packet for this execution.
+    const raw = queuePacket ?? "";
     const shape = parsePacketShape(raw, runId);
     if (!shape.ok) {
-      const prior = store.readMetaIfExists(runId);
-      if (prior) {
-        store.writeMeta({ ...prior, status: "failed", updatedAt: clock.nowIso() });
+      if (priorMeta) {
+        store.writeMeta({ ...priorMeta, status: "failed", updatedAt: clock.nowIso() });
       }
       return;
     }
     const packet = shape.packet;
 
-    const priorMeta = store.readMetaIfExists(runId);
-    const isResume = priorMeta?.babySessionId !== undefined;
+    const isResume = startDecision.mode === "resume";
     const attempt = (priorMeta?.attempt ?? 0) + 1;
 
     if (!isResume) {
-      // Fresh: freeze the validated packet + seed durable state (R2).
-      store.freezePacket(runId, packet.raw);
+      // Fresh: clear stale resume artifacts from a prior session, then seed
+      // fresh durable state so a later unchanged-packet pickup cannot resume
+      // from pre-fresh checkpoint/decision/review state.
+      store.clearResumeArtifacts(runId);
       store.writeLedger(store.initialLedger(packet));
       store.replaceObligations(runId, []);
       store.writeGateState(
@@ -93,8 +139,8 @@ export const makeExecuteRun =
       repo.createSandbox(repoPath, worktree, branch, base);
     } else {
       // Resume: REFRESH config-derived gate fields (cadence + mutation patterns)
-      // from current config; preserve run-state (firstEditApproved, baseline,
-      // lastAcceptedDecisionAt, reconciliation).
+      // from current config; preserve run-state (phase, baseline,
+      // lastAcceptedDecisionAt).
       const gate = store.readGateState(runId);
       store.writeGateState(runId, {
         ...gate,
@@ -108,10 +154,29 @@ export const makeExecuteRun =
 
     // Daddy: ONE session for the run's whole life (M6). The adapter creates a
     // fresh one or resumes the prior session that already holds the packet.
-    const daddySessionId =
-      isResume && priorMeta?.daddySessionId
-        ? await planner.resumeSession(priorMeta.daddySessionId)
-        : await planner.handshake(renderDaddySeed(packet.raw));
+    let daddySessionId: string;
+    if (isResume && priorMeta?.daddySessionId) {
+      if (await daddySessionIsStale(executor, priorMeta.daddySessionId)) {
+        journal(ports, runId, 0, {
+          event: "driver_note",
+          note: `replacing stale Daddy session ${priorMeta.daddySessionId}`,
+        });
+        daddySessionId = await replaceStaleDaddySession(
+          ports,
+          packet,
+          worktree,
+          priorMeta.daddySessionId,
+        );
+        journal(ports, runId, 0, {
+          event: "driver_note",
+          note: `replacement Daddy session ${daddySessionId}`,
+        });
+      } else {
+        daddySessionId = await planner.resumeSession(priorMeta.daddySessionId);
+      }
+    } else {
+      daddySessionId = await planner.handshake(renderDaddySeed(packet.raw), worktree);
+    }
     const babySessionId = await executor.createSession(`baby:${runId}`, worktree);
 
     store.writeMeta({
@@ -126,8 +191,12 @@ export const makeExecuteRun =
       babySessionId,
       daddySessionId,
       stallRetries: priorMeta?.stallRetries ?? 0,
+      crashRetries: priorMeta?.crashRetries ?? 0,
       reorientRetries: priorMeta?.reorientRetries ?? 0,
       reviewerUnreachable: priorMeta?.reviewerUnreachable ?? 0,
+      // Carry the strong-model promotion across the requeue/resume — turn-loop
+      // reads this to start on the promoted model.
+      promoted: priorMeta?.promoted ?? false,
       startedAt: priorMeta?.startedAt ?? clock.nowIso(),
       updatedAt: clock.nowIso(),
     });
@@ -140,13 +209,15 @@ export const makeExecuteRun =
     });
     journal(ports, runId, 0, { event: "run_started", runId, attempt });
 
-    // Seed choice: fresh → Q1; resume with a checkpoint → Q2; resume without →
-    // Q8 reconciliation, with the gate latched (O6).
+    // Seed choice: fresh → Q1; resume with a checkpoint → Q2; resume without
+    // but prior reconciliation was accepted → Q8b (skip redundant recon);
+    // resume without and no prior accepted recon → Q8 with gate latched (O6).
     let seed: Seed;
     if (!isResume) {
       seed = { name: "Q1", text: q1InitialSeed(packet, store.readLedger(runId)) };
     } else {
       const checkpoint = store.latestCheckpoint(runId);
+      const decisions = store.readDecisions(runId);
       if (checkpoint) {
         seed = {
           name: "Q2",
@@ -155,26 +226,33 @@ export const makeExecuteRun =
             store.readLedger(runId),
             checkpoint,
             store.readReviewState(runId),
-            store.readDecisions(runId),
-            repo.diffStat(worktree, base),
+            decisions,
+          ),
+        };
+      } else if (priorReconciliationAccepted(decisions)) {
+        // Prior reconciliation was accepted — skip redundant reconciliation.
+        // Gate re-latches for first-edit only (not reconciliation).
+        const { next } = rotationGateState(store.readGateState(runId), false);
+        store.writeGateState(runId, next);
+        seed = {
+          name: "Q8b",
+          text: q8ResumeSeed(
+            packet,
+            store.readLedger(runId),
+            store.readReviewState(runId),
+            decisions,
           ),
         };
       } else {
-        const gate = store.readGateState(runId);
-        store.writeGateState(runId, {
-          ...gate,
-          latched: true,
-          reconciliationRequired: true,
-          latchReason: "reconciliation required: no valid checkpoint from the previous session",
-        });
+        const { next } = rotationGateState(store.readGateState(runId), true);
+        store.writeGateState(runId, next);
         seed = {
           name: "Q8",
           text: q8ReconciliationSeed(
             packet,
             store.readLedger(runId),
             store.readReviewState(runId),
-            store.readDecisions(runId),
-            repo.diffStat(worktree, base),
+            decisions,
           ),
         };
       }
@@ -185,10 +263,37 @@ export const makeExecuteRun =
     // that does nothing). On expiry the attempt parks wedged.
     const deadlineMs = clock.now() + config.thresholds.maxRunMs;
 
+    // Handoff inject: if the predecessor wrote handoff.json, prepend a system
+    // message so new baby reads it and calls verify_handoff first.
+    const runDir = dirname(worktree);
+    const handoffPath = join(runDir, "handoff.json");
+    let injectText = "";
+    try {
+      const raw = readFileSync(handoffPath, "utf-8");
+      injectText = buildHandoffInject(raw);
+    } catch {
+      /* no handoff — graceful degradation, baby re-derives trust the old way */
+    }
+    if (injectText) {
+      seed = { name: `${seed.name}+handoff`, text: `${injectText}\n\n${seed.text}` };
+    }
+
     const channel = bridge.beginRun(ref, packet, worktree);
+    if (injectText) {
+      channel.awaitingVerification = true;
+    }
     let result: TurnLoopResult;
     try {
-      result = await turnLoop(ports, packet, worktree, babySessionId, channel, seed, deadlineMs);
+      result = await turnLoop(
+        ports,
+        packet,
+        worktree,
+        babySessionId,
+        channel,
+        seed,
+        deadlineMs,
+        signal,
+      );
     } finally {
       bridge.endRun(ref);
     }
@@ -210,12 +315,12 @@ const finalizeRun = (
   const { store, repo, clock } = ports;
   const { outcome } = result;
 
-  const sha = repo.wipCommit(worktree, `meridian: WIP ${runId} [${outcome.status}]`);
+  const sha = repo.wipCommit(worktree, `lathe: WIP ${runId} [${outcome.status}]`);
   if (sha) {
     journal(ports, runId, 0, {
       event: "committed",
       sha,
-      message: `meridian: WIP ${runId} [${outcome.status}]`,
+      message: `lathe: WIP ${runId} [${outcome.status}]`,
     });
   }
 

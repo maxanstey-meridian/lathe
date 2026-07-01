@@ -15,5 +15,6 @@ export type Executor = {
     signal?: AbortSignal,
   ): Promise<TurnResponse>;
   listMessages(sessionId: string): Promise<TurnResponse[]>;
+  abortSession(sessionId: string): Promise<void>;
   deleteSession(sessionId: string): Promise<void>;
 };

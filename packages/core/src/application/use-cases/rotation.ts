@@ -14,16 +14,16 @@ import type { Packet } from "../../domain/packet.js";
 import { journal, type RunPorts } from "./run-runtime.js";
 
 // Replace the Baby session and return the new session id (the loop tracks it as
-// the live executor session). `hasCheckpoint` selects the gate the successor
-// inherits: a clean rotation re-latches first-edit only; a crash rotation
-// (no checkpoint to resume from) stacks reconciliation.
+// the live executor session). `needsReconciliation` selects the gate the successor
+// inherits: false re-latches first-edit only; true stacks reconciliation (crash
+// path: no checkpoint AND no prior accepted reconciliation).
 export const rotateSession = async (
   ports: RunPorts,
   packet: Packet,
   worktree: string,
   oldSessionId: string,
   turn: number,
-  hasCheckpoint: boolean,
+  needsReconciliation: boolean,
 ): Promise<string> => {
   const runId = packet.runId;
 
@@ -42,7 +42,7 @@ export const rotateSession = async (
   });
 
   const gate = ports.store.readGateState(runId);
-  const { next, reason } = rotationGateState(gate, hasCheckpoint);
+  const { next, reason } = rotationGateState(gate, needsReconciliation);
   ports.store.writeGateState(runId, next);
   journal(ports, runId, turn, { event: "gate_latched", reason });
 

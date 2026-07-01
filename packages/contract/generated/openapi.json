@@ -132,6 +132,50 @@
         }
       }
     },
+    "/status": {
+      "get": {
+        "operationId": "lathe_getStatus",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "getStatus",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/review": {
+      "get": {
+        "operationId": "lathe_getReview",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "getReview",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/runs/{runId}/abort": {
       "post": {
         "operationId": "lathe_abortRun",
@@ -150,6 +194,48 @@
             }
           }
         ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunSummaryDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/runs/{runId}/answer": {
+      "post": {
+        "operationId": "lathe_answerRun",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "answerRun",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerRunRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
             "description": "Created",
@@ -259,10 +345,82 @@
           }
         }
       }
+    },
+    "/tail/active": {
+      "get": {
+        "operationId": "lathe_getActiveTail",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "getActiveTail",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/TailSnapshotDto"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tail/{runId}": {
+      "get": {
+        "operationId": "lathe_getTail",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "getTail",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TailSnapshotDto"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "AnswerRunRequest": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "answer"
+        ]
+      },
       "ConfigDto": {
         "type": "object",
         "properties": {
@@ -386,6 +544,58 @@
           }
         }
       },
+      "ReviewDto": {
+        "type": "object",
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewRunDto"
+            }
+          }
+        },
+        "required": [
+          "runs"
+        ]
+      },
+      "ReviewRunDto": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "outcomes": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "base": {
+            "type": "string"
+          },
+          "blockedQuestion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "runId",
+          "status",
+          "outcomes",
+          "branch",
+          "repo",
+          "base",
+          "blockedQuestion"
+        ]
+      },
       "RunDetailDto": {
         "type": "object",
         "properties": {
@@ -448,6 +658,21 @@
               "string",
               "null"
             ]
+          },
+          "outcomes": {
+            "type": "string"
+          },
+          "blockedReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "blockedQuestion": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -467,7 +692,10 @@
           "worktreePath",
           "parentRunId",
           "expectedSurface",
-          "lastVerdict"
+          "lastVerdict",
+          "outcomes",
+          "blockedReason",
+          "blockedQuestion"
         ]
       },
       "RunSummaryDto": {
@@ -521,6 +749,330 @@
           "updatedAt"
         ]
       },
+      "StatusActiveRunDto": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "outcomes": {
+            "type": "string"
+          },
+          "gateLatched": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recentEvents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "string"
+                },
+                "event": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "at",
+                "event"
+              ]
+            }
+          }
+        },
+        "required": [
+          "runId",
+          "outcomes",
+          "gateLatched",
+          "recentEvents"
+        ]
+      },
+      "StatusCampaignDto": {
+        "type": "object",
+        "properties": {
+          "campaignId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "pass": {
+            "type": "number"
+          },
+          "maxPasses": {
+            "type": "number"
+          },
+          "originalIntent": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "campaignId",
+          "status",
+          "pass",
+          "maxPasses",
+          "originalIntent"
+        ]
+      },
+      "StatusDto": {
+        "type": "object",
+        "properties": {
+          "activeRun": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StatusActiveRunDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "queued": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusQueuedRunDto"
+            }
+          },
+          "parked": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusParkedRunDto"
+            }
+          },
+          "campaigns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusCampaignDto"
+            }
+          },
+          "staged": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusStagedRunDto"
+            }
+          },
+          "review": {
+            "$ref": "#/components/schemas/StatusReviewSummaryDto"
+          }
+        },
+        "required": [
+          "activeRun",
+          "queued",
+          "parked",
+          "campaigns",
+          "staged",
+          "review"
+        ]
+      },
+      "StatusParkedRunDto": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "blockedReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "blockedQuestion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stallRetries": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "runId",
+          "blockedReason",
+          "blockedQuestion",
+          "stallRetries"
+        ]
+      },
+      "StatusQueuedRunDto": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId"
+        ]
+      },
+      "StatusReviewSummaryDto": {
+        "type": "object",
+        "properties": {
+          "readyForReview": {
+            "type": "number"
+          },
+          "failed": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "readyForReview",
+          "failed"
+        ]
+      },
+      "StatusStagedRunDto": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "parentRunId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "runId",
+          "parentRunId"
+        ]
+      },
+      "TailJournalLineDto": {
+        "type": "object",
+        "properties": {
+          "seq": {
+            "type": "number"
+          },
+          "at": {
+            "type": "string"
+          },
+          "line": {
+            "type": "string"
+          },
+          "event": {
+            "type": "string"
+          },
+          "driver": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "seq",
+          "at",
+          "line",
+          "event",
+          "driver"
+        ]
+      },
+      "TailModelsDto": {
+        "type": "object",
+        "properties": {
+          "baby": {
+            "type": "string"
+          },
+          "promoted": {
+            "type": "string"
+          },
+          "daddy": {
+            "type": "string"
+          },
+          "super": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "baby",
+          "promoted",
+          "daddy",
+          "super"
+        ]
+      },
+      "TailSnapshotDto": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/TailRunStatus"
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "models": {
+            "$ref": "#/components/schemas/TailModelsDto"
+          },
+          "promoted": {
+            "type": "boolean"
+          },
+          "budget": {
+            "type": "number"
+          },
+          "worktree": {
+            "type": "string"
+          },
+          "outcomesDone": {
+            "type": "number"
+          },
+          "outcomesTotal": {
+            "type": "number"
+          },
+          "gateReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "contextTokens": {
+            "type": "number"
+          },
+          "turn": {
+            "type": "number"
+          },
+          "rotations": {
+            "type": "number"
+          },
+          "journal": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TailJournalLineDto"
+            }
+          },
+          "lastSeq": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "runId",
+          "summary",
+          "status",
+          "startedAt",
+          "models",
+          "promoted",
+          "budget",
+          "worktree",
+          "outcomesDone",
+          "outcomesTotal",
+          "gateReason",
+          "contextTokens",
+          "turn",
+          "rotations",
+          "journal",
+          "lastSeq"
+        ]
+      },
       "RunStatus": {
         "type": "string",
         "enum": [
@@ -529,9 +1081,21 @@
           "paused",
           "converged",
           "accepted",
-          "rejected",
           "aborted",
           "failed"
+        ]
+      },
+      "TailRunStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "running",
+          "interrupted",
+          "ready_for_review",
+          "blocked",
+          "failed",
+          "accepted",
+          "aborted"
         ]
       }
     }

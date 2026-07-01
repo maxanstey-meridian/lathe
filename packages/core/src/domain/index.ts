@@ -19,6 +19,9 @@ export * from "./gate-decisions.js";
 // Planner + Review (CONTRACT §9)
 export * from "./review.js";
 
+// Reconciliation (resume without checkpoint)
+export * from "./reconciliation.js";
+
 // Prompts (CONTRACT §15)
 export * from "./prompts.js";
 
@@ -43,3 +46,6 @@ export * from "./agent-response.js";
 // Liveness + Turn evaluation (CONTRACT §5/§6)
 export * from "./liveness.js";
 export * from "./turn.js";
+
+// Handoff artifact + Verify verdict (verify-handoff protocol)
+export * from "./handoff.js";

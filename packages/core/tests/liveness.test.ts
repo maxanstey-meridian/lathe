@@ -1,6 +1,11 @@
 import assert from "node:assert";
 import { test } from "node:test";
-import { stallAction, decideStallRecovery, checkReorientBound } from "../src/domain/liveness.js";
+import {
+  stallAction,
+  decideStallRecovery,
+  checkReorientBound,
+  decideCrashRecovery,
+} from "../src/domain/liveness.js";
 
 // ---------------------------------------------------------------------------
 // stallAction (CONTRACT §6 L3)
@@ -72,9 +77,32 @@ test("decideStallRecovery: wedged park under the cap → requeue, count incremen
   );
 });
 
-test("decideStallRecovery: wedged park at the cap → escalate", () => {
+test("decideStallRecovery: wedged park at the cap → promote (one set on the strong model)", () => {
   assert.deepEqual(
     decideStallRecovery({ status: "blocked", blockedReason: "wedged", stallRetries: 2 }, 2),
+    {
+      action: "promote",
+      stallRetries: 0,
+    },
+  );
+});
+
+test("decideStallRecovery: wedged at the cap AFTER promotion → escalate", () => {
+  assert.deepEqual(
+    decideStallRecovery(
+      { status: "blocked", blockedReason: "wedged", stallRetries: 2, promoted: true },
+      2,
+    ),
+    {
+      action: "escalate",
+      stallRetries: 2,
+    },
+  );
+});
+
+test("decideStallRecovery: wedged at the cap with promoteAtCap disabled → escalate", () => {
+  assert.deepEqual(
+    decideStallRecovery({ status: "blocked", blockedReason: "wedged", stallRetries: 2 }, 2, false),
     {
       action: "escalate",
       stallRetries: 2,
@@ -104,9 +132,25 @@ test("decideStallRecovery: non-blocked statuses are never touched", () => {
   });
 });
 
-test("decideStallRecovery: maxStallRetries 0 disables auto-recovery", () => {
+test("decideStallRecovery: maxStallRetries 0 with promoteAtCap → promote once, then escalate", () => {
+  // cap=0 means no retries on the normal model, but promote-at-cap still grants
+  // ONE set on the strong model before parking for Max.
   assert.deepEqual(
     decideStallRecovery({ status: "blocked", blockedReason: "wedged", stallRetries: 0 }, 0),
+    { action: "promote", stallRetries: 0 },
+  );
+  assert.deepEqual(
+    decideStallRecovery(
+      { status: "blocked", blockedReason: "wedged", stallRetries: 0, promoted: true },
+      0,
+    ),
+    { action: "escalate", stallRetries: 0 },
+  );
+});
+
+test("decideStallRecovery: maxStallRetries 0 + promoteAtCap disabled → escalate immediately", () => {
+  assert.deepEqual(
+    decideStallRecovery({ status: "blocked", blockedReason: "wedged", stallRetries: 0 }, 0, false),
     { action: "escalate", stallRetries: 0 },
   );
 });
@@ -141,4 +185,65 @@ test("checkReorientBound: high cap allows many retries", () => {
     assert.deepEqual(checkReorientBound(i, 10), { allowed: true, escalating: false });
   }
   assert.deepEqual(checkReorientBound(10, 10), { allowed: false, escalating: true });
+});
+
+// ---------------------------------------------------------------------------
+// decideCrashRecovery (CONTRACT §5 R10 sibling)
+// ---------------------------------------------------------------------------
+
+test("decideCrashRecovery: crashed park under the cap → requeue, count incremented", () => {
+  assert.deepEqual(
+    decideCrashRecovery({ status: "blocked", blockedReason: "crashed", crashRetries: 0 }, 2),
+    { action: "requeue", crashRetries: 1 },
+  );
+  assert.deepEqual(
+    decideCrashRecovery({ status: "blocked", blockedReason: "crashed", crashRetries: 1 }, 2),
+    { action: "requeue", crashRetries: 2 },
+  );
+});
+
+test("decideCrashRecovery: crashed park at the cap → escalate", () => {
+  assert.deepEqual(
+    decideCrashRecovery({ status: "blocked", blockedReason: "crashed", crashRetries: 2 }, 2),
+    { action: "escalate", crashRetries: 2 },
+  );
+});
+
+test("decideCrashRecovery: wedged and judgement parks are never touched", () => {
+  for (const reason of ["wedged", "human_decision", "scope_expansion", "stop_condition"]) {
+    assert.deepEqual(
+      decideCrashRecovery({ status: "blocked", blockedReason: reason, crashRetries: 0 }, 2),
+      { action: "none" },
+      `${reason} must not be handled by crash recovery`,
+    );
+  }
+});
+
+test("decideCrashRecovery: non-blocked statuses are never touched", () => {
+  assert.deepEqual(decideCrashRecovery({ status: "ready_for_review", crashRetries: 0 }, 2), {
+    action: "none",
+  });
+  assert.deepEqual(decideCrashRecovery({ status: "running", crashRetries: 0 }, 2), {
+    action: "none",
+  });
+  assert.deepEqual(decideCrashRecovery({ status: "queued", crashRetries: 0 }, 2), {
+    action: "none",
+  });
+});
+
+test("decideCrashRecovery: maxCrashRetries 0 → escalate immediately", () => {
+  assert.deepEqual(
+    decideCrashRecovery({ status: "blocked", blockedReason: "crashed", crashRetries: 0 }, 0),
+    { action: "escalate", crashRetries: 0 },
+  );
+});
+
+test("decideCrashRecovery: handles missing crashRetries (undefined)", () => {
+  assert.deepEqual(
+    decideCrashRecovery(
+      { status: "blocked", blockedReason: "crashed", crashRetries: undefined },
+      2,
+    ),
+    { action: "requeue", crashRetries: 1 },
+  );
 });

@@ -7,7 +7,7 @@ import type { Clock } from "../src/application/ports/clock.js";
 import type { Repo } from "../src/application/ports/repo.js";
 import { answerRun } from "../src/application/use-cases/answer-run.js";
 import { makePaths } from "../src/config/paths.js";
-import { StoreAdapter } from "../src/infrastructure/store.js";
+import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -73,7 +73,7 @@ const makeBlockedMeta = (runId: string, clock: Clock) => ({
 test("answer-run: refuses when run not found", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "answer-run-notfound-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   const result = answerRun(store, fakeRepo(), "nonexistent", "do it", join(tmpdir(), "wt"), clock);
   strictEqual(result.ok, false);
   equal((result as { ok: false; reason: string }).reason, "run nonexistent not found");
@@ -83,7 +83,7 @@ test("answer-run: refuses when run not found", async () => {
 test("answer-run: refuses when run is not blocked", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "answer-run-notblocked-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   const meta = {
     runId: "20260101-000000-running",
     status: "running" as const,
@@ -106,7 +106,7 @@ test("answer-run: refuses when run is not blocked", async () => {
   strictEqual(result.ok, false);
   equal(
     (result as { ok: false; reason: string }).reason,
-    "run 20260101-000000-running is not parked (status: running)",
+    "run 20260101-000000-running is not answerable (status: running)",
   );
   await cleanTemp(tmp);
 });
@@ -115,7 +115,7 @@ test("answer-run: succeeds for blocked run", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "answer-run-ok-"));
   const clock = fixedClock();
   const repo = fakeRepo();
-  const store = StoreAdapter.create(makePaths(tmp), repo, clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
   const meta = makeBlockedMeta("20260101-000000-test", clock);
   store.writeMeta(meta);
@@ -123,13 +123,11 @@ test("answer-run: succeeds for blocked run", async () => {
   // Write gate state (blocked runs always have a live gate)
   store.writeGateState("20260101-000000-test", {
     runId: "20260101-000000-test",
-    latched: true,
-    latchReason: "first edit approved",
-    firstEditApproved: true,
-    reconciliationRequired: false,
+    phase: { phase: "checkpoint-demand-latched", reason: "first edit approved" },
     expectedGlobs: ["src/**/*.ts"],
     suspiciousGlobs: [],
     baselineDiffStats: {},
+    lastAcceptedDecisionAt: clock.nowIso(),
     updatedAt: clock.nowIso(),
     mutationCommandPatterns: [],
   });
@@ -158,7 +156,7 @@ test("answer-run: succeeds for blocked run", async () => {
 
   // Gate cleared
   const gate = store.readGateState("20260101-000000-test");
-  strictEqual(gate.latched, false);
+  strictEqual(gate.phase.phase, "cleared");
   ok(gate.lastAcceptedDecisionAt);
 
   // Meta updated
@@ -174,15 +172,13 @@ test("answer-run: succeeds for blocked run", async () => {
 test("answer-run: uses meta.blockedQuestion when present, placeholder when absent", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "answer-run-noq-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
   const meta = { ...makeBlockedMeta("20260101-000000-noq", clock), blockedQuestion: undefined };
   store.writeMeta(meta);
   store.writeGateState("20260101-000000-noq", {
     runId: "20260101-000000-noq",
-    latched: false,
-    firstEditApproved: true,
-    reconciliationRequired: false,
+    phase: { phase: "cleared" },
     expectedGlobs: [],
     suspiciousGlobs: [],
     baselineDiffStats: {},
@@ -198,18 +194,61 @@ test("answer-run: uses meta.blockedQuestion when present, placeholder when absen
   await cleanTemp(tmp);
 });
 
+test("answer-run: succeeds for failed run (retry)", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "answer-run-failed-"));
+  const clock = fixedClock();
+  const repo = fakeRepo();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
+
+  const meta = {
+    runId: "20260101-000000-failed",
+    status: "failed" as const,
+    attempt: 1,
+    repo: "/tmp/repo",
+    base: "main",
+    branch: "meridian/20260101-000000-failed",
+    worktree: join(tmpdir(), "wt"),
+    crashRetries: 3,
+    stallRetries: 2,
+    updatedAt: clock.nowIso(),
+  };
+  store.writeMeta(meta);
+
+  const result = answerRun(
+    store,
+    repo,
+    "20260101-000000-failed",
+    "Tests are fixed. Please continue.",
+    join(tmpdir(), "wt"),
+    clock,
+  );
+  strictEqual(result.ok, true);
+
+  // Decision appended with retry context
+  const decisions = store.readDecisions("20260101-000000-failed");
+  strictEqual(decisions.length, 1);
+  equal(decisions[0].answer, "Tests are fixed. Please continue.");
+  equal(decisions[0].question, "(run failed — retry requested)");
+
+  // Meta updated: queued, counters reset
+  const updatedMeta = store.readMeta("20260101-000000-failed");
+  strictEqual(updatedMeta.status, "queued");
+  strictEqual(updatedMeta.crashRetries, 0);
+  strictEqual(updatedMeta.stallRetries, 0);
+
+  await cleanTemp(tmp);
+});
+
 test("answer-run: returns checkpoint number when checkpoint exists", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "answer-run-ckpt-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
   const meta = makeBlockedMeta("20260101-000000-ckpt", clock);
   store.writeMeta(meta);
   store.writeGateState("20260101-000000-ckpt", {
     runId: "20260101-000000-ckpt",
-    latched: false,
-    firstEditApproved: true,
-    reconciliationRequired: false,
+    phase: { phase: "cleared" },
     expectedGlobs: [],
     suspiciousGlobs: [],
     baselineDiffStats: {},
@@ -242,15 +281,13 @@ test("answer-run: returns checkpoint number when checkpoint exists", async () =>
 test("answer-run: returns checkpoint undefined when no checkpoint", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "answer-run-nockpt-"));
   const clock = fixedClock();
-  const store = StoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
   const meta = makeBlockedMeta("20260101-000000-nockpt", clock);
   store.writeMeta(meta);
   store.writeGateState("20260101-000000-nockpt", {
     runId: "20260101-000000-nockpt",
-    latched: false,
-    firstEditApproved: true,
-    reconciliationRequired: false,
+    phase: { phase: "cleared" },
     expectedGlobs: [],
     suspiciousGlobs: [],
     baselineDiffStats: {},

@@ -1,7 +1,13 @@
-import { stringify as stringifyYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
-import { PacketFrontmatter, type OutcomeDef, type Packet } from "./packet.js";
+import {
+  describeFrontmatterProblem,
+  extractFrontmatter,
+  normalizeForFrontmatter,
+  type OutcomeDef,
+} from "./packet.js";
 import { FinalReviewVerdict } from "./review.js";
+import { balancedObjects, repairYamlEscapes } from "./structured-extraction.js";
 
 // ---------------------------------------------------------------------------
 // Super-daddy convergence supervisor (SUPER-DADDY.md). A stronger, doctrine-anchored
@@ -75,28 +81,47 @@ export type SuperReview = z.infer<typeof SuperReview>;
 // The loop decision (single reviewer: super-daddy) — CONTRACT §18 S5
 
 export type ConvergeDecision =
-  | { action: "author"; blockers: Finding[]; promote?: boolean }
+  // `promote` is the n+1 cap escape hatch: when set, the authored follow-up runs
+  // Baby's harness on Daddy's model (the same task, a stronger engine). Only the
+  // cap branch ever sets it true; every normal pass authors with promote=false.
+  | { action: "author"; blockers: Finding[]; promote: boolean }
   | { action: "stop" }
   | { action: "escalate"; reason: string };
 
-// We trust the verdict. Order matters and every branch fails CLOSED toward Max:
-//   1. reviewer escalated / needs a human            → escalate
-//   2. accept but verification red                    → escalate
-//   3. accept + green                                 → stop (the ONLY stop path)
-//   4. request_changes with no findings              → escalate
-//   5. request_changes + cap reached                  → escalate
-//   6. request_changes + passes left                  → author EVERY finding
+// Policy the caller supplies (it owns config, the pure decision does not): whether
+// the cap may spend ONE promoted pass, and whether THIS run already was that pass.
+export type PromotePolicy = { promoteAtCap: boolean; alreadyPromoted: boolean };
+
+// We trust the verdict. Order matters and every branch fails CLOSED toward Max,
+// with ONE deliberate escape hatch — the promoted pass at the cap:
+//   1. accept + human_decision_needed                 → escalate
+//   2. accept + green                                 → stop (the ONLY stop path)
+//   3. accept but verification red                    → escalate
+//   ── at the cap (last resort) ──
+//   4. cap + promotion available + findings to author → author PROMOTED (Daddy's model)
+//   5. cap + promotion spent / nothing to author      → escalate
+//   ── below the cap ──
+//   6. explicit escalate / human_decision_needed      → escalate
+//   7. request_changes with no findings               → escalate
+//   8. request_changes + passes left                  → author EVERY finding
+//
+// The cap branch is the ONLY place an `escalate` verdict can be turned back into a
+// pass, and only once per campaign (alreadyPromoted guards re-promotion): before
+// rejecting OR escalating at the cap, give Baby one more attempt at the same task
+// on Daddy's model.
 export const decideConvergence = (
   review: SuperReview,
   verificationGreen: boolean,
   pass: number,
   maxPasses: number,
-  promotionEnabled: boolean,
+  promote: PromotePolicy = { promoteAtCap: false, alreadyPromoted: false },
 ): ConvergeDecision => {
-  if (review.verdict === "escalate" || review.human_decision_needed) {
-    return { action: "escalate", reason: review.human_decision_needed ?? "reviewer escalated" };
-  }
+  // Accept is handled first so a clean accept is never diverted into a pass. A
+  // human_decision_needed on an accept is a genuine "ask Max" and still escalates.
   if (review.verdict === "accept") {
+    if (review.human_decision_needed) {
+      return { action: "escalate", reason: review.human_decision_needed };
+    }
     if (verificationGreen) {
       return { action: "stop" };
     }
@@ -106,67 +131,48 @@ export const decideConvergence = (
         "reviewer accepted but a verification command is red — under-reported; not safe to auto-stop",
     };
   }
-  // request_changes — author every finding, bounded only by the pass cap.
-  if (review.findings.length === 0) {
+
+  // Not accepted: request_changes or escalate. At the cap, the promoted pass is the
+  // last resort BEFORE giving up — but only if there are concrete findings to author
+  // a repair from, and only if we have not already spent the promotion this campaign.
+  const canAuthor = review.findings.length > 0;
+  if (pass >= maxPasses) {
+    if (promote.promoteAtCap && !promote.alreadyPromoted && canAuthor) {
+      return { action: "author", blockers: review.findings, promote: true };
+    }
+    if (promote.alreadyPromoted) {
+      return {
+        action: "escalate",
+        reason: `hard cap reached (${pass}/${maxPasses}) after a promoted pass on Daddy's model and the reviewer still will not converge — escalating to Max`,
+      };
+    }
+    return {
+      action: "escalate",
+      reason: canAuthor
+        ? `hard cap reached (${pass}/${maxPasses}) and the reviewer still wants changes — convergence failed`
+        : `hard cap reached (${pass}/${maxPasses}) and the reviewer named no findings — convergence failed`,
+    };
+  }
+
+  // Below the cap an explicit escalate / human ask still parks for Max.
+  if (review.verdict === "escalate" || review.human_decision_needed) {
+    return { action: "escalate", reason: review.human_decision_needed ?? "reviewer escalated" };
+  }
+  // request_changes below the cap — author every finding, no promotion.
+  if (!canAuthor) {
     return {
       action: "escalate",
       reason:
         "reviewer requested changes but named no findings — nothing to author; not safe to auto-loop",
     };
   }
-  if (pass >= maxPasses) {
-    if (promotionEnabled && pass === maxPasses) {
-      return { action: "author", blockers: review.findings, promote: true };
-    }
-    return {
-      action: "escalate",
-      reason: `hard cap reached (${pass}/${maxPasses}) and the reviewer still wants changes — convergence failed`,
-    };
-  }
-  return { action: "author", blockers: review.findings };
+  return { action: "author", blockers: review.findings, promote: false };
 };
 
 // ---------------------------------------------------------------------------
-// Fail-closed parse (CONTRACT §18 S11)
-
-// Every top-level {...} object in the text, brace-matched with string/escape
-// awareness so a brace inside a JSON string value (or a `}` in prose) can't
-// throw off the depth counter.
-const balancedObjects = (text: string): string[] => {
-  const objects: string[] = [];
-  let depth = 0;
-  let startIdx = -1;
-  let inString = false;
-  let escaped = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (ch === "\\") {
-        escaped = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-    } else if (ch === "{") {
-      if (depth === 0) {
-        startIdx = i;
-      }
-      depth++;
-    } else if (ch === "}" && depth > 0) {
-      depth--;
-      if (depth === 0 && startIdx !== -1) {
-        objects.push(text.slice(startIdx, i + 1));
-        startIdx = -1;
-      }
-    }
-  }
-  return objects;
-};
+// Fail-closed parse (CONTRACT §18 S11). The balanced-object scanner is
+// single-sourced in structured-extraction.ts; this fence-agnostic parser reverses
+// it (the verdict trails any reasoning/code-fence prose).
 
 // A super-review that cannot produce valid JSON fails closed to ESCALATE — the
 // safest verdict (stop would converge on garbage, request_changes would author
@@ -201,165 +207,111 @@ export const parseSuperReview = (raw: string): SuperReview => {
 };
 
 // ---------------------------------------------------------------------------
-// Deterministic follow-up packet render
+// Follow-up packet: super-daddy authors the intent, the engine stamps the lineage
+//
+// On request_changes, super-daddy authors a FRESH packet (renderFollowupAuthoring)
+// the same way a planner authors any handoff — picking its own outcomes, surface,
+// and verification to fix the blockers it raised. The engine owns only the
+// lineage/infra it must not be trusted to invent (the same fields the packet skill
+// says never to author): repo, base, the campaign/parent/pass lineage,
+// and the regression seal. These two pure helpers do that engine half.
 
-export type FollowupPacketInput = {
-  original: Packet; // parent packet — source of repo, surface, verification, constraints
-  parentRunId: string; // the run super-daddy just reviewed
-  campaignId: string;
-  pass: number; // the NEW pass number (parent pass + 1)
-  blockers: Finding[]; // grounded blockers to fix (from decideConvergence; non-empty)
-  priorOutcomes: OutcomeDef[]; // delivered outcomes carried forward as regression
+// Super-daddy replies with the packet markdown; it MAY precede it with tool
+// narration or wrap it in a code fence. Slice from the first frontmatter delimiter
+// and drop any trailing fence so parsePacketShape (anchored at ^---) can parse it.
+// extractAuthoredPacket — kept as a named view onto the shared tolerant
+// normaliser (packet.ts). A reply WITH a frontmatter block comes back as the
+// cleaned packet (narration/fences/CRLF/whitespace stripped) with a trailing
+// newline; a reply with no frontmatter comes back trimmed so the caller fails
+// closed downstream.
+export const extractAuthoredPacket = (text: string): string => {
+  const normalized = normalizeForFrontmatter(text);
+  return extractFrontmatter(text) ? `${normalized.trim()}\n` : normalized.trim();
+};
+
+export type FollowupLineage = {
+  repo: string; // parent repo — infra, never authored
   baseBranch: string; // base for the follow-up = parent run's branch tip
-  timestamp: string; // YYYYMMDD-HHMMSS — caller supplies so this stays pure
-  slug: string; // kebab slug for the run id / filename
-  promote: boolean; // secret n+1: Baby harness on Daddy's model
+  compareCommit: string; // cumulative review base — carried forward unchanged
+  campaignId: string;
+  parentRunId: string; // the run super-daddy just reviewed
+  pass: number; // the NEW pass number (parent pass + 1)
+  priorOutcomes: OutcomeDef[]; // delivered outcomes carried forward as regression
+  promoted: boolean; // run this follow-up on Daddy's model (cap escape hatch)
 };
 
-export type FollowupPacket = { runId: string; filename: string; content: string };
-
-const RUN_ID_RE = /^\d{8}-\d{6}-[a-z0-9-]+$/;
-
-const outcomeIdOf = (b: Finding): string => b.suggested_outcome_id ?? b.id;
-
-const dedupeVerification = <T extends { command: string }>(cmds: T[]): T[] => {
-  const seen = new Set<string>();
-  return cmds.filter((c) => (seen.has(c.command) ? false : (seen.add(c.command), true)));
-};
-
-const renderBlockerBody = (b: Finding): string => {
-  const lines = [`### ${b.severity} \`${outcomeIdOf(b)}\` — ${b.title}`];
-  if (b.grounding.kind !== "none") {
-    lines.push("", `Grounding (${b.grounding.kind}): ${b.grounding.ref}`);
-  }
-  if (b.evidence.length > 0) {
-    lines.push("", ...b.evidence.map((e) => `- ${e}`));
-  }
-  return lines.join("\n");
-};
-
-// Pure: (review findings + parent packet) → a valid packet markdown string. Throws
-// on a programming error (no blockers, or a frontmatter that fails its own schema)
-// — the caller only reaches here on action:"author", which guarantees blockers.
-export const renderFollowupPacket = (input: FollowupPacketInput): FollowupPacket => {
-  const {
-    original,
-    parentRunId,
-    campaignId,
-    pass,
-    blockers,
-    priorOutcomes,
-    baseBranch,
-    timestamp,
-    slug,
-    promote,
-  } = input;
-  if (blockers.length === 0) {
-    throw new Error("renderFollowupPacket: no blockers — nothing to author (converged)");
+// Pure: (super-daddy's authored packet markdown) + lineage → an admittable packet.
+// The author owns the intent (summary/outcomes/surface/verification/constraints/
+// body); this stamps the lineage over the top (lineage WINS, stripping any infra
+// the model wrongly authored). Throws if the reply has no parseable frontmatter —
+// the caller treats that as an authoring failure (re-ask, then escalate), never a
+// silent stall.
+export const stampFollowupLineage = (authoredRaw: string, lineage: FollowupLineage): string => {
+  const parts = extractFrontmatter(authoredRaw);
+  if (!parts) {
+    throw new Error(`stampFollowupLineage: ${describeFrontmatterProblem(authoredRaw)}`);
   }
 
-  const runId = `${timestamp}-${slug}`;
-  if (!RUN_ID_RE.test(runId)) {
-    throw new Error(`renderFollowupPacket: runId must be YYYYMMDD-HHMMSS-<slug>, got: ${runId}`);
-  }
-
-  // Two blockers can map to the same outcome id (independent reviewers, or a
-  // reviewer reusing the original id); dedupe so the packet can't carry a
-  // duplicate outcome (which parsePacket rejects at admission). First wins.
-  const outcomes: OutcomeDef[] = [];
-  const seenOutcomeIds = new Set<string>();
-  for (const b of blockers) {
-    const id = outcomeIdOf(b);
-    if (seenOutcomeIds.has(id)) {
-      continue;
+  // Salvage mirrors the JSON candidate approach: on a parse failure, repair the known
+  // corruption class (invalid backslash escapes inside double-quoted scalars — a model
+  // markdown-escaping a backtick, the cli-cutover scar) and try the repaired candidate
+  // before declaring the frontmatter invalid. Repair only runs on failure, so a
+  // well-formed scalar's meaning is never touched.
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(parts.yaml);
+  } catch (firstErr) {
+    const repaired = repairYamlEscapes(parts.yaml);
+    let salvaged = false;
+    if (repaired !== parts.yaml) {
+      try {
+        parsed = parseYaml(repaired);
+        salvaged = true;
+      } catch {
+        /* repair did not help — fall through to the concrete failure below */
+      }
     }
-    seenOutcomeIds.add(id);
-    outcomes.push({
-      id,
-      description: b.evidence.length > 0 ? `${b.title} — ${b.evidence.join("; ")}` : b.title,
-    });
+    if (!salvaged) {
+      const detail = firstErr instanceof Error ? firstErr.message : String(firstErr);
+      throw new Error(
+        `stampFollowupLineage: authored frontmatter is not valid YAML even after escape repair: ${detail}. ` +
+          "Most often this is a backslash before a backtick or other character inside a double-quoted value — " +
+          "do not escape backticks; use single quotes or a block scalar for values containing backticks or backslashes.",
+      );
+    }
   }
-
-  // Re-run the original suite (now must pass) plus the specific failing commands.
-  const failCommands = blockers
-    .filter((b) => b.grounding.kind === "command_fail" && b.grounding.ref.trim().length > 0)
-    .map((b) => ({ command: b.grounding.ref.trim() }));
-  const verification = dedupeVerification([...original.frontmatter.verification, ...failCommands]);
+  const authored: Record<string, unknown> =
+    parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
 
   // An outcome being REPAIRED this pass cannot also be a regression guard ("must
-  // still pass unchanged") — that's self-contradictory. Exclude any prior outcome
-  // whose id is now a blocker outcome. (Triggered live when a reviewer reused the
-  // original outcome id as its suggested_outcome_id.)
-  const regression = priorOutcomes.filter((o) => !seenOutcomeIds.has(o.id));
-  const regressionIds = regression.map((o) => o.id);
-  const constraints = [
-    ...original.frontmatter.constraints,
-    ...(regressionIds.length > 0
-      ? [`Regression: these prior outcomes must STILL pass unchanged: ${regressionIds.join(", ")}.`]
-      : []),
-    "Scope is repair only: fix the blockers below against the original packet and Max's doctrine. Do not add net-new features.",
-  ];
-
-  // A plain "what is this run doing" line for `meridian tail`, composed from what
-  // the follow-up is fixing — no human and no model in this path, so the render
-  // derives it from its own blockers (capped to one readable line).
-  const summary = `convergence pass ${pass} — ${blockers.map((b) => b.title).join("; ")}`.slice(
-    0,
-    120,
+  // still pass unchanged") — exclude any prior outcome whose id the author reused
+  // as one of its new outcome ids.
+  const authoredOutcomes = Array.isArray(authored.outcomes) ? authored.outcomes : [];
+  const authoredIds = new Set(
+    authoredOutcomes
+      .map((o) => (o !== null && typeof o === "object" ? (o as { id?: unknown }).id : undefined))
+      .filter((id): id is string => typeof id === "string"),
   );
+  const regression = lineage.priorOutcomes.filter((o) => !authoredIds.has(o.id));
 
-  // Field order here is the on-disk order — kept readable, lineage up top.
-  const frontmatterObj = {
-    repo: original.frontmatter.repo,
-    base: baseBranch,
-    summary,
-    campaign_id: campaignId,
-    parent_run_id: parentRunId,
-    pass,
-    promoted: promote,
-    outcomes,
+  // Lineage WINS: spread the authored intent, then stamp every infra field over it
+  // so a model that wrongly authored `base`/`repo`/etc. cannot poison the lineage.
+  const frontmatter = {
+    ...authored,
+    repo: lineage.repo,
+    base: lineage.baseBranch,
+    compare_commit: lineage.compareCommit,
+    campaign_id: lineage.campaignId,
+    parent_run_id: lineage.parentRunId,
+    pass: lineage.pass,
     regression_outcomes: regression,
-    expected_surface: original.frontmatter.expected_surface,
-    suspicious_surface: original.frontmatter.suspicious_surface,
-    verification,
-    constraints,
+    // Infra, never authored: a model cannot promote its own follow-up onto Daddy's
+    // model.
+    promoted: lineage.promoted,
   };
 
-  // Fail closed: never emit a packet that wouldn't survive its own admission check.
-  const validated = PacketFrontmatter.safeParse(frontmatterObj);
-  if (!validated.success) {
-    throw new Error(
-      `renderFollowupPacket: produced invalid frontmatter — ${validated.error.issues
-        .map((i) => `${i.path.join(".")}: ${i.message}`)
-        .join("; ")}`,
-    );
-  }
-
-  const body = [
-    `# ${slug} — convergence pass ${pass}`,
-    "",
-    `Campaign \`${campaignId}\`, follow-up to run \`${parentRunId}\`. Super-daddy reviewed the`,
-    `delivered work against the original packet and Max's doctrine and found grounded blockers.`,
-    `Fix exactly these; do not expand scope.`,
-    "",
-    "## Blockers to fix",
-    "",
-    blockers.map(renderBlockerBody).join("\n\n"),
-    "",
-    ...(regression.length > 0
-      ? [
-          "## Must not regress",
-          "",
-          "Delivered by earlier passes — must still pass:",
-          "",
-          ...regression.map((o) => `- \`${o.id}\`: ${o.description}`),
-          "",
-        ]
-      : []),
-  ].join("\n");
-
-  const content = `---\n${stringifyYaml(frontmatterObj).trimEnd()}\n---\n\n${body}\n`;
-  return { runId, filename: `${runId}.md`, content };
+  const body = parts.body.trim();
+  return `---\n${stringifyYaml(frontmatter).trimEnd()}\n---\n\n${body}\n`;
 };
 
 // ---------------------------------------------------------------------------

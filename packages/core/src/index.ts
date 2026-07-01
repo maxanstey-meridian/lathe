@@ -8,5 +8,59 @@
 
 export { JournalEvent, renderJournalEvent } from "./domain/journal.js";
 export { Config } from "./config/schemas.js";
+export { loadConfig } from "./config/config.js";
 export { makePaths, expandHome } from "./config/paths.js";
 export type { Paths } from "./config/paths.js";
+
+// ---------------------------------------------------------------------------
+// Ports (types consumed by use cases — re-exported for the server barrel)
+// ---------------------------------------------------------------------------
+
+export type { Clock } from "./application/ports/clock.js";
+export type { Repo } from "./application/ports/repo.js";
+export type { Store } from "./application/ports/store.js";
+
+// ---------------------------------------------------------------------------
+// Infrastructure (concrete adapters consumed by the server)
+// ---------------------------------------------------------------------------
+
+export { SqliteStoreAdapter } from "./infrastructure/sqlite-store.js";
+export { systemClock } from "./infrastructure/clock.js";
+export { createEvents, createContextTokenReader } from "./infrastructure/opencode/events.js";
+export type { OpencodeEvent } from "./application/ports/events.js";
+
+// ---------------------------------------------------------------------------
+// CLI composition root (buildRepo + runDriver — the server hosts these)
+// ---------------------------------------------------------------------------
+
+export { buildRepo, runDriver } from "./interfaces/cli/composition.js";
+
+// ---------------------------------------------------------------------------
+// Use cases (lifecycle methods delegate to these)
+// ---------------------------------------------------------------------------
+
+export { admitPacket } from "./application/use-cases/admit-packet.js";
+export { acceptRun } from "./application/use-cases/accept-run.js";
+export { answerRun } from "./application/use-cases/answer-run.js";
+export { promoteStaged } from "./application/use-cases/chain-promotion.js";
+export {
+  runLoop,
+  recoverOrphanedRuns,
+  recoverStalledRunsAtStartup,
+} from "./application/use-cases/run-loop.js";
+export type {
+  ExecuteRunCallback,
+  ConvergeCallback,
+  WaitForWorkCallback,
+  RunLoopSeams,
+} from "./application/use-cases/run-loop.js";
+
+// ---------------------------------------------------------------------------
+// Domain (pure helpers consumed by lifecycle methods)
+// ---------------------------------------------------------------------------
+
+export { parseStaged } from "./domain/chain.js";
+export { parsePacketShape } from "./domain/packet.js";
+export { isLatched, gateReason } from "./domain/gate.js";
+export type { StagedInfo } from "./domain/chain.js";
+export type { RunMeta } from "./domain/run.js";

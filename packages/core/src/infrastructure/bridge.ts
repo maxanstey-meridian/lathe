@@ -1,4 +1,4 @@
-// The bridge: the driver's MCP face (CONTRACT §9). One HTTP endpoint, five
+// The bridge: the driver's MCP face (CONTRACT §9). One HTTP endpoint, seven
 // tools, run identity ambient (M2). Every verdict is persisted before the tool
 // result returns (S2 carried); accepted decisions clear the gate synchronously
 // because the bridge IS the driver (v1 X2 made impossible).
@@ -14,6 +14,7 @@ import { execSync } from "child_process";
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "http";
 import { resolve } from "path";
 import { z } from "zod";
+import type { Executor, ModelConfig } from "../application/ports/executor.js";
 import type { Store } from "../application/ports/store.js";
 import type { Paths } from "../config/paths.js";
 import type { Config } from "../config/schemas.js";
@@ -32,8 +33,8 @@ import {
 import { JournalEvent } from "../domain/journal.js";
 import { isTestPath } from "../domain/report.js";
 import type { QuestionType } from "../domain/review.js";
-import { nowIso } from "./fsio.js";
 import { readDiffStats } from "./git.js";
+import { handleWriteHandoff, handleVerifyHandoff } from "./opencode/baby-tools.js";
 
 // ---------------------------------------------------------------------------
 // ActiveRunRef — the per-run context for this bridge session.
@@ -60,15 +61,21 @@ export type ActiveRunRef = {
   store: Store;
   turn: number;
   // Set to true the instant a stop-and-wait intent is recorded. All subsequent
-  // tool calls return an "End your turn" error so Baby winds down cooperatively.
+  // tool calls return an "End your turn" error; stopTurn asks opencode to
+  // interrupt the active message in this same session.
   turnComplete: boolean;
+  stopTurn?: () => Promise<void>;
+  // While true, only verify_handoff is accepted — blocks all other tool calls
+  // until the predecessor's handoff has been verified. Cleared by verify_handoff.
+  awaitingVerification: boolean;
+  // Executor and verify model for verify_handoff's daddy invocation.
+  executor: Executor;
+  verifyModel: ModelConfig;
 };
 
-// RunRef holder — the reference the bridge receives. Matches the reference
-// driver's CurrentRunRef = { current: RunContext | undefined } (reference
-// src/driver.ts:89). The bridge starts before any run exists; ALL ActiveRunRef
-// fields are per-run, not just packet. The holder is { current: undefined }
-// at startup, then set/cleared per run by the driver loop.
+// RunRef holder — the bridge starts before any run exists; ALL ActiveRunRef fields
+// are per-run, not just packet. The holder is { current: undefined } at startup,
+// then set/cleared per run by the driver loop.
 export type RunRef = {
   current: ActiveRunRef | undefined;
 };
@@ -84,7 +91,7 @@ type Without<T, K extends keyof T> = {
 const journal = (ctx: ActiveRunRef, event: Without<JournalEvent, "at" | "turn">): void => {
   ctx.store.appendJournal(ctx.packet.runId, {
     ...event,
-    at: nowIso(),
+    at: new Date().toISOString(),
     turn: (event as Without<JournalEvent, "at" | "turn"> & { turn?: number }).turn ?? ctx.turn,
   } as JournalEvent);
 };
@@ -96,13 +103,14 @@ const journal = (ctx: ActiveRunRef, event: Without<JournalEvent, "at" | "turn">)
 const clearGate = (ctx: ActiveRunRef): void => {
   const gateState = ctx.store.readGateState(ctx.packet.runId);
   const baselineDiffStats = readDiffStats(ctx.worktree);
-  const cleared = clearedGateState(gateState, baselineDiffStats, nowIso());
+  const now = new Date().toISOString();
+  const cleared = clearedGateState(gateState, baselineDiffStats, now);
   ctx.store.writeGateState(ctx.packet.runId, cleared);
-  journal(ctx, { event: "gate_cleared", decisionAt: nowIso() });
+  journal(ctx, { event: "gate_cleared", decisionAt: now });
 };
 
 // ---------------------------------------------------------------------------
-// Verification helpers (ported from reference/src/verification.ts)
+// Verification helpers
 // ---------------------------------------------------------------------------
 
 export type VerificationResult = { command: string; exitCode: number; outputTail: string };
@@ -193,11 +201,7 @@ export const outcomeProblems = (report: SubmitReport, ledger: OutcomeLedger): st
 // present, no phantom ids, done implies evidence.
 // ---------------------------------------------------------------------------
 
-const checkpointProblems = (
-  checkpoint: Checkpoint,
-  packet: Packet,
-  ledger: OutcomeLedger,
-): string[] => {
+const checkpointProblems = (checkpoint: Checkpoint, packet: Packet): string[] => {
   const problems: string[] = [];
   const packetIds = new Set(packet.frontmatter.outcomes.map((o) => o.id));
   const checkpointIds = new Set(checkpoint.outcomes.map((o) => o.id));
@@ -292,12 +296,29 @@ const turnCompleteError = () =>
     }),
   );
 
+const completeTurn = (ctx: ActiveRunRef): void => {
+  ctx.turnComplete = true;
+  void ctx.stopTurn?.().catch((err) => {
+    const detail = err instanceof Error ? err.message : String(err);
+    journal(ctx, { event: "driver_note", note: `opencode abort failed: ${detail}` });
+  });
+};
+
 export const handleAskPlanner = async (ref: RunRef, input: AskPlannerInput) => {
   const ctx = ref.current;
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
-  if (ctx.turnComplete) return turnCompleteError();
+  if (ctx.awaitingVerification) {
+    return errorText(
+      JSON.stringify({
+        error: "Handoff verification required. Call verify_handoff before any other tool.",
+      }),
+    );
+  }
+  if (ctx.turnComplete) {
+    return turnCompleteError();
+  }
 
   // M2: argument failures must be visible. The SDK validates shapes before
   // this handler, but content-level emptiness slips through — and an
@@ -309,10 +330,10 @@ export const handleAskPlanner = async (ref: RunRef, input: AskPlannerInput) => {
   if (!input.currentSlice.trim()) {
     argProblems.push("currentSlice is empty");
   }
-  if (!input.approach.trim()) {
+  if (input.questionType !== "reconciliation" && !input.approach.trim()) {
     argProblems.push("approach is empty — state your design decisions and intended next steps");
   }
-  if (input.evidence.every((e) => !e.trim())) {
+  if (input.questionType !== "reconciliation" && input.evidence.every((e) => !e.trim())) {
     argProblems.push("evidence is empty");
   }
   if (argProblems.length > 0) {
@@ -327,7 +348,7 @@ export const handleAskPlanner = async (ref: RunRef, input: AskPlannerInput) => {
   // the consult here: it records the submission and returns at once.
   if (ctx.pendingConsult) {
     ctx.intents.push({ kind: "consult-requested" });
-    ctx.turnComplete = true;
+    completeTurn(ctx);
     return text(
       JSON.stringify({
         status: "already_submitted",
@@ -348,11 +369,11 @@ export const handleAskPlanner = async (ref: RunRef, input: AskPlannerInput) => {
 
   // Record the intent for the turn loop to evaluate.
   ctx.intents.push({ kind: "consult-requested" });
-  ctx.turnComplete = true;
   journal(ctx, {
     event: "driver_note",
     note: `ask_planner submitted (${input.questionType}) — consult deferred to the driver`,
   });
+  completeTurn(ctx);
 
   return text(
     JSON.stringify({
@@ -368,7 +389,16 @@ export const handleUpdateOutcomes = async (ref: RunRef, input: UpdateOutcomesInp
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
-  if (ctx.turnComplete) return turnCompleteError();
+  if (ctx.awaitingVerification) {
+    return errorText(
+      JSON.stringify({
+        error: "Handoff verification required. Call verify_handoff before any other tool.",
+      }),
+    );
+  }
+  if (ctx.turnComplete) {
+    return turnCompleteError();
+  }
 
   const ledger = ctx.store.readLedger(ctx.packet.runId);
   const problems: string[] = [];
@@ -395,7 +425,7 @@ export const handleUpdateOutcomes = async (ref: RunRef, input: UpdateOutcomesInp
     if (update.nextAction !== undefined) {
       entry.nextAction = update.nextAction;
     }
-    entry.updatedAt = nowIso();
+    entry.updatedAt = new Date().toISOString();
   }
 
   if (problems.length > 0) {
@@ -421,7 +451,16 @@ export const handleWriteCheckpoint = async (ref: RunRef, input: WriteCheckpointI
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
-  if (ctx.turnComplete) return turnCompleteError();
+  if (ctx.awaitingVerification) {
+    return errorText(
+      JSON.stringify({
+        error: "Handoff verification required. Call verify_handoff before any other tool.",
+      }),
+    );
+  }
+  if (ctx.turnComplete) {
+    return turnCompleteError();
+  }
 
   const ledger = ctx.store.readLedger(ctx.packet.runId);
   const checkpoint = {
@@ -443,10 +482,10 @@ export const handleWriteCheckpoint = async (ref: RunRef, input: WriteCheckpointI
       .map((path) => ({ path })),
     filesInspected: [],
     uncertainties: input.uncertainties ?? [],
-    writtenAt: nowIso(),
+    writtenAt: new Date().toISOString(),
   } as Checkpoint;
 
-  const problems = checkpointProblems(checkpoint, ctx.packet, ledger);
+  const problems = checkpointProblems(checkpoint, ctx.packet);
   journal(ctx, {
     event: "checkpoint_written",
     number: checkpoint.number,
@@ -482,7 +521,16 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
-  if (ctx.turnComplete) return turnCompleteError();
+  if (ctx.awaitingVerification) {
+    return errorText(
+      JSON.stringify({
+        error: "Handoff verification required. Call verify_handoff before any other tool.",
+      }),
+    );
+  }
+  if (ctx.turnComplete) {
+    return turnCompleteError();
+  }
 
   // A re-submit while a final review is still pending. `pendingFinalReview` is
   // STICKY across turns, but the `final-review-requested` intent that triggers
@@ -493,7 +541,7 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
   // submit_report so the trigger tracks the sticky state.
   if (ctx.pendingFinalReview) {
     ctx.intents.push({ kind: "final-review-requested" });
-    ctx.turnComplete = true;
+    completeTurn(ctx);
     return text(
       JSON.stringify({
         status: "review_pending",
@@ -551,14 +599,6 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
   }
   problems.push(...outcomeProblems(report, ledger));
 
-  // V5: a latched gate means an unresolved planner obligation.
-  const gateState = ctx.store.readGateState(ctx.packet.runId);
-  if (report.status === "ready_for_review" && gateState.latched) {
-    problems.push(
-      `the gate is latched (${gateState.latchReason ?? "planner checkpoint required"}) — ready_for_review requires a clear gate: call meridian-bridge_ask_planner and continue only on proceed`,
-    );
-  }
-
   // Verification failures from the driver's own run.
   for (const r of verificationResults) {
     if (r.exitCode !== 0) {
@@ -607,8 +647,8 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
   // this handler. Defer it: record the report and return; the driver runs the
   // review off the MCP path.
   if (report.status === "ready_for_review") {
-    // A report that passes the floor SUPERSEDES any report-rejected intent from
-    // an earlier submit THIS turn — that earlier report is no longer the truth.
+    // A report that passes the floor supersedes any report-rejected intent from
+    // an earlier submit this turn.
     // Drop it so final-review-requested is the highest pending intent and
     // run_final_review fires this turn (else branch 4 > branch 6 orphans the
     // review and Baby livelocks on review_pending forever).
@@ -618,7 +658,7 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
     // driver-side runner when the review completes. The report_submitted
     // event above is already sufficient tracking.
     ctx.intents.push({ kind: "final-review-requested" });
-    ctx.turnComplete = true;
+    completeTurn(ctx);
     return text(
       JSON.stringify({
         status: "review_pending",
@@ -637,7 +677,7 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
     blockedQuestion: report.blockedQuestion,
     summary: report.summary,
   });
-  ctx.turnComplete = true;
+  completeTurn(ctx);
   return text(
     JSON.stringify({
       ok: true,
@@ -652,7 +692,16 @@ export const handleGetDecisions = async (ref: RunRef, input: GetDecisionsInput) 
   if (!ctx) {
     return errorText(JSON.stringify({ error: "no active run" }));
   }
-  if (ctx.turnComplete) return turnCompleteError();
+  if (ctx.awaitingVerification) {
+    return errorText(
+      JSON.stringify({
+        error: "Handoff verification required. Call verify_handoff before any other tool.",
+      }),
+    );
+  }
+  if (ctx.turnComplete) {
+    return turnCompleteError();
+  }
 
   const decisions = ctx.store.readDecisions(ctx.packet.runId);
   const gateState = ctx.store.readGateState(ctx.packet.runId);
@@ -697,13 +746,13 @@ export const buildMcpServer = (ref: RunRef): McpServer => {
       question: z.string().min(1).describe("The narrow, scoped question."),
       approach: z
         .string()
-        .min(1)
+        .min(0)
         .describe(
           "Your implementation approach for this slice: every design decision you have already made or are about to make (representations, strategies, structure), plus your intended next steps. The planner reviews this, not just the question — withholding a decision here means implementing it unreviewed.",
         ),
       evidence: z
         .array(z.string())
-        .min(1)
+        .min(0)
         .describe("Concrete evidence: file paths, snippets, error text."),
     },
     async (input) => handleAskPlanner(ref, input),
@@ -813,6 +862,50 @@ export const buildMcpServer = (ref: RunRef): McpServer => {
     async (input) => handleGetDecisions(ref, input),
   );
 
+  // --- write_handoff (verify-handoff protocol) ---
+
+  server.tool(
+    "write_handoff",
+    "Write the current handoff artifact to disk. Called after each verified chunk of work so a recycled baby can resume from the latest state.",
+    {
+      completedSteps: z
+        .array(
+          z.object({
+            description: z.string().min(1),
+            files: z.array(z.string()).optional(),
+          }),
+        )
+        .describe("Steps completed since the last handoff."),
+      remainingWork: z
+        .array(z.string())
+        .describe("Remaining work items from the packet, updated to reflect progress."),
+      decisionsMade: z
+        .array(z.string())
+        .describe("Key design/business decisions made during this chunk."),
+      resumeFrom: z
+        .string()
+        .describe("Where the next baby should pick up — a specific file, line, or outcome id."),
+    },
+    async (input) => handleWriteHandoff(ref, input),
+  );
+
+  // --- verify_handoff (verify-handoff protocol) ---
+
+  server.tool(
+    "verify_handoff",
+    "Verify the predecessor's handoff artifact. Reads handoff.json, checks the declared file surface, and asks daddy for a spot-check verdict. Call this immediately after reading a handoff-injected system message.",
+    {
+      claimedCompletions: z
+        .array(z.string())
+        .describe("Descriptions of the steps baby believes were completed."),
+      questionsForDaddy: z
+        .array(z.string())
+        .optional()
+        .describe("Specific questions about the handoff that baby wants daddy to check."),
+    },
+    async (input) => handleVerifyHandoff(ref, input),
+  );
+
   return server;
 };
 
@@ -883,7 +976,7 @@ export const listenBridge = (httpServer: Server, config: Config): Promise<void> 
       reject(
         err.code === "EADDRINUSE"
           ? new Error(
-              `port ${config.opencode.bridgePort} is in use — another 'meridian run' is already active. One driver at a time.`,
+              `port ${config.opencode.bridgePort} is in use — another 'lathe serve' is already active. One driver at a time.`,
             )
           : err,
       );

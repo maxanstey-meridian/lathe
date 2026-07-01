@@ -99,7 +99,7 @@ const minReport = (): SubmitReport => ({
   remainingUncertainty: [],
 });
 
-const minSkillText = `# Meridian Skill
+const minSkillText = `# Lathe Skill
 
 ## Doctrine
 

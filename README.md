@@ -10,7 +10,7 @@ That reviewer loop is where the value is. It says the things a 3B-active model w
 
 This is a personal tool, not a polished public product. It is only tested on macOS.
 
-The old project name was Meridian. Some paths and source comments still say `meridian`, most importantly `~/.meridian/v3/config.json`. That is the current config path, but it is legacy naming and a rename is pending.
+The old project name was Meridian. Some paths and source identifiers still say `meridian`, most importantly the `~/.meridian/v3/` state root and the `meridian/` run-branch prefix. These are functional and renaming them would break existing state; the MCP bridge tool prefix (`meridian-bridge_*`) is also retained. Everything user-facing now says Lathe.
 
 ## Requirements
 
@@ -51,7 +51,7 @@ The repo-owned opencode skill for writing Lathe packets lives at:
 .opencode/skills/packet/SKILL.md
 ```
 
-Use that skill when turning a design into an overnight packet. It documents the current packet rules, admission flow, legacy `~/.meridian/v3` naming, and the expectation that packets are validated with `lathe queue add <packet.md>` rather than dropped into the queue by hand.
+Use that skill when turning a design into an overnight packet. It documents the current packet rules, admission flow, the legacy `~/.meridian/v3` state root, and the expectation that packets are validated with `lathe queue add <packet.md>` rather than dropped into the queue by hand.
 
 ## Packet Shape
 

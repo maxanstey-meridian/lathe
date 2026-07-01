@@ -87,11 +87,11 @@ export const extractReasoning = (response: TurnResponse): string =>
     .map((p) => p.text)
     .join("\n");
 
-// Pure helper: whether a part represents a MERIDIAN GATE denial.
+// Pure helper: whether a part represents a LATHE GATE denial.
 export const gateDeniedPart = (part: MessagePart): boolean =>
   part.type === "tool" &&
   part.state?.status === "error" &&
-  `${part.state.output ?? ""}${part.state.error ?? ""}`.includes("MERIDIAN GATE");
+  `${part.state.output ?? ""}${part.state.error ?? ""}`.includes("LATHE GATE");
 
 // Pure helper: one-line rendering of a turn's provider error (MessageInfo.error),
 // or null when the turn carried none.

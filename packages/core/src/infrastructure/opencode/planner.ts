@@ -32,7 +32,7 @@ export const createPlanner = (
   // has no write/edit/patch/bash) so it can inspect the actual code when a
   // reconciliation/handoff question can't be answered from inline evidence alone.
   const handshake = async (seedPrompt: string, directory: string): Promise<string> => {
-    daddySessionId = await executor.createSession("meridian-planner", directory);
+    daddySessionId = await executor.createSession("lathe-planner", directory);
     const response = await executor.sendMessage(daddySessionId, seedPrompt, daddyModel, 30000);
     const text = extractText(response);
     if (!text.includes("PLANNER_OK")) {

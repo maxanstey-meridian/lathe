@@ -616,7 +616,7 @@ test("checkpointNudgeNotice: past interval → NOTICE string", () => {
     lastAcceptedDecisionAt: iso(30 * 60 * 1000),
   });
   const notice = checkpointNudgeNotice(state, now);
-  assert.ok(notice?.includes("MERIDIAN GATE NOTICE"));
+  assert.ok(notice?.includes("LATHE GATE NOTICE"));
   assert.ok(notice?.includes("~30 min"));
   assert.ok(notice?.includes("You are NOT blocked"));
   assert.ok(notice?.includes("ask_planner"));
@@ -632,7 +632,7 @@ test("checkpointNudgeNotice: uses default 20 min if checkpointNudgeMs not set", 
     checkpointNudgeMs: undefined,
   });
   const notice = checkpointNudgeNotice(state, now);
-  assert.ok(notice?.includes("MERIDIAN GATE NOTICE"));
+  assert.ok(notice?.includes("LATHE GATE NOTICE"));
 });
 
 // ===========================================================================
@@ -707,9 +707,9 @@ test("volumeNoticeReason: files/LoC on mutation calls", () => {
 // Messages
 // ===========================================================================
 
-test("denyMessage: starts with MERIDIAN GATE BLOCKED", () => {
+test("denyMessage: starts with LATHE GATE BLOCKED", () => {
   const msg = denyMessage("first edit of the run requires an accepted planner decision");
-  assert.ok(msg.startsWith("MERIDIAN GATE BLOCKED"));
+  assert.ok(msg.startsWith("LATHE GATE BLOCKED"));
   assert.ok(msg.includes("ask_planner"));
   assert.ok(msg.includes("proceed or proceed_with_constraints"));
   assert.ok(msg.includes("Reads stay available for gathering evidence"));
@@ -723,7 +723,7 @@ test("denyMessage: reconciliation block asks only for Daddy-owned reconciliation
 });
 
 test("QUESTION_MESSAGE: interactive questions disabled", () => {
-  assert.ok(QUESTION_MESSAGE.startsWith("MERIDIAN GATE BLOCKED"));
+  assert.ok(QUESTION_MESSAGE.startsWith("LATHE GATE BLOCKED"));
   assert.ok(QUESTION_MESSAGE.includes("interactive questions are disabled"));
   assert.ok(QUESTION_MESSAGE.includes("Max is not present"));
   assert.ok(QUESTION_MESSAGE.includes("ask_planner"));
@@ -731,14 +731,14 @@ test("QUESTION_MESSAGE: interactive questions disabled", () => {
 });
 
 test("SUBAGENT_MESSAGE: subagents blocked", () => {
-  assert.ok(SUBAGENT_MESSAGE.startsWith("MERIDIAN GATE BLOCKED"));
+  assert.ok(SUBAGENT_MESSAGE.startsWith("LATHE GATE BLOCKED"));
   assert.ok(SUBAGENT_MESSAGE.includes("exploration subagents are disabled"));
   assert.ok(SUBAGENT_MESSAGE.includes("ask_planner"));
   assert.ok(SUBAGENT_MESSAGE.includes("bounded inspection"));
 });
 
 test("GIT_MESSAGE: git mutations blocked to driver", () => {
-  assert.ok(GIT_MESSAGE.startsWith("MERIDIAN GATE BLOCKED"));
+  assert.ok(GIT_MESSAGE.startsWith("LATHE GATE BLOCKED"));
   assert.ok(GIT_MESSAGE.includes("git mutations are not yours"));
   assert.ok(GIT_MESSAGE.includes("the driver commits at the end of the run"));
 });

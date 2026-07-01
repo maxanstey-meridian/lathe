@@ -52,7 +52,7 @@ export const createReviewer = (
       reviewerSessionId = undefined;
     }
     if (!reviewerSessionId) {
-      reviewerSessionId = await executor.createSession("meridian-superdaddy", worktree);
+      reviewerSessionId = await executor.createSession("lathe-superdaddy", worktree);
       currentWorktree = worktree;
     }
     return reviewerSessionId;

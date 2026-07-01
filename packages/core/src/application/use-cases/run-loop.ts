@@ -156,7 +156,7 @@ export const runLoop = async <Ref>(
               if (store.readMetaIfExists(runId)?.worktree) {
                 repo.wipCommit(
                   store.readMetaIfExists(runId)!.worktree,
-                  `meridian: WIP ${runId} [interrupted]`,
+                  `lathe: WIP ${runId} [interrupted]`,
                 );
               }
               store.writeMeta({
@@ -185,7 +185,7 @@ export const runLoop = async <Ref>(
             );
             if (crashDecision.action === "requeue") {
               if (crashMeta.worktree) {
-                repo.wipCommit(crashMeta.worktree, `meridian: WIP ${runId} [crashed]`);
+                repo.wipCommit(crashMeta.worktree, `lathe: WIP ${runId} [crashed]`);
               }
               store.writeMeta({
                 ...crashedMeta,
@@ -211,7 +211,7 @@ export const runLoop = async <Ref>(
               updatedAt: clock.nowIso(),
             });
             if (crashMeta.worktree) {
-              repo.wipCommit(crashMeta.worktree, `meridian: WIP ${runId} [crashed]`);
+              repo.wipCommit(crashMeta.worktree, `lathe: WIP ${runId} [crashed]`);
             }
             continue;
           }
@@ -241,21 +241,21 @@ export const runLoop = async <Ref>(
             }
             // R6: a blocked run parks and driver moves on.
             if (terminalMeta.worktree) {
-              repo.wipCommit(terminalMeta.worktree, `meridian: WIP ${runId} [${status}]`);
+              repo.wipCommit(terminalMeta.worktree, `lathe: WIP ${runId} [${status}]`);
             }
             continue;
           }
 
           if (status === "failed") {
             if (terminalMeta.worktree) {
-              repo.wipCommit(terminalMeta.worktree, `meridian: WIP ${runId} [${status}]`);
+              repo.wipCommit(terminalMeta.worktree, `lathe: WIP ${runId} [${status}]`);
             }
             continue;
           }
 
           if (status === "aborted") {
             if (terminalMeta.worktree) {
-              repo.wipCommit(terminalMeta.worktree, `meridian: WIP ${runId} [${status}]`);
+              repo.wipCommit(terminalMeta.worktree, `lathe: WIP ${runId} [${status}]`);
             }
             continue;
           }
@@ -265,7 +265,7 @@ export const runLoop = async <Ref>(
           } else {
             // Unexpected status — treat as park.
             if (terminalMeta.worktree) {
-              repo.wipCommit(terminalMeta.worktree, `meridian: WIP ${runId} [${status}]`);
+              repo.wipCommit(terminalMeta.worktree, `lathe: WIP ${runId} [${status}]`);
             }
             continue;
           }
@@ -348,7 +348,7 @@ export const recoverOrphanedRuns = (store: Store, repo: Repo, clock: Clock): voi
       continue;
     }
     if (meta.worktree) {
-      repo.wipCommit(meta.worktree, `meridian: WIP ${runId} [interrupted]`);
+      repo.wipCommit(meta.worktree, `lathe: WIP ${runId} [interrupted]`);
     }
     store.writeMeta({
       ...meta,

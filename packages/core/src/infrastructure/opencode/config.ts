@@ -115,7 +115,7 @@ export const writeOpencodeConfig = (
     // (defense in depth alongside the gate plugin's hard catch).
     agent: {
       daddy: {
-        description: "Meridian planner — decides, never implements",
+        description: "Lathe planner — decides, never implements",
         mode: "primary",
         tools: {
           write: false,
@@ -138,7 +138,7 @@ export const writeOpencodeConfig = (
         },
       },
       baby: {
-        description: "Meridian executor — implements the packet",
+        description: "Lathe executor — implements the packet",
         mode: "primary",
         // Turns end after ≤N tool-rounds, returning control to the driver at
         // bounded intervals so rotation and gate evaluation cannot be starved.
@@ -152,7 +152,7 @@ export const writeOpencodeConfig = (
       // and NO bridge tools (it must never answer itself, same rule as daddy).
       superdaddy: {
         description:
-          "Meridian convergence reviewer — judges delivered work against the packet and doctrine; executes verification, never edits",
+          "Lathe convergence reviewer — judges delivered work against the packet and doctrine; executes verification, never edits",
         mode: "primary",
         steps: config.superdaddy.turnSteps,
         tools: {

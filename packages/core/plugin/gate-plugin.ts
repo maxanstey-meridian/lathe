@@ -8,7 +8,7 @@
 //      check-in interval. Never throws, never blocks.
 //
 // This file exports ONLY the default plugin factory. Pure
-// logic lives in ./gate-core.ts. Both messages carry the MERIDIAN GATE marker.
+// logic lives in ./gate-core.ts. Both messages carry the LATHE GATE marker.
 
 import {
   activeRun,

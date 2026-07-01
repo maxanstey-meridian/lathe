@@ -176,7 +176,7 @@ export const checkpointNudgeNotice = (state: GateState, nowMs: number): string |
     return undefined;
   }
   const minutes = Math.round(elapsed / 60_000);
-  return `MERIDIAN GATE NOTICE: ~${minutes} min since your last planner check-in. You are NOT blocked — this is a reminder, keep working with full tool access. If stuck, guessing, surprised by code, repeating a failed fix, or your plan changed, call ask_planner now. Prose is not a routed question. Otherwise carry on and call submit_report once the packet is complete.`;
+  return `LATHE GATE NOTICE: ~${minutes} min since your last planner check-in. You are NOT blocked — this is a reminder, keep working with full tool access. If stuck, guessing, surprised by code, repeating a failed fix, or your plan changed, call ask_planner now. Prose is not a routed question. Otherwise carry on and call submit_report once the packet is complete.`;
 };
 
 // NON-BLOCKING VOLUME reminder (G10). Pure: takes delta precomputed by the caller
@@ -207,17 +207,17 @@ export const volumeNoticeReason = (
   }
   return undefined;
 };
-// --- messages (all carry the MERIDIAN GATE marker the driver journals on) ----
+// --- messages (all carry the LATHE GATE marker the driver journals on) ----
 
 export const denyMessage = (reason: string): string => {
   if (reason.startsWith("reconciliation required:")) {
-    return `MERIDIAN GATE BLOCKED: ${reason}. The first mutation after a no-checkpoint resume is blocked. Do not inspect, compare, reconstruct, or prove the run state. Your next tool call must be ask_planner with questionType "reconciliation"; Baby is only triggering Daddy-owned reconciliation. The driver will supply durable state and git evidence. Continue only on proceed or proceed_with_constraints.`;
+    return `LATHE GATE BLOCKED: ${reason}. The first mutation after a no-checkpoint resume is blocked. Do not inspect, compare, reconstruct, or prove the run state. Your next tool call must be ask_planner with questionType "reconciliation"; Baby is only triggering Daddy-owned reconciliation. The driver will supply durable state and git evidence. Continue only on proceed or proceed_with_constraints.`;
   }
-  return `MERIDIAN GATE BLOCKED: ${reason}. Your next tool call must be ask_planner — and it must state exactly what you were about to change (file and intended edit), WHY, and where the work stands overall. The planner can correct your direction even while approving, but only if you show it the real intent, not a summary that flatters it. Continue only on proceed or proceed_with_constraints. Reads stay available for gathering evidence.`;
+  return `LATHE GATE BLOCKED: ${reason}. Your next tool call must be ask_planner — and it must state exactly what you were about to change (file and intended edit), WHY, and where the work stands overall. The planner can correct your direction even while approving, but only if you show it the real intent, not a summary that flatters it. Continue only on proceed or proceed_with_constraints. Reads stay available for gathering evidence.`;
 };
 
-export const QUESTION_MESSAGE = `MERIDIAN GATE BLOCKED: interactive questions are disabled — Max is not present during a run. Route it: implementation/architecture/procedure/scope questions go to ask_planner; decisions only Max can make go into submit_report with status "blocked" and the exact question.`;
+export const QUESTION_MESSAGE = `LATHE GATE BLOCKED: interactive questions are disabled — Max is not present during a run. Route it: implementation/architecture/procedure/scope questions go to ask_planner; decisions only Max can make go into submit_report with status "blocked" and the exact question.`;
 
-export const SUBAGENT_MESSAGE = `MERIDIAN GATE BLOCKED: exploration subagents are disabled during a run. Broad discovery routes to ask_planner; bounded inspection of files the packet names stays available in this session.`;
+export const SUBAGENT_MESSAGE = `LATHE GATE BLOCKED: exploration subagents are disabled during a run. Broad discovery routes to ask_planner; bounded inspection of files the packet names stays available in this session.`;
 
-export const GIT_MESSAGE = `MERIDIAN GATE BLOCKED: git mutations are not yours — the driver owns commits, branches, and worktrees. Work in the files; the driver commits at the end of the run.`;
+export const GIT_MESSAGE = `LATHE GATE BLOCKED: git mutations are not yours — the driver owns commits, branches, and worktrees. Work in the files; the driver commits at the end of the run.`;

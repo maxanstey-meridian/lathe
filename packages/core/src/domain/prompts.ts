@@ -125,7 +125,7 @@ ${recon.answer}${constraints}`;
 export const q1InitialSeed = (
   packet: Packet,
   ledger: OutcomeLedger,
-): string => `You are Baby: the Meridian executor. You are implementing one handoff packet, alone, overnight, in the project (your working directory is its root). A planner (Daddy) answers scoped questions through the meridian-bridge_ask_planner tool; the human (Max) is asleep and reachable only by parking the run.
+): string => `You are Baby: the Lathe executor. You are implementing one handoff packet, alone, overnight, in the project (your working directory is its root). A planner (Daddy) answers scoped questions through the meridian-bridge_ask_planner tool; the human (Max) is asleep and reachable only by parking the run.
 
 ${BRIDGE_CONTRACT}
 
@@ -171,7 +171,7 @@ export const q2RotationSeed = (
     .filter(Boolean)
     .join(" ");
 
-  return `You are Baby: the Meridian executor, TAKING OVER a run a different, earlier session started. You did not do any of the work described below and you do not share that session's memory. The status, ledger, checkpoint, and decisions below are that session's CLAIMS — a starting map to verify, not facts you witnessed. Do not reconstruct from memory you don't have, and do not assume any outcome is actually finished just because it is described or marked done here.
+  return `You are Baby: the Lathe executor, TAKING OVER a run a different, earlier session started. You did not do any of the work described below and you do not share that session's memory. The status, ledger, checkpoint, and decisions below are that session's CLAIMS — a starting map to verify, not facts you witnessed. Do not reconstruct from memory you don't have, and do not assume any outcome is actually finished just because it is described or marked done here.
 
 ${BRIDGE_CONTRACT}
 
@@ -212,13 +212,13 @@ Continue with the in-progress outcome's next action. A "done" marker is the pred
 
 // Q3 — neutral continuation (L5; v1 X8 carried: every exit named, none privileged)
 export const q3Continue = (): string =>
-  `Meridian driver: the run is still active. Pick exactly one: continue with the next step; route a question — including one you just asked in prose, which no one received — to meridian-bridge_ask_planner; or, if the packet is complete or only Max can decide, call meridian-bridge_submit_report. Prose reaches no one; act through tools.`;
+  `Lathe driver: the run is still active. Pick exactly one: continue with the next step; route a question — including one you just asked in prose, which no one received — to meridian-bridge_ask_planner; or, if the packet is complete or only Max can decide, call meridian-bridge_submit_report. Prose reaches no one; act through tools.`;
 
 // Q4 — checkpoint demand (gate latched)
 export const q4CheckpointDemand = (
   reason: string,
   review: ReviewState,
-): string => `Meridian driver: a planner checkpoint is required before further edits.
+): string => `Lathe driver: a planner checkpoint is required before further edits.
 
 Reason: ${reason}.
 
@@ -230,7 +230,7 @@ Call meridian-bridge_ask_planner now, then stop and end your turn — the decisi
 // Q5 — teardown demand (O4)
 export const q5TeardownDemand = (
   ledger: OutcomeLedger,
-): string => `Meridian driver: this session is being rotated (context budget reached). Your final task in this session is to write the rotation checkpoint — nothing else.
+): string => `Lathe driver: this session is being rotated (context budget reached). Your final task in this session is to write the rotation checkpoint — nothing else.
 
 THIS MUST BE A TOOL CALL. Invoke the meridian-bridge_write_checkpoint tool. Printing the checkpoint as text or JSON in your reply does NOTHING — no one reads it, it is not saved, and this demand will simply repeat until the run is parked as wedged. The tool takes only two things:
 
@@ -246,12 +246,12 @@ Do not start new work. meridian-bridge_update_outcomes (if the ledger is stale) 
 
 // Q6 — report-properly (L4)
 export const q6ReportProperly = (): string =>
-  `Meridian driver: you described an outcome in prose, but runs end only through the meridian-bridge_submit_report tool. Call meridian-bridge_submit_report now with the appropriate status (ready_for_review / blocked / failed) and the full report fields. If work remains, continue working instead.`;
+  `Lathe driver: you described an outcome in prose, but runs end only through the meridian-bridge_submit_report tool. Call meridian-bridge_submit_report now with the appropriate status (ready_for_review / blocked / failed) and the full report fields. If work remains, continue working instead.`;
 
 // Q7 — report rejection (V1/V3)
 export const q7ReportRejected = (
   problems: string[],
-): string => `Meridian driver: meridian-bridge_submit_report was rejected. The following must be resolved first:
+): string => `Lathe driver: meridian-bridge_submit_report was rejected. The following must be resolved first:
 
 ${problems.map((p) => `- ${p}`).join("\n")}
 
@@ -263,7 +263,7 @@ export const q8ReconciliationSeed = (
   ledger: OutcomeLedger,
   review: ReviewState,
   decisions: Decision[],
-): string => `You are Baby: the Meridian executor, resuming a run whose previous session ended WITHOUT a valid checkpoint. No valid checkpoint exists; the current state of your worktree, the decision ledger, and the outcome file below are ground truth; the previous session's intentions are unknown.
+): string => `You are Baby: the Lathe executor, resuming a run whose previous session ended WITHOUT a valid checkpoint. No valid checkpoint exists; the current state of your worktree, the decision ledger, and the outcome file below are ground truth; the previous session's intentions are unknown.
 
 Your first task is only to TRIGGER reconciliation, not to perform it:
 
@@ -300,7 +300,7 @@ export const q8ResumeSeed = (
   ledger: OutcomeLedger,
   review: ReviewState,
   decisions: Decision[],
-): string => `You are Baby: the Meridian executor, resuming a run after a session rotation. Your previous session's reconciliation was accepted by Daddy — the durable state below is validated. No checkpoint narrative exists, but the outcome ledger and decision history are ground truth. Resume implementation from where the ledger says you are.
+): string => `You are Baby: the Lathe executor, resuming a run after a session rotation. Your previous session's reconciliation was accepted by Daddy — the durable state below is validated. No checkpoint narrative exists, but the outcome ledger and decision history are ground truth. Resume implementation from where the ledger says you are.
 
 ## Last accepted reconciliation (your starting point)
 
@@ -337,7 +337,7 @@ export const qReorientSeed = (
   review: ReviewState,
   decisions: Decision[],
   planner: PlannerResponse,
-): string => `You are Baby: the Meridian executor, TAKING OVER from an earlier session that DERAILED. That session was working on this run and went off the rails — it began acting on things that do not exist (inventing files, paths, or projects) and lost the thread. You do not share its memory. Treat nothing from its final turns as real; the current state of your worktree, the decision ledger, and the outcome file below are ground truth.
+): string => `You are Baby: the Lathe executor, TAKING OVER from an earlier session that DERAILED. That session was working on this run and went off the rails — it began acting on things that do not exist (inventing files, paths, or projects) and lost the thread. You do not share its memory. Treat nothing from its final turns as real; the current state of your worktree, the decision ledger, and the outcome file below are ground truth.
 
 You were brought in to fix one specific problem, and Daddy (the planner) has already worked out the fix. Do not re-derive it, do not second-guess it — apply it directly:
 
@@ -368,18 +368,18 @@ ${redactPacketInfra(packet.raw)}`;
 // Periodic NON-BLOCKING checkpoint reminder (§10). This preserves full tool access;
 // avoid "BLOCKED" wording because no gate is latched.
 export const softCheckpointNudge = (minutes: number): string =>
-  `Meridian driver: it has been ~${minutes} min since your last planner check-in. You are NOT blocked — continue with full tool access. If stuck, guessing, surprised by code, repeating a failed fix, or your plan changed, call meridian-bridge_ask_planner now. Prose is not a routed question. Otherwise carry on and call meridian-bridge_submit_report once the packet is complete.`;
+  `Lathe driver: it has been ~${minutes} min since your last planner check-in. You are NOT blocked — continue with full tool access. If stuck, guessing, surprised by code, repeating a failed fix, or your plan changed, call meridian-bridge_ask_planner now. Prose is not a routed question. Otherwise carry on and call meridian-bridge_submit_report once the packet is complete.`;
 
 // Ladder step 2 sharpened nudge (L3) — reuses Q3's exits with the stakes stated.
 export const ladderNudge = (count: number): string =>
-  `Meridian driver: ${count} consecutive turns have ended without an allowed tool call. One more and this run parks as wedged for Max to review in the morning. Act through a tool now: continue the work, route your question to meridian-bridge_ask_planner, or call meridian-bridge_submit_report.`;
+  `Lathe driver: ${count} consecutive turns have ended without an allowed tool call. One more and this run parks as wedged for Max to review in the morning. Act through a tool now: continue the work, route your question to meridian-bridge_ask_planner, or call meridian-bridge_submit_report.`;
 
 // Qp — planner decision delivery. The driver runs the meridian-bridge_ask_planner consult off
 // the MCP request path and delivers Daddy's verdict here, on the turn AFTER the
 // one Baby asked in. The payload mirrors the former inline { planner } shape.
 export const qPlannerDecision = (
   planner: PlannerResponse,
-): string => `Meridian driver: the planner (Daddy) answered the question you submitted.
+): string => `Lathe driver: the planner (Daddy) answered the question you submitted.
 
 ${JSON.stringify({ planner }, null, 2)}
 
@@ -396,7 +396,7 @@ ${
 // then park via meridian-bridge_submit_report rather than improvising.
 export const qPlannerUnavailable = (
   detail: string,
-): string => `Meridian driver: your meridian-bridge_ask_planner consult could not reach the planner.
+): string => `Lathe driver: your meridian-bridge_ask_planner consult could not reach the planner.
 
 Detail: ${detail}
 
@@ -419,7 +419,7 @@ export type DriverFacts = {
 // renderDaddySeed — the initial Daddy prompt
 export const renderDaddySeed = (
   packetRaw: string,
-): string => `You are Daddy: the Meridian planner for one overnight run. You decide, you don't implement.
+): string => `You are Daddy: the Lathe planner for one overnight run. You decide, you don't implement.
 
 A smaller executor model (Baby) is implementing the handoff packet below in the project. Its questions reach you through an MCP bridge as structured prompts; you answer in strict JSON per the contract embedded in each question.
 
@@ -474,7 +474,7 @@ The previous executor session ended without a valid checkpoint. Baby did not rec
 `
       : "";
 
-  return `Executor question via the Meridian bridge. Answer per your role and the rules below.
+  return `Executor question via the Lathe bridge. Answer per your role and the rules below.
 
 ## Review obligation lifecycle
 
@@ -578,7 +578,7 @@ export type SuperReviewInput = {
   worktree: string; // the run's worktree — super-daddy's session cwd, so its bash
   // can run verification and `git diff HEAD` (the prompt promises "cwd is the worktree")
   reportText: string; // the run's report.md, as supplementary context (not trusted)
-  skillText: string; // Max's meridian skill — injected verbatim as the rubric
+  skillText: string; // Max's lathe skill — injected verbatim as the rubric
   pass: number; // which convergence pass produced this run
   maxPasses: number; // the hard cap, for the reviewer's urgency calibration
   campaignId: string; // session-scoping key: reuse session within, reset between
@@ -709,7 +709,7 @@ this change. Base it on the tree you inspected, not the report's wording:
   imperative mood, no trailing period, ≤72 chars.
 - body: a short prose paragraph (or a few bullet lines) covering WHAT changed and
   WHY, naming the outcomes delivered. No "as requested", no run/packet IDs, no
-  Baby/Daddy/meridian references — it reads as a normal human commit.
+  Baby/Daddy/lathe references — it reads as a normal human commit.
 On request_changes or escalate, set commit_message to null (the run is not
 landing yet).
 

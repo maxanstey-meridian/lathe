@@ -315,12 +315,12 @@ const finalizeRun = (
   const { store, repo, clock } = ports;
   const { outcome } = result;
 
-  const sha = repo.wipCommit(worktree, `meridian: WIP ${runId} [${outcome.status}]`);
+  const sha = repo.wipCommit(worktree, `lathe: WIP ${runId} [${outcome.status}]`);
   if (sha) {
     journal(ports, runId, 0, {
       event: "committed",
       sha,
-      message: `meridian: WIP ${runId} [${outcome.status}]`,
+      message: `lathe: WIP ${runId} [${outcome.status}]`,
     });
   }
 

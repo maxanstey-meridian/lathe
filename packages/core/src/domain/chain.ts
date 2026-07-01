@@ -62,7 +62,7 @@ export const parseStaged = (raw: string, fileName: string): StageParse => {
 };
 
 // The converged tip of a campaign is the run whose pass `accept`ed — the branch
-// `meridian accept` would merge. A super-daddy repair pass can be the tip, so a
+// `lathe accept` would merge. A super-daddy repair pass can be the tip, so a
 // child bases off the LATEST accepted pass, not necessarily parent_run_id itself.
 export const convergedTip = (campaign: Campaign): string | undefined =>
   [...campaign.passes].reverse().find((p) => p.verdict === "accept")?.runId;
@@ -107,14 +107,14 @@ export const decidePromotion = (
 
 // How a staged child actually bases off its converged tip, given the tip's LIVE
 // run meta. decidePromotion is pure over the campaign and so can only name the
-// tip's nominal branch (meridian/<tip>); whether that branch still exists depends
+// tip's nominal branch (meridian/<tip>, legacy prefix); whether that branch still exists depends
 // on the tip's status, which is I/O. This refines the decision with that fact:
 //
 //   - tip NOT yet accepted: the campaign converged but `lathe accept` hasn't run,
 //     so the tip's work lives only in its self-rooted clone sandbox. Base off the
 //     tip branch and fetch it from the clone first (fetchFromClone = clone path).
 //   - tip ALREADY accepted: accept merged it into `acceptedInto` and destroyed the
-//     clone + the meridian/<tip> branch. The canonical repo already has the work
+//     clone + the meridian/<tip> branch (legacy prefix). The canonical repo already has the work
 //     on that branch, so base off it and do NOT fetch (fetchFromClone undefined).
 //     Fall back to the run's own base for metas predating the acceptedInto field.
 //

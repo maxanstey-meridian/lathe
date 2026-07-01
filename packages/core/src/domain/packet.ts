@@ -30,7 +30,7 @@ export const PacketFrontmatter = z.object({
   // campaign it stays fixed at the original work-item base while `base`
   // advances to each packet's execution tip.
   compare_commit: z.string().min(1),
-  // One-line human description of what this run delivers — shown in `meridian
+  // One-line human description of what this run delivers — shown in `lathe
   // tail`'s status bar. Optional so hand-written/older packets still validate.
   summary: z.string().optional(),
   outcomes: z.array(OutcomeDef).min(1),

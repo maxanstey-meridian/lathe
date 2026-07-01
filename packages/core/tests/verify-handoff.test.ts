@@ -697,7 +697,7 @@ test("buildVerifyPrompt: omits empty sections", () => {
 test("runVerify: creates session, sends prompt, returns parsed verdict", async () => {
   const executor: Executor = {
     createSession: async (title) => {
-      strictEqual(title, "meridian-verify");
+      strictEqual(title, "lathe-verify");
       return "session-123";
     },
     sendMessage: async (sessionId, text, model, timeout) => {

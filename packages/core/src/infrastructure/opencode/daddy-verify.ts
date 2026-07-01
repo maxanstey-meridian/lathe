@@ -119,7 +119,7 @@ export const runVerify = async (
 
   let sessionId: string | undefined;
   try {
-    sessionId = await executor.createSession("meridian-verify", worktree);
+    sessionId = await executor.createSession("lathe-verify", worktree);
     const response = await executor.sendMessage(sessionId, prompt, verifyModel, verifyTimeoutMs);
     // All-message harvest: daddy reads files (multi-step) before emitting the
     // verdict, which can land in an earlier step leaving the final message empty.

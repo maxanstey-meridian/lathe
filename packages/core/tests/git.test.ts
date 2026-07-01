@@ -561,6 +561,48 @@ test("fetchBranchFromClone: pulls a branch from a clone into source repo refs", 
   }
 });
 
+test("fetchBranchFromClone: skips fetch when branch already exists in repo", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "meridian-fetch-skip-"));
+  try {
+    const { repo: source } = initSourceRepo(tmp);
+
+    // Create a sandbox clone, make a commit on a feature branch.
+    const clonePath = join(tmp, "clone");
+    mkdirSync(clonePath);
+    execSync(`git clone --local ${source} ${clonePath}`, { stdio: "ignore" });
+    execSync("git config user.email t@t.t", { cwd: clonePath, stdio: "ignore" });
+    execSync("git config user.name t", { cwd: clonePath, stdio: "ignore" });
+    execSync("git checkout -q -b feature", { cwd: clonePath, stdio: "ignore" });
+    writeFileSync(join(clonePath, "feature.txt"), "feat\n");
+    execSync("git add -A && git commit -qm feature", { cwd: clonePath, stdio: "ignore" });
+
+    // First fetch brings the branch into source.
+    fetchBranchFromClone(source, clonePath, "feature");
+    const originalSha = execSync("git rev-parse feature", {
+      cwd: source,
+      encoding: "utf-8",
+    }).trim();
+
+    // Simulate a child accept: advance the branch in source past the clone's ref.
+    execSync("git checkout -q feature", { cwd: source, stdio: "ignore" });
+    writeFileSync(join(source, "child.txt"), "child\n");
+    execSync("git add -A && git commit -qm child-merge", { cwd: source, stdio: "ignore" });
+    const advancedSha = execSync("git rev-parse feature", {
+      cwd: source,
+      encoding: "utf-8",
+    }).trim();
+
+    // Second fetch should skip (branch exists) — source branch must not regress.
+    fetchBranchFromClone(source, clonePath, "feature");
+    const afterSha = execSync("git rev-parse feature", { cwd: source, encoding: "utf-8" }).trim();
+
+    assert.notEqual(afterSha, originalSha, "should not regress to clone's stale ref");
+    assert.strictEqual(afterSha, advancedSha, "should keep repo's advanced ref");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 // ===========================================================================
 // mergeAccept
 // ===========================================================================

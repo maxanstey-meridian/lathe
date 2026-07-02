@@ -2,6 +2,7 @@
 import { injectLatheActions } from "../ports/lathe-actions";
 import { runStatusColor, truncate } from "../logic/formatters";
 import { injectReviewData } from "../ports/review-data";
+import { removeReviewRunAfterSuccess } from "../logic/action-results";
 
 const { reviewRuns, reviewError, removeRun } = injectReviewData();
 const actions = injectLatheActions();
@@ -18,21 +19,15 @@ const cancelReject = (run: { runId: string }): void => {
 
 const handleReject = async (run: { runId: string; status: string; outcomes: string; branch: string; repo: string; base: string; blockedQuestion: string | null }): Promise<void> => {
   const reason = rejectReasons.value[run.runId] ?? "rejected";
-  try {
-    await actions.reject(run.runId, reason);
-    removeRun(run.runId);
-  } catch {
-    // Error surfaced via latheActions.lastError
-  }
+  await removeReviewRunAfterSuccess(
+    run.runId,
+    (runId) => actions.reject(runId, reason),
+    removeRun,
+  );
 };
 
 const handleAccept = async (run: { runId: string; status: string; outcomes: string; branch: string; repo: string; base: string; blockedQuestion: string | null }): Promise<void> => {
-  try {
-    await actions.accept(run.runId);
-    removeRun(run.runId);
-  } catch {
-    // Error surfaced via latheActions.lastError
-  }
+  await removeReviewRunAfterSuccess(run.runId, actions.accept, removeRun);
 };
 </script>
 

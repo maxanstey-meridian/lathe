@@ -11,6 +11,7 @@ import {
 import {
   gateTriggerReason,
   rotationGateState,
+  priorReconciliationAccepted,
   mutationDenyReason,
   checkpointNudgeDue,
   checkpointNudgeNotice,
@@ -28,29 +29,30 @@ import {
   isEditTool,
   isForbiddenGitCommand,
   isMutation,
-  isMutationCommand,
   editTargetOutOfSurface,
-  FORBIDDEN_GIT,
   commandFromArgs,
 } from "../src/domain/gate-tools.ts";
-import type { GateState } from "../src/domain/gate.ts";
+import { GateState, type GatePhase } from "../src/domain/gate.ts";
 
 // ===========================================================================
 // Build helpers
 // ===========================================================================
 
-const makeState = (partial: Partial<GateState> = {}): GateState => ({
-  runId: "20260618-000000-test",
-  latched: false,
-  firstEditApproved: false,
-  reconciliationRequired: false,
-  expectedGlobs: ["src/**"],
-  suspiciousGlobs: ["weird/**"],
-  baselineDiffStats: {},
-  mutationCommandPatterns: [],
-  updatedAt: "2026-01-01T00:00:00Z",
-  ...partial,
-});
+const makeState = (
+  overrides: { phase?: GatePhase } & Partial<Omit<GateState, "phase">> = {},
+): GateState => {
+  const { phase = { phase: "initial" }, ...rest } = overrides;
+  return {
+    runId: "20260618-000000-test",
+    phase,
+    expectedGlobs: ["src/**"],
+    suspiciousGlobs: ["weird/**"],
+    baselineDiffStats: {},
+    mutationCommandPatterns: [],
+    updatedAt: "2026-01-01T00:00:00Z",
+    ...rest,
+  };
+};
 
 // ===========================================================================
 // G1: glob translation (carried from v1)
@@ -105,11 +107,7 @@ test("classifyChangedFiles: suspicious surface takes precedence for matching pat
     ["weird/**"],
   );
   const byPath = Object.fromEntries(files.map((f) => [f.path, f.classification]));
-  // weird/sus.ts is in suspicious surface but also in expected via conflict — expected wins
-  assert.strictEqual(byPath["weird/sus.ts"], "expected"); // src/** doesn't match this; it's suspicious
-  // Actually expected is ["src/**", "weird/**"] and suspicious is [...]
-  // Wait: expectedGlobs=["src/**", "weird/**"], suspiciousGlobs=["weird/**"]
-  // Classification: expected checked first, so weird/sus.ts matches expected → "expected"
+  assert.strictEqual(byPath["weird/sus.ts"], "expected");
 });
 
 // ===========================================================================
@@ -335,22 +333,21 @@ test("editTargetOutOfSurface: non-edit tools return undefined", () => {
 // G5: gateTriggerReason (first-edit + reconciliation, no cadence, no surface)
 // ===========================================================================
 
-test("gateTriggerReason: first edit unapproved, no files → no trigger", () => {
-  const state = makeState({ firstEditApproved: false });
+test("gateTriggerReason: initial phase, no files → no trigger", () => {
+  const state = makeState();
   assert.strictEqual(gateTriggerReason(state, { files: [], loc: 0 }), undefined);
 });
 
-test("gateTriggerReason: first edit unapproved, files present → first-edit reason", () => {
-  const state = makeState({ firstEditApproved: false });
+test("gateTriggerReason: initial phase, files present → first-edit reason", () => {
+  const state = makeState();
   const reason = gateTriggerReason(state, { files: ["src/file.ts"], loc: 0 });
   assert.ok(reason?.includes("first edit"));
   assert.ok(!reason?.includes("out-of-surface"));
 });
 
-test("gateTriggerReason: first edit approved, no reconciliation → no trigger (G5: cadence gone)", () => {
+test("gateTriggerReason: cleared phase → no trigger (G5: cadence gone)", () => {
   const state = makeState({
-    firstEditApproved: true,
-    reconciliationRequired: false,
+    phase: { phase: "cleared" },
     lastAcceptedDecisionAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
   });
   const reason = gateTriggerReason(state, {
@@ -360,43 +357,121 @@ test("gateTriggerReason: first edit approved, no reconciliation → no trigger (
   assert.strictEqual(reason, undefined);
 });
 
-test("gateTriggerReason: reconciliation required → always latched regardless of delta", () => {
-  const state = makeState({ firstEditApproved: true, reconciliationRequired: true });
-  const reason = gateTriggerReason(state, { files: [], loc: 0 });
-  assert.ok(reason?.includes("reconciliation"));
-});
-
 // ===========================================================================
 // O5: rotationGateState
 // ===========================================================================
 
-test("rotationGateState: clean rotation (hasCheckpoint) re-latches first-edit, no reconciliation", () => {
-  const base = makeState({ latched: false, firstEditApproved: true });
-  const result = rotationGateState(base, true);
+test("rotationGateState: clean rotation (no reconciliation) re-latches first-edit", () => {
+  const base = makeState({ phase: { phase: "cleared" } });
+  const result = rotationGateState(base, false);
 
   assert.strictEqual(
-    result.next.firstEditApproved,
-    false,
+    result.next.phase.phase,
+    "first-edit-latched",
     "replaced session must re-earn first-edit",
-  );
-  assert.strictEqual(result.next.latched, true);
-  assert.strictEqual(
-    result.next.reconciliationRequired,
-    false,
-    "valid checkpoint needs no reconciliation",
   );
   assert.ok(result.reason.includes("first edit"));
 });
 
-test("rotationGateState: crash rotation (no checkpoint) stacks reconciliation", () => {
-  const base = makeState({ latched: false, firstEditApproved: true });
-  const result = rotationGateState(base, false);
+test("rotationGateState: crash rotation stacks reconciliation", () => {
+  const base = makeState({ phase: { phase: "cleared" } });
+  const result = rotationGateState(base, true);
 
-  assert.strictEqual(result.next.firstEditApproved, false);
-  assert.strictEqual(result.next.latched, true);
-  assert.strictEqual(result.next.reconciliationRequired, true, "no checkpoint → reconciliation");
+  assert.strictEqual(result.next.phase.phase, "reconciliation-latched");
   assert.ok(result.reason.includes("reconciliation"));
   assert.ok(result.reason.includes("checkpoint"));
+});
+
+// ===========================================================================
+// O6 skip: priorReconciliationAccepted
+// ===========================================================================
+
+test("priorReconciliationAccepted: last decision is accepted reconciliation → true", () => {
+  const decisions = [
+    {
+      questionType: "other",
+      status: "proceed",
+      question: "",
+      answer: "",
+      timestamp: "",
+      source: "daddy",
+      evidence: [],
+      constraints: [],
+    },
+    {
+      questionType: "reconciliation",
+      status: "proceed",
+      question: "recon",
+      answer: "yes",
+      timestamp: "",
+      source: "daddy",
+      evidence: [],
+      constraints: [],
+    },
+  ];
+  assert.strictEqual(priorReconciliationAccepted(decisions as any), true);
+});
+
+test("priorReconciliationAccepted: last decision is accepted recon (proceed_with_constraints) → true", () => {
+  const decisions = [
+    {
+      questionType: "reconciliation",
+      status: "proceed_with_constraints",
+      question: "",
+      answer: "",
+      timestamp: "",
+      source: "daddy",
+      evidence: [],
+      constraints: [],
+    },
+  ];
+  assert.strictEqual(priorReconciliationAccepted(decisions as any), true);
+});
+
+test("priorReconciliationAccepted: last decision is non-reconciliation → false", () => {
+  const decisions = [
+    {
+      questionType: "reconciliation",
+      status: "proceed",
+      question: "",
+      answer: "",
+      timestamp: "",
+      source: "daddy",
+      evidence: [],
+      constraints: [],
+    },
+    {
+      questionType: "architecture_discoverable",
+      status: "proceed",
+      question: "",
+      answer: "",
+      timestamp: "",
+      source: "daddy",
+      evidence: [],
+      constraints: [],
+    },
+  ];
+  assert.strictEqual(priorReconciliationAccepted(decisions as any), false);
+});
+
+test("priorReconciliationAccepted: last decision is rejected reconciliation → false", () => {
+  const decisions = [
+    {
+      questionType: "reconciliation",
+      status: "stop",
+      question: "",
+      answer: "",
+      timestamp: "",
+      source: "daddy",
+      evidence: [],
+      constraints: [],
+    },
+  ];
+  assert.strictEqual(priorReconciliationAccepted(decisions as any), false);
+});
+
+test("priorReconciliationAccepted: empty decisions → false", () => {
+  assert.strictEqual(priorReconciliationAccepted([]), false);
 });
 
 // ===========================================================================
@@ -405,9 +480,7 @@ test("rotationGateState: crash rotation (no checkpoint) stacks reconciliation", 
 
 test("mutationDenyReason: out-of-surface absolute path wins first", () => {
   const state = makeState({
-    latched: false,
-    firstEditApproved: false,
-    reconciliationRequired: true,
+    phase: { phase: "reconciliation-latched", reason: "recon" },
   });
   const reason = mutationDenyReason(
     "edit",
@@ -421,10 +494,7 @@ test("mutationDenyReason: out-of-surface absolute path wins first", () => {
 
 test("mutationDenyReason: when latched, latch reason is returned", () => {
   const state = makeState({
-    latched: true,
-    latchReason: "initial latch",
-    firstEditApproved: false,
-    reconciliationRequired: false,
+    phase: { phase: "first-edit-latched", reason: "initial latch" },
   });
   const reason = mutationDenyReason(
     "edit",
@@ -436,12 +506,8 @@ test("mutationDenyReason: when latched, latch reason is returned", () => {
   assert.strictEqual(reason, "initial latch");
 });
 
-test("mutationDenyReason: memory latch fires when gate is clear", () => {
-  const state = makeState({
-    latched: false,
-    firstEditApproved: true,
-    reconciliationRequired: false,
-  });
+test("mutationDenyReason: memory latch fires when gate is cleared", () => {
+  const state = makeState({ phase: { phase: "cleared" } });
   const reason = mutationDenyReason(
     "edit",
     { filePath: "src/file.ts" },
@@ -452,12 +518,8 @@ test("mutationDenyReason: memory latch fires when gate is clear", () => {
   assert.strictEqual(reason, "subagent used");
 });
 
-test("mutationDenyReason: first edit unapproved (gate clear, no memory latch)", () => {
-  const state = makeState({
-    latched: false,
-    firstEditApproved: false,
-    reconciliationRequired: false,
-  });
+test("mutationDenyReason: initial phase denies first edit (no memory latch)", () => {
+  const state = makeState();
   const reason = mutationDenyReason(
     "edit",
     { filePath: "src/file.ts" },
@@ -468,11 +530,9 @@ test("mutationDenyReason: first edit unapproved (gate clear, no memory latch)", 
   assert.ok(reason?.includes("first edit"));
 });
 
-test("mutationDenyReason: reconciliation required (gate clear)", () => {
+test("mutationDenyReason: reconciliation-latched returns its reason", () => {
   const state = makeState({
-    latched: false,
-    firstEditApproved: true,
-    reconciliationRequired: true,
+    phase: { phase: "reconciliation-latched", reason: "reconciliation required" },
   });
   const reason = mutationDenyReason(
     "edit",
@@ -481,15 +541,11 @@ test("mutationDenyReason: reconciliation required (gate clear)", () => {
     "/home/wt",
     undefined,
   );
-  assert.ok(reason?.includes("reconciliation"));
+  assert.strictEqual(reason, "reconciliation required");
 });
 
-test("mutationDenyReason: nothing triggers → undefined", () => {
-  const state = makeState({
-    latched: false,
-    firstEditApproved: true,
-    reconciliationRequired: false,
-  });
+test("mutationDenyReason: cleared with no memory latch → undefined", () => {
+  const state = makeState({ phase: { phase: "cleared" } });
   const reason = mutationDenyReason(
     "edit",
     { filePath: "src/file.ts" },
@@ -508,28 +564,37 @@ const INTERVAL = 20 * 60 * 1000;
 const now = Date.now();
 const iso = (msAgo: number) => new Date(now - msAgo).toISOString();
 
-test("checkpointNudgeDue: new run (no firstEditApproved) → undefined", () => {
-  const state = makeState({ firstEditApproved: false, lastAcceptedDecisionAt: iso(INTERVAL * 2) });
+test("checkpointNudgeDue: initial phase → undefined", () => {
+  const state = makeState({ lastAcceptedDecisionAt: iso(INTERVAL * 2) });
   assert.strictEqual(checkpointNudgeDue(state, now, INTERVAL), undefined);
 });
 
-test("checkpointNudgeDue: approved but no lastAcceptedDecisionAt → undefined", () => {
-  const state = makeState({ firstEditApproved: true });
+test("checkpointNudgeDue: cleared but no lastAcceptedDecisionAt → undefined", () => {
+  const state = makeState({ phase: { phase: "cleared" } });
   assert.strictEqual(checkpointNudgeDue(state, now, INTERVAL), undefined);
 });
 
 test("checkpointNudgeDue: within interval → undefined (grace period)", () => {
-  const state = makeState({ firstEditApproved: true, lastAcceptedDecisionAt: iso(5 * 60 * 1000) });
+  const state = makeState({
+    phase: { phase: "cleared" },
+    lastAcceptedDecisionAt: iso(5 * 60 * 1000),
+  });
   assert.strictEqual(checkpointNudgeDue(state, now, INTERVAL), undefined);
 });
 
 test("checkpointNudgeDue: past interval → returns elapsed minutes", () => {
-  const state = makeState({ firstEditApproved: true, lastAcceptedDecisionAt: iso(30 * 60 * 1000) });
+  const state = makeState({
+    phase: { phase: "cleared" },
+    lastAcceptedDecisionAt: iso(30 * 60 * 1000),
+  });
   assert.strictEqual(checkpointNudgeDue(state, now, INTERVAL), 30);
 });
 
 test("checkpointNudgeDue: un-throttled — always reports elapsed minutes", () => {
-  const state = makeState({ firstEditApproved: true, lastAcceptedDecisionAt: iso(90 * 60 * 1000) });
+  const state = makeState({
+    phase: { phase: "cleared" },
+    lastAcceptedDecisionAt: iso(90 * 60 * 1000),
+  });
   assert.strictEqual(checkpointNudgeDue(state, now, INTERVAL), 90);
 });
 
@@ -538,27 +603,36 @@ test("checkpointNudgeDue: un-throttled — always reports elapsed minutes", () =
 // ===========================================================================
 
 test("checkpointNudgeNotice: not due while below interval", () => {
-  const state = makeState({ firstEditApproved: true, lastAcceptedDecisionAt: iso(5 * 60 * 1000) });
+  const state = makeState({
+    phase: { phase: "cleared" },
+    lastAcceptedDecisionAt: iso(5 * 60 * 1000),
+  });
   assert.strictEqual(checkpointNudgeNotice(state, now), undefined);
 });
 
 test("checkpointNudgeNotice: past interval → NOTICE string", () => {
-  const state = makeState({ firstEditApproved: true, lastAcceptedDecisionAt: iso(30 * 60 * 1000) });
+  const state = makeState({
+    phase: { phase: "cleared" },
+    lastAcceptedDecisionAt: iso(30 * 60 * 1000),
+  });
   const notice = checkpointNudgeNotice(state, now);
-  assert.ok(notice?.includes("MERIDIAN GATE NOTICE"));
+  assert.ok(notice?.includes("LATHE GATE NOTICE"));
   assert.ok(notice?.includes("~30 min"));
   assert.ok(notice?.includes("You are NOT blocked"));
   assert.ok(notice?.includes("ask_planner"));
+  assert.ok(notice?.includes("call ask_planner now"));
+  assert.ok(notice?.includes("Prose is not a routed question"));
+  assert.ok(!notice?.includes("Daddy's eyes"));
 });
 
 test("checkpointNudgeNotice: uses default 20 min if checkpointNudgeMs not set", () => {
   const state = makeState({
-    firstEditApproved: true,
+    phase: { phase: "cleared" },
     lastAcceptedDecisionAt: iso(25 * 60 * 1000),
     checkpointNudgeMs: undefined,
   });
   const notice = checkpointNudgeNotice(state, now);
-  assert.ok(notice?.includes("MERIDIAN GATE NOTICE"));
+  assert.ok(notice?.includes("LATHE GATE NOTICE"));
 });
 
 // ===========================================================================
@@ -630,19 +704,26 @@ test("volumeNoticeReason: files/LoC on mutation calls", () => {
 });
 
 // ===========================================================================
-// Messages (byte-identical to reference)
+// Messages
 // ===========================================================================
 
-test("denyMessage: starts with MERIDIAN GATE BLOCKED", () => {
+test("denyMessage: starts with LATHE GATE BLOCKED", () => {
   const msg = denyMessage("first edit of the run requires an accepted planner decision");
-  assert.ok(msg.startsWith("MERIDIAN GATE BLOCKED"));
+  assert.ok(msg.startsWith("LATHE GATE BLOCKED"));
   assert.ok(msg.includes("ask_planner"));
   assert.ok(msg.includes("proceed or proceed_with_constraints"));
   assert.ok(msg.includes("Reads stay available for gathering evidence"));
 });
 
+test("denyMessage: reconciliation block asks only for Daddy-owned reconciliation", () => {
+  const msg = denyMessage("reconciliation required: no valid checkpoint from the previous session");
+  assert.ok(msg.includes('questionType "reconciliation"'));
+  assert.ok(msg.includes("Baby is only triggering Daddy-owned reconciliation"));
+  assert.ok(!msg.includes("what you were about to change"));
+});
+
 test("QUESTION_MESSAGE: interactive questions disabled", () => {
-  assert.ok(QUESTION_MESSAGE.startsWith("MERIDIAN GATE BLOCKED"));
+  assert.ok(QUESTION_MESSAGE.startsWith("LATHE GATE BLOCKED"));
   assert.ok(QUESTION_MESSAGE.includes("interactive questions are disabled"));
   assert.ok(QUESTION_MESSAGE.includes("Max is not present"));
   assert.ok(QUESTION_MESSAGE.includes("ask_planner"));
@@ -650,14 +731,48 @@ test("QUESTION_MESSAGE: interactive questions disabled", () => {
 });
 
 test("SUBAGENT_MESSAGE: subagents blocked", () => {
-  assert.ok(SUBAGENT_MESSAGE.startsWith("MERIDIAN GATE BLOCKED"));
+  assert.ok(SUBAGENT_MESSAGE.startsWith("LATHE GATE BLOCKED"));
   assert.ok(SUBAGENT_MESSAGE.includes("exploration subagents are disabled"));
   assert.ok(SUBAGENT_MESSAGE.includes("ask_planner"));
   assert.ok(SUBAGENT_MESSAGE.includes("bounded inspection"));
 });
 
 test("GIT_MESSAGE: git mutations blocked to driver", () => {
-  assert.ok(GIT_MESSAGE.startsWith("MERIDIAN GATE BLOCKED"));
+  assert.ok(GIT_MESSAGE.startsWith("LATHE GATE BLOCKED"));
   assert.ok(GIT_MESSAGE.includes("git mutations are not yours"));
   assert.ok(GIT_MESSAGE.includes("the driver commits at the end of the run"));
+});
+
+test("GateState.parse: new-format passes through unchanged", () => {
+  const base = {
+    runId: "20260101-000000-test",
+    expectedGlobs: ["src/**"],
+    suspiciousGlobs: [],
+    baselineDiffStats: {},
+    mutationCommandPatterns: [],
+    updatedAt: "2026-01-01T00:00:00Z",
+  };
+  const parsed = GateState.parse({
+    ...base,
+    phase: { phase: "reconciliation-latched", reason: "test" },
+  });
+  assert.strictEqual(parsed.phase.phase, "reconciliation-latched");
+  if (parsed.phase.phase === "reconciliation-latched") {
+    assert.strictEqual(parsed.phase.reason, "test");
+  }
+});
+
+test("GateState.parse: legacy boolean format is rejected", () => {
+  const parsed = GateState.safeParse({
+    runId: "20260101-000000-test",
+    latched: true,
+    firstEditApproved: false,
+    reconciliationRequired: false,
+    expectedGlobs: ["src/**"],
+    suspiciousGlobs: [],
+    baselineDiffStats: {},
+    mutationCommandPatterns: [],
+    updatedAt: "2026-01-01T00:00:00Z",
+  });
+  assert.strictEqual(parsed.success, false);
 });

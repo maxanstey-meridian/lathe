@@ -17,6 +17,9 @@
     "gen": "pnpm gen:reflect && pnpm gen:openapi && pnpm gen:client",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "openapi-fetch": "^0.17.0"
+  },
   "devDependencies": {
     "rivet-ts": "github:maxanstey-meridian/rivet-ts#v0.11.1",
     "typescript": "^5.7.0",

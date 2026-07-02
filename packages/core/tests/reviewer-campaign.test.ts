@@ -64,6 +64,7 @@ const makeInput = (worktree: string, campaignId = "campaign-a"): SuperReviewInpu
     frontmatter: {
       repo: "/tmp/test",
       base: "main",
+      compare_commit: "main",
       outcomes: [],
       expected_surface: [],
       suspicious_surface: [],
@@ -98,7 +99,7 @@ test("reviewer: same worktree reuses session scoped to it", async () => {
   await reviewer.superReview(makeInput("/wt/run-a"));
 
   equal(sessionsCreated.length, 1, "session should be created only once for a worktree");
-  equal(sessionsCreated[0].title, "meridian-superdaddy");
+  equal(sessionsCreated[0].title, "lathe-superdaddy");
   equal(
     sessionsCreated[0].directory,
     "/wt/run-a",

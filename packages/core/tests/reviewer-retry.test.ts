@@ -40,6 +40,7 @@ const input = (): SuperReviewInput => ({
     frontmatter: {
       repo: "/tmp",
       base: "main",
+      compare_commit: "main",
       outcomes: [],
       expected_surface: [],
       suspicious_surface: [],
@@ -132,4 +133,37 @@ test("reviewer: a transient PROVIDER error (HTTP 200 + error field) is retried",
 
   equal(outcome.kind, "unreachable");
   equal(sends(), 2, "provider 503 classified transient and retried");
+});
+
+test("reviewer: authorFollowup uses the latest assistant reply, not stale history", async () => {
+  const latestPacket = `---\nsummary: fresh attempt\noutcomes:\n  - id: fix-a\n    description: fresh\n---\n\n# fresh packet`;
+  const { executor } = makeExecutor(async () => textResponse("fallback"));
+  executor.listMessages = async () => [
+    {
+      info: { id: "old", sessionID: "s", role: "assistant", model: "test" as unknown as string },
+      parts: [{ type: "text", text: "---\nsummary: stale attempt\n---\n\n# stale packet" }],
+    },
+    {
+      info: { id: "new", sessionID: "s", role: "assistant", model: "test" as unknown as string },
+      parts: [{ type: "text", text: latestPacket }],
+    },
+  ];
+  const reviewer = createReviewer(executor, model, 5000, 1);
+
+  const outcome = await reviewer.authorFollowup({
+    worktree: "/wt",
+    packetSkillText: "skill",
+    blockers: [],
+    priorOutcomes: [],
+    pass: 2,
+    campaignId: "campaign-a",
+    priorProblems: ["frontmatter.summary: Required"],
+    priorRawSnippet: "---\nsummary: stale attempt\n---\n\n# stale packet",
+  });
+
+  equal(outcome.kind, "authored");
+  if (outcome.kind === "authored") {
+    equal(outcome.content, latestPacket);
+    equal(outcome.content.includes("stale attempt"), false);
+  }
 });

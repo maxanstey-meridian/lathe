@@ -6,7 +6,9 @@
 
 import { spawnSync } from "child_process";
 import { existsSync, readFileSync, rmSync, statSync, realpathSync } from "fs";
+import { createHash } from "node:crypto";
 import { join, dirname, relative, isAbsolute, sep } from "path";
+import type { ReconciliationGitState } from "../domain/reconciliation.js";
 
 // Run a git command with array arguments (no shell word-splitting).
 // cwd = directory to run in; args = the git subcommand + arguments.
@@ -14,10 +16,14 @@ const git = (cwd: string, args: string[]): string => {
   const result = spawnSync("git", args, {
     cwd,
     encoding: "utf-8",
+    maxBuffer: 100 * 1024 * 1024,
     stdio: ["ignore" as const, "pipe" as const, "pipe" as const],
   });
   if (result.status !== 0) {
-    const stderr = result.stderr?.trim() || `git ${args.join(" ")} exited ${result.status}`;
+    const detail = result.signal
+      ? `git ${args.join(" ")} killed by signal ${result.signal}`
+      : `git ${args.join(" ")} exited ${result.status}`;
+    const stderr = result.stderr?.trim() || detail;
     throw new Error(stderr);
   }
   return (result.stdout ?? "").trim();
@@ -27,9 +33,8 @@ const git = (cwd: string, args: string[]): string => {
 // keeps its `.git` as a FILE pointing back to <repo>/.git/worktrees/<name>, whose
 // commondir resolves to <repo>/.git — so opencode's glob/grep/LSP compute the
 // project root as <repo> and Daddy/super-daddy review the SOURCE tree, not the
-// run's work (proven live in the serve log). A clone owns a real `.git` directory,
-// so the project root resolves to the sandbox itself and the escape is structurally
-// impossible. `--local` (the default for a local source) hardlinks objects — cheap,
+// run's work. A clone owns a real `.git` directory, so the project root resolves
+// to the sandbox itself and the escape is structurally impossible. `--local` (the default for a local source) hardlinks objects — cheap,
 // and with no alternates dependency on the source's object store (unlike --shared,
 // which a source-repo GC could corrupt mid-run). `--branch <base>` creates a LOCAL
 // branch named <base> inside the clone, so every later `git diff <base>` resolves.
@@ -39,31 +44,41 @@ export const createSandbox = (
   branch: string,
   base: string,
 ): void => {
-  const dotGit = join(sandboxPath, ".git");
-  // Crash recovery: reuse only a REAL sandbox (a .git directory). A bare/half-made
-  // dir is not reused — `git clone` below fails loudly on an occupied path rather
-  // than us silently deleting something during setup.
-  if (existsSync(dotGit) && statSync(dotGit).isDirectory()) {
-    return;
+  // Fresh restart: if a prior sandbox exists, discard it and recreate a clean clone.
+  // A dirty or half-made sandbox must not be reused on a fresh attempt.
+  if (existsSync(sandboxPath)) {
+    rmSync(sandboxPath, { recursive: true, force: true });
   }
   git(dirname(sandboxPath), ["clone", "--local", "--branch", base, repo, sandboxPath]);
   git(sandboxPath, ["checkout", "-b", branch]);
 };
 
-// A run sandbox is a self-rooted `--local` clone iff its `.git` is a DIRECTORY
-// (a legacy `git worktree` keeps `.git` as a FILE pointing back to the source).
-// The two need different ref handling: a clone's branch lives only in its own
-// refs and must be fetched into the source repo; a worktree already shares them.
-export const isCloneSandbox = (sandboxPath: string): boolean => {
-  const dotGit = join(sandboxPath, ".git");
-  return existsSync(dotGit) && statSync(dotGit).isDirectory();
-};
-
 // Pull a branch out of a run's clone into another repo's ref namespace, e.g. so a
 // super-daddy follow-up packet whose `base` is the parent run branch can pass
 // admission (`git rev-parse --verify <base>`) and be cloned from the source repo
-// at the parent's commits. `meridian accept` does the same fetch before merging.
-export const fetchBranchFromClone = (repo: string, clone: string, branch: string): void => {
+// at the parent's commits. `lathe accept` does the same fetch before merging.
+//
+// Skips the fetch when the branch already exists in the repo — this happens in
+// chained accepts where a child run was accepted into this branch first,
+// leaving the repo's copy ahead of the sandbox's stale ref.
+//
+// `force` overrides the skip: accept uses it to always pull the sandbox tip,
+// avoiding a stale local ref when the sandbox branch advanced or was amended
+// after a prior convergence fetch.
+export const fetchBranchFromClone = (
+  repo: string,
+  clone: string,
+  branch: string,
+  force = false,
+): void => {
+  if (!force) {
+    try {
+      git(repo, ["rev-parse", "--verify", branch]);
+      return;
+    } catch {
+      /* branch not in repo yet — fetch from clone */
+    }
+  }
   git(repo, ["fetch", clone, `${branch}:${branch}`]);
 };
 
@@ -213,7 +228,7 @@ export const readDiffStats = (
 // contents of new untracked text files (the same node_modules/binary exclusions
 // readDiffStats uses), capped so a large run can't blow Daddy's context. A
 // truncation marker tells him to inspect the real tree (he has read-only repo
-// tools); the cap is a floor on visibility, not the source of truth.
+// tools); the cap is only a context bound.
 export const reviewableDiff = (worktree: string, maxBytes: number): string => {
   const sections: string[] = [];
   try {
@@ -303,6 +318,51 @@ export const reviewableDiffAgainst = (worktree: string, base: string, maxBytes: 
   return `${full.slice(0, maxBytes)}\n\n[diff truncated at ${maxBytes} bytes — run \`git diff ${base}\` and read files directly for the full picture]`;
 };
 
+const sha256 = (content: string | Buffer): string =>
+  createHash("sha256").update(content).digest("hex");
+
+export const reconciliationGitState = (worktree: string): ReconciliationGitState => {
+  const head = git(worktree, ["rev-parse", "HEAD"]);
+  const status = git(worktree, ["status", "--porcelain=v1", "-z"])
+    .split("\0")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .sort();
+  const diff = git(worktree, ["diff", "HEAD"]);
+  const trackedChanged = git(worktree, ["diff", "--name-only", "HEAD"])
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const untracked = git(worktree, ["ls-files", "--others", "--exclude-standard"])
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .filter((f) => !f.startsWith("node_modules/") && !f.includes("/node_modules/"))
+    .flatMap((path) => {
+      const fullPath = join(worktree, path);
+      if (!existsSync(fullPath)) {
+        return [];
+      }
+      try {
+        const content = readFileSync(fullPath);
+        if (content.length > 1024 * 1024 || content.includes(0)) {
+          return [];
+        }
+        return [{ path, hash: sha256(content) }];
+      } catch {
+        return [];
+      }
+    })
+    .sort((a, b) => a.path.localeCompare(b.path));
+  return {
+    head,
+    status,
+    diffHash: sha256(diff),
+    untracked,
+    changedFiles: [...new Set([...trackedChanged, ...untracked.map((u) => u.path)])].sort(),
+  };
+};
+
 // HEAD branch in the worktree — used during admission to stamp the base from
 // current branch when the packet omits it (K1). Throws if the worktree is not
 // a valid git repository or is in a detached HEAD state (so store.ts:409-413
@@ -340,7 +400,7 @@ export const repoValid = (path: string): boolean => {
 
 // Merge `sourceBranch` into the current branch of `repo` and delete the
 // `sourceBranch` branch. Operates on the explicit `repo` path (the source repo
-// Max invokes `meridian accept` in, per CONTRACT §12 X1). The caller guarantees
+// Max invokes `lathe accept` in, per CONTRACT §12 X1). The caller guarantees
 // repo is on targetBranch and clean.
 // The 2-arg signature has no clone/sandbox args — those are separate port calls
 // (fetchBranchFromClone, removeSandbox) owned by the accept use case.

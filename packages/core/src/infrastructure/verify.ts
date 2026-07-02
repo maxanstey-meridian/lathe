@@ -1,8 +1,6 @@
 // Verify adapter: runs the packet's verification commands and reports real exit
-// codes (CONTRACT §18 S6 — the driver's own run is ground truth, never the
-// reviewer's word). Mirrors the bridge's runVerification (ported from
-// reference/src/verification.ts) but speaks the Verify port: it takes the
-// command list (not a packet) so the application stays decoupled from frontmatter.
+// codes. Mirrors the bridge's runVerification but speaks the Verify port: it takes
+// the command list (not a packet) so the application stays decoupled from frontmatter.
 
 import { execSync } from "node:child_process";
 import { resolve } from "node:path";

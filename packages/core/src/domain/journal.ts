@@ -33,8 +33,28 @@ export const JournalEvent = z.discriminatedUnion("event", [
       cacheWrite: z.number(),
     }),
     contextTokens: z.number(),
+    responseError: z.string().optional(),
+    responseErrorDetail: z
+      .object({
+        name: z.string().optional(),
+        statusCode: z.number().optional(),
+        message: z.string().optional(),
+        responseBodyPreview: z.string().optional(),
+      })
+      .optional(),
+    responsePartCount: z.number().int().optional(),
+    responsePartTypes: z.array(z.string()).optional(),
+    harvestMessageCount: z.number().int().optional(),
+    harvestStart: z.number().int().optional(),
+    harvestPartCount: z.number().int().optional(),
     text: z.string(),
     reasoning: z.string().optional(),
+  }),
+  z.object({
+    ...base,
+    event: z.literal("turn_harvest_failed"),
+    messageId: z.string(),
+    detail: z.string(),
   }),
   z.object({
     ...base,
@@ -50,8 +70,8 @@ export const JournalEvent = z.discriminatedUnion("event", [
   }),
   z.object({ ...base, event: z.literal("gate_latched"), reason: z.string() }),
   z.object({ ...base, event: z.literal("gate_cleared"), decisionAt: z.string() }),
-  // The non-blocking volume reminder crossed its threshold this turn — journaled so
-  // it is VISIBLE in the tail (the plugin's per-call shout to Baby is not). §10.
+  // The non-blocking volume reminder crossed its threshold this turn; journal it
+  // so the tail shows the threshold crossing. §10.
   z.object({
     ...base,
     event: z.literal("checkpoint_volume_nudge"),
@@ -69,6 +89,8 @@ export const JournalEvent = z.discriminatedUnion("event", [
     evidence_used: z.array(z.string()).default([]),
     safe_next_action: z.string().default(""),
     human_decision_needed: z.string().nullable().default(null),
+    reconciliation_fingerprint: z.string().optional(),
+    reconciliation_reused: z.boolean().optional(),
   }),
   z.object({
     ...base,
@@ -104,6 +126,15 @@ export const JournalEvent = z.discriminatedUnion("event", [
     verdict: FinalReviewVerdict,
     findings: z.array(z.string()),
   }),
+  // Super-daddy's convergence verdict for a pass. The convergence log (convergence.jsonl)
+  // is not streamed, so without this the reviewer's verdict never reaches the tail. §SUPER-DADDY.
+  z.object({
+    ...base,
+    event: z.literal("super_review"),
+    pass: z.number().int(),
+    verdict: FinalReviewVerdict,
+    findings: z.array(z.string()),
+  }),
   z.object({ ...base, event: z.literal("ladder_step"), count: z.number().int() }),
   z.object({
     ...base,
@@ -120,6 +151,23 @@ export const JournalEvent = z.discriminatedUnion("event", [
     stallRetries: z.number().int(),
   }),
   z.object({ ...base, event: z.literal("reorient"), attempt: z.number().int(), fix: z.string() }),
+  z.object({
+    ...base,
+    event: z.literal("model_promoted"),
+    from: z.string(),
+    to: z.string(),
+  }),
+  // Super-daddy authored a follow-up repair packet. Persisted for EVERY attempt
+  // (success and failure) so an authoring failure is diagnosable post-hoc — the
+  // raw reply is otherwise discarded. `authoredRaw` is the full model reply.
+  z.object({
+    ...base,
+    event: z.literal("authoring_attempt"),
+    attempt: z.number().int(),
+    ok: z.boolean(),
+    problems: z.array(z.string()).default([]),
+    authoredRaw: z.string(),
+  }),
 ]);
 export type JournalEvent = z.infer<typeof JournalEvent>;
 
@@ -134,7 +182,9 @@ export const renderJournalEvent = (e: JournalEvent): string => {
     case "prompt_sent":
       return `${t} → ${e.promptName}`;
     case "turn_ended":
-      return `${t} ◀ turn ${e.turn ?? "?"} (${e.contextTokens} ctx tokens)${e.text ? `\n   ${e.text.slice(0, 200).replace(/\n/g, "\n   ")}` : ""}`;
+      return `${t} ◀ turn ${e.turn ?? "?"} (${e.contextTokens} ctx tokens)${e.responseError ? ` ERROR: ${e.responseError.slice(0, 120)}` : ""}${e.text ? `\n   ${e.text.slice(0, 200).replace(/\n/g, "\n   ")}` : ""}`;
+    case "turn_harvest_failed":
+      return `${t} ✗ turn harvest failed: ${e.detail.slice(0, 160)}`;
     case "tool_call":
       return `${t}   ${e.gateDenied ? "⛔" : "·"} ${e.tool}${e.command ? ` ${e.command.slice(0, 80)}` : ""}${e.target ? ` ${e.target}` : ""}${e.status === "error" && !e.gateDenied ? " ✗" : ""}`;
     case "gate_latched":
@@ -142,7 +192,7 @@ export const renderJournalEvent = (e: JournalEvent): string => {
     case "gate_cleared":
       return `${t} ✓ gate cleared`;
     case "checkpoint_volume_nudge":
-      return `${t} 📣 checkpoint shout: ${e.reason}`;
+      return `${t} 📣 checkpoint reminder: ${e.reason}`;
     case "planner_exchange":
       return `${t} ☎ [${e.status}] Q: ${e.question.slice(0, 120)}\n   A: ${e.answer.slice(0, 160)}${e.constraints.length ? `\n   constraints: ${e.constraints.join(" | ")}` : ""}`;
     case "outcomes_updated":
@@ -161,6 +211,8 @@ export const renderJournalEvent = (e: JournalEvent): string => {
       return `${t} 📋 report accepted: ${e.status}`;
     case "final_review":
       return `${t} 🔍 final review [${e.verdict}]${e.findings.length ? `\n   ${e.findings.join("\n   ")}` : ""}`;
+    case "super_review":
+      return `${t} 🛡 super-daddy review pass ${e.pass} [${e.verdict}]${e.findings.length ? `\n   ${e.findings.join("\n   ")}` : ""}`;
     case "ladder_step":
       return `${t} ⚠ no-progress ladder: ${e.count}`;
     case "parked":
@@ -173,6 +225,10 @@ export const renderJournalEvent = (e: JournalEvent): string => {
       return `${t} ${e.action === "requeue" ? "↻" : "🅿"} stall ${e.action} (auto-retry ${e.stallRetries})`;
     case "reorient":
       return `${t} 🧭 reorient #${e.attempt} (Baby derailed) → fix: ${e.fix.slice(0, 120)}`;
+    case "model_promoted":
+      return `${t} ⬆ model promoted: ${e.from} → ${e.to}`;
+    case "authoring_attempt":
+      return `${t} ${e.ok ? "✍︎" : "✗"} follow-up authoring attempt ${e.attempt}${e.ok ? " admitted" : `: ${e.problems.join("; ")}`}`;
   }
 };
 

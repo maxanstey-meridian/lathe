@@ -6,5 +6,5 @@
     "no-unused-vars": "warn",
     "curly": ["error", "all"]
   },
-  "ignorePatterns": ["reference/**", "dist/**", "node_modules/**"]
+  "ignorePatterns": ["dist/**", "node_modules/**"]
 }

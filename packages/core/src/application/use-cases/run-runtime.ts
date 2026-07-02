@@ -53,9 +53,13 @@ export type RunChannel = {
   turn: number;
   // Set to true by the bridge the instant it records a stop-and-wait intent
   // (ask_planner / submit_report). All subsequent bridge tool calls return an
-  // "End your turn" error so Baby winds down cooperatively rather than the driver
-  // destroying the in-flight HTTP connection.
+  // "End your turn" error; stopTurn asks opencode to interrupt the active
+  // message in the same session so the driver can run the deferred intent.
   turnComplete: boolean;
+  stopTurn?: () => Promise<void>;
+  // While true, only verify_handoff is accepted — blocks all other tool calls
+  // until the predecessor's handoff has been verified. Cleared by verify_handoff.
+  awaitingVerification: boolean;
 };
 
 // What a finished attempt resolves to — the terminal lifecycle status the
@@ -63,7 +67,8 @@ export type RunChannel = {
 export type RunOutcome =
   | { status: "ready_for_review" }
   | { status: "failed"; note: string }
-  | { status: "blocked"; reason: BlockedReason; question: string };
+  | { status: "blocked"; reason: BlockedReason; question: string }
+  | { status: "aborted" };
 
 // The turn loop returns the outcome plus, for a ready_for_review, the accepted
 // report and Daddy's final review so finalize can render report.md. They are
@@ -98,4 +103,18 @@ export const journal = (
     at: ports.clock.nowIso(),
     turn,
   } as JournalEvent);
+};
+
+// ---------------------------------------------------------------------------
+// Handoff inject — builds the system message prepended to baby's seed when a
+// predecessor handoff exists. Pure function, no I/O. The 2000-char cap on the
+// handoff JSON matches the run-loop-handoff-inject constraint ("capped at 2000
+// chars"). Returns "" when handoffJson is undefined (no handoff to inject).
+// ---------------------------------------------------------------------------
+
+export const buildHandoffInject = (handoffJson: string | undefined): string => {
+  if (!handoffJson) {
+    return "";
+  }
+  return `Predecessor handoff available: ${handoffJson.slice(0, 2000)}. Call verify_handoff once you have read the packet and the handoff, before starting new work.`;
 };

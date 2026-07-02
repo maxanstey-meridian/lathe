@@ -20,6 +20,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/runs/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["lathe_enqueueContent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chains": {
         parameters: {
             query?: never;
@@ -52,6 +68,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["lathe_getStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["lathe_getReview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/packet": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["lathe_validatePacket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/runs/{runId}/abort": {
         parameters: {
             query?: never;
@@ -62,6 +126,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["lathe_abortRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/runs/{runId}/answer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["lathe_answerRun"];
         delete?: never;
         options?: never;
         head?: never;
@@ -116,10 +196,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tail/active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["lathe_getActiveTail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tail/{runId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["lathe_getTail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AnswerRunRequest: {
+            answer: string;
+        };
         ConfigDto: {
             models: components["schemas"]["ModelConfigDto"];
             thresholds: {
@@ -131,6 +246,10 @@ export interface components {
         };
         EnqueueChainRequest: {
             chainDir: string;
+        };
+        EnqueueContentRequest: {
+            content: string;
+            filename: string;
         };
         EnqueueRunRequest: {
             packetPath: string;
@@ -152,6 +271,18 @@ export interface components {
         RejectRunRequest: {
             reason?: string | null;
         };
+        ReviewDto: {
+            runs: components["schemas"]["ReviewRunDto"][];
+        };
+        ReviewRunDto: {
+            runId: string;
+            status: string;
+            outcomes: string;
+            branch: string;
+            repo: string;
+            base: string;
+            blockedQuestion: string | null;
+        };
         RunDetailDto: {
             runId: string;
             campaignId: string;
@@ -170,6 +301,9 @@ export interface components {
             parentRunId: string | null;
             expectedSurface: string[];
             lastVerdict: string | null;
+            outcomes: string;
+            blockedReason: string | null;
+            blockedQuestion: string | null;
         };
         RunSummaryDto: {
             runId: string;
@@ -184,8 +318,119 @@ export interface components {
             startedAt: string;
             updatedAt: string;
         };
+        StatusActiveRunDto: {
+            runId: string;
+            outcomes: string;
+            gateLatched: string | null;
+            recentEvents: {
+                at: string;
+                event: string;
+            }[];
+        };
+        StatusCampaignDto: {
+            campaignId: string;
+            status: string;
+            pass: number;
+            maxPasses: number;
+            originalIntent: string;
+        };
+        StatusDto: {
+            activeRun: components["schemas"]["StatusActiveRunDto"] | null;
+            queued: components["schemas"]["StatusQueuedRunDto"][];
+            parked: components["schemas"]["StatusParkedRunDto"][];
+            campaigns: components["schemas"]["StatusCampaignDto"][];
+            staged: components["schemas"]["StatusStagedRunDto"][];
+            review: components["schemas"]["StatusReviewSummaryDto"];
+        };
+        StatusParkedRunDto: {
+            runId: string;
+            blockedReason: string | null;
+            blockedQuestion: string | null;
+            stallRetries: number;
+        };
+        StatusQueuedRunDto: {
+            runId: string;
+        };
+        StatusReviewSummaryDto: {
+            readyForReview: number;
+            failed: number;
+        };
+        StatusStagedRunDto: {
+            runId: string;
+            parentRunId: string | null;
+        };
+        TailJournalLineDto: {
+            seq: number;
+            at: string;
+            line: string;
+            event: string;
+            driver: boolean;
+        };
+        TailModelsDto: {
+            baby: string;
+            promoted: string;
+            daddy: string;
+            super: string;
+        };
+        TailSnapshotDto: {
+            runId: string;
+            summary: string | null;
+            status: components["schemas"]["TailRunStatus"];
+            startedAt: string | null;
+            models: components["schemas"]["TailModelsDto"];
+            promoted: boolean;
+            budget: number;
+            worktree: string;
+            outcomesDone: number;
+            outcomesTotal: number;
+            gateReason: string | null;
+            contextTokens: number;
+            turn: number;
+            rotations: number;
+            journal: components["schemas"]["TailJournalLineDto"][];
+            lastSeq: number;
+        };
+        ValidatePacketFrontmatter: {
+            repo: string;
+            base: string;
+            compare_commit: string;
+            summary?: string;
+            outcomes: {
+                id: string;
+                description: string;
+            }[];
+            expected_surface: string[];
+            suspicious_surface: string[];
+            verification: {
+                command: string;
+            }[];
+            constraints: string[];
+            autofix_commands: {
+                command: string;
+            }[];
+            campaign_id?: string;
+            parent_run_id?: string;
+            pass: number;
+            regression_outcomes: {
+                id: string;
+                description: string;
+            }[];
+            promoted: boolean;
+        };
+        ValidatePacketRequest: {
+            content: string;
+            filename?: string;
+        };
+        ValidatePacketResponse: {
+            ok: boolean;
+            frontmatter: components["schemas"]["ValidatePacketFrontmatter"] | null;
+            body: string;
+            problems: string[];
+        };
         /** @enum {string} */
-        RunStatus: "queued" | "running" | "paused" | "converged" | "accepted" | "rejected" | "aborted" | "failed";
+        RunStatus: "queued" | "running" | "paused" | "converged" | "accepted" | "aborted" | "failed";
+        /** @enum {string} */
+        TailRunStatus: "queued" | "running" | "interrupted" | "ready_for_review" | "blocked" | "failed" | "accepted" | "aborted";
     };
     responses: never;
     parameters: never;
@@ -225,6 +470,30 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["EnqueueRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Status 202 */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSummaryDto"];
+                };
+            };
+        };
+    };
+    lathe_enqueueContent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnqueueContentRequest"];
             };
         };
         responses: {
@@ -285,6 +554,70 @@ export interface operations {
             };
         };
     };
+    lathe_getStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatusDto"];
+                };
+            };
+        };
+    };
+    lathe_getReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewDto"];
+                };
+            };
+        };
+    };
+    lathe_validatePacket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ValidatePacketRequest"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidatePacketResponse"];
+                };
+            };
+        };
+    };
     lathe_abortRun: {
         parameters: {
             query?: never;
@@ -295,6 +628,32 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSummaryDto"];
+                };
+            };
+        };
+    };
+    lathe_answerRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnswerRunRequest"];
+            };
+        };
         responses: {
             /** @description Created */
             201: {
@@ -371,6 +730,48 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConfigDto"];
+                };
+            };
+        };
+    };
+    lathe_getActiveTail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TailSnapshotDto"] | null;
+                };
+            };
+        };
+    };
+    lathe_getTail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TailSnapshotDto"];
                 };
             };
         };

@@ -31,6 +31,22 @@ export const acceptRun = (
     return 1;
   }
 
+  // 1b. Warn (not block) if convergence never produced an accept verdict for
+  // this run — the work is mergeable but was not reviewed by super-daddy, or
+  // super-daddy was unreachable. SKILL.md §Convergence: the clean path
+  // requires convergence before accept.
+  const convergence = store.readConvergence(runId);
+  const converged = convergence.some(
+    (e) => e.kind === "reviewed" && e.primary.verdict === "accept",
+  );
+  if (!converged) {
+    const hasUnreachable = convergence.some((e) => e.kind === "unreachable");
+    console.warn(
+      `warning: ${runId} has no convergence accept verdict` +
+        (hasUnreachable ? " (super-daddy was unreachable)" : " (never reviewed)"),
+    );
+  }
+
   // 2. Determine target: explicit arg or the run's base.
   const target = targetBranch ?? meta.base;
 
@@ -58,25 +74,20 @@ export const acceptRun = (
     return 1;
   }
 
-  // 4. Clone discrimination: is the worktree a self-rooted clone or legacy worktree?
-  const isClone = repo.isCloneSandbox(meta.worktree);
+  // 4. Fetch the run branch into the source repo (clone refs are local to the
+  // sandbox — the merge can't resolve without fetching). Force-fetch to always
+  // pull the sandbox tip, avoiding a stale local ref from a prior convergence fetch.
+  repo.fetchBranchFromClone(meta.repo, meta.worktree, meta.branch, true);
 
-  // 5. Fetch the run branch into the source repo if it's a clone (its refs are
-  // local to the sandbox — the merge can't resolve without fetching).
-  if (isClone) {
-    repo.fetchBranchFromClone(meta.repo, meta.worktree, meta.branch);
-  }
-
-  // 6. Merge the run branch into target.
+  // 5. Merge the run branch into target.
   repo.mergeAccept(meta.repo, meta.branch);
 
-  // 7. Remove the sandbox (guarded — refuses anything but the run's own sandbox).
-  if (isClone) {
-    repo.removeSandbox(meta.worktree, runsDir);
-  }
+  // 6. Remove the sandbox (guarded — refuses anything but the run's own sandbox).
+  repo.removeSandbox(meta.worktree, runsDir);
 
-  // 8. Mark accepted.
-  store.writeMeta({ ...meta, status: "accepted", updatedAt: clock.nowIso() });
+  // 7. Mark accepted, recording the branch the work was merged into so a staged
+  // child of this tip can base off it (the sandbox + run branch are now gone).
+  store.writeMeta({ ...meta, status: "accepted", acceptedInto: target, updatedAt: clock.nowIso() });
   console.log(`accepted ${runId} — merged ${meta.branch} into ${target}, worktree tidied`);
   console.log(`run records kept at ${meta.repo}`);
   return 0;

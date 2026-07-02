@@ -1,5 +1,5 @@
-// Hermetic opencode config generation + server supervision (reference/src/opencode.ts:24-265).
-// Generates the isolated XDG config, spawns the serve process, and waits for readiness.
+// Hermetic opencode config generation + server supervision. Generates the isolated
+// XDG config, spawns the serve process, and waits for readiness.
 // The gate plugin, the custom agents, and the off-MCP transport are all wired here.
 
 import { spawn, execSync, type ChildProcess } from "node:child_process";
@@ -38,17 +38,16 @@ export const writeOpencodeConfig = (
     plugin: [pluginPath],
     // The isolated XDG home cuts off the global AGENTS.md as a side effect, so
     // doctrine is re-attached explicitly: Max's house doctrine for both models.
-    // One source of truth — Max edits the global file, runs inherit it.
-    instructions: [join(homedir(), ".config", "opencode", "skills", "meridian", "SKILL_SMALL.md")],
+    // Runs inherit the global file directly.
+    instructions: [join(homedir(), ".config", "opencode", "skills", "meridian", "SKILL.md")],
     compaction: { auto: false }, // rotation replaces compaction (D2); never summarize
     // Unattended serve must never stall on a permission ask; the gate plugin
     // enforces the actual rules (§10) and denies what must be denied.
     // external_directory: DENY. The run sandbox is a self-rooted clone (real .git
     // dir, see createRunSandbox), so opencode roots ON the sandbox and every legit
     // read/write is internal. Anything resolving OUTSIDE the sandbox is the
-    // wrong-tree escape we just killed — denying it makes a regression a hard,
-    // visible failure instead of a silent main-repo read. (Was `allow`, which
-    // waved through Daddy reading the SOURCE tree via the old worktree linkage.)
+    // wrong-tree escape; denying it makes a regression a hard, visible failure
+    // instead of a silent main-repo read.
     permission: { edit: "allow", bash: "allow", webfetch: "allow", external_directory: "deny" },
     // ask_planner holds its MCP call open while Daddy thinks. Raised to 1h to
     // match daddy.timeoutMs, so the MCP layer never abandons a slow GLM consult
@@ -112,13 +111,11 @@ export const writeOpencodeConfig = (
     },
     // Custom agents so neither model inherits a stock agent's full toolbox.
     // Daddy: read-only inspection, and NO bridge tools — the planner must
-    // never answer itself through its own MCP (learned live: the stock plan
-    // agent gave GLM the merged global config's toy box and it spiralled for
-    // 10+ minutes on one ask_planner). Baby: build tools minus subagents
+    // never answer itself through its own MCP. Baby: build tools minus subagents
     // (defense in depth alongside the gate plugin's hard catch).
     agent: {
       daddy: {
-        description: "Meridian planner — decides, never implements",
+        description: "Lathe planner — decides, never implements",
         mode: "primary",
         tools: {
           write: false,
@@ -141,12 +138,10 @@ export const writeOpencodeConfig = (
         },
       },
       baby: {
-        description: "Meridian executor — implements the packet",
+        description: "Lathe executor — implements the packet",
         mode: "primary",
         // Turns end after ≤N tool-rounds, returning control to the driver at
-        // bounded intervals — rotation and gate evaluation cannot be starved
-        // by one marathon turn (learned live: a 30-minute single turn hit the
-        // transport timeout and cost a reconciliation).
+        // bounded intervals so rotation and gate evaluation cannot be starved.
         steps: config.baby.turnSteps,
         tools: { task: false },
       },
@@ -157,7 +152,7 @@ export const writeOpencodeConfig = (
       // and NO bridge tools (it must never answer itself, same rule as daddy).
       superdaddy: {
         description:
-          "Meridian convergence reviewer — judges delivered work against the packet and doctrine; executes verification, never edits",
+          "Lathe convergence reviewer — judges delivered work against the packet and doctrine; executes verification, never edits",
         mode: "primary",
         steps: config.superdaddy.turnSteps,
         tools: {
@@ -278,10 +273,13 @@ export const waitForServer = async (config: Config, timeoutMs = 30_000): Promise
 };
 
 // The plugin path: ships with @lathe/core at packages/core/plugin/gate-plugin.ts.
-// This file lives at packages/core/src/infrastructure/opencode/config.ts — three
-// levels from the package root. tsx runs from source (no compilation);
-// import.meta.url resolves to the source path, so THREE '..' lands at packages/core.
+// Source execution resolves from src/infrastructure/opencode; bundled execution
+// resolves from dist. Support both layouts so the built daemon stays gated.
 export const pluginPath = (): string => {
   const here = dirname(new URL(import.meta.url).pathname);
-  return join(here, "..", "..", "..", "plugin", "gate-plugin.ts");
+  const sourcePath = join(here, "..", "..", "..", "plugin", "gate-plugin.ts");
+  if (existsSync(sourcePath)) {
+    return sourcePath;
+  }
+  return join(here, "..", "plugin", "gate-plugin.ts");
 };

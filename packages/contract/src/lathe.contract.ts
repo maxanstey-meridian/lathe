@@ -25,7 +25,6 @@ export type RunStatus =
   | "paused"
   | "converged" // super-daddy passed; awaiting accept/reject
   | "accepted" // merged to base, branch deleted
-  | "rejected"
   | "aborted"
   | "failed";
 
@@ -52,10 +51,107 @@ export interface RunDetailDto extends RunSummaryDto {
   parentRunId: string | null;
   expectedSurface: string[];
   lastVerdict: string | null; // latest reviewer verdict summary
+  outcomes: string;
+  blockedReason: string | null;
+  blockedQuestion: string | null;
+}
+
+export interface StatusActiveRunDto {
+  runId: string;
+  outcomes: string;
+  gateLatched: string | null;
+  recentEvents: Array<{ at: string; event: string }>;
+}
+
+export interface StatusQueuedRunDto {
+  runId: string;
+}
+
+export interface StatusParkedRunDto {
+  runId: string;
+  blockedReason: string | null;
+  blockedQuestion: string | null;
+  stallRetries: number;
+}
+
+export interface StatusCampaignDto {
+  campaignId: string;
+  status: string;
+  pass: number;
+  maxPasses: number;
+  originalIntent: string;
+}
+
+export interface StatusStagedRunDto {
+  runId: string;
+  parentRunId: string | null;
+}
+
+export interface StatusReviewSummaryDto {
+  readyForReview: number;
+  failed: number;
+}
+
+export interface StatusDto {
+  activeRun: StatusActiveRunDto | null;
+  queued: StatusQueuedRunDto[];
+  parked: StatusParkedRunDto[];
+  campaigns: StatusCampaignDto[];
+  staged: StatusStagedRunDto[];
+  review: StatusReviewSummaryDto;
+}
+
+export interface ReviewRunDto {
+  runId: string;
+  status: string;
+  outcomes: string;
+  branch: string;
+  repo: string;
+  base: string;
+  blockedQuestion: string | null;
+}
+
+export interface ReviewDto {
+  runs: ReviewRunDto[];
 }
 
 export interface EnqueueRunRequest {
   packetPath: string; // absolute path to a single packet .md
+}
+
+export interface EnqueueContentRequest {
+  content: string; // raw markdown packet content
+  filename: string; // YYYYMMDD-HHMMSS-<slug>.md
+}
+
+export interface ValidatePacketRequest {
+  content: string;
+  filename?: string;
+}
+
+export interface ValidatePacketFrontmatter {
+  repo: string;
+  base: string;
+  compare_commit: string;
+  summary?: string;
+  outcomes: Array<{ id: string; description: string }>;
+  expected_surface: string[];
+  suspicious_surface: string[];
+  verification: Array<{ command: string }>;
+  constraints: string[];
+  autofix_commands: Array<{ command: string }>;
+  campaign_id?: string;
+  parent_run_id?: string;
+  pass: number;
+  regression_outcomes: Array<{ id: string; description: string }>;
+  promoted: boolean;
+}
+
+export interface ValidatePacketResponse {
+  ok: boolean;
+  frontmatter: ValidatePacketFrontmatter | null;
+  body: string;
+  problems: string[];
 }
 
 export interface EnqueueChainRequest {
@@ -64,6 +160,10 @@ export interface EnqueueChainRequest {
 
 export interface RejectRunRequest {
   reason?: string | null;
+}
+
+export interface AnswerRunRequest {
+  answer: string;
 }
 
 export interface ModelConfigDto {
@@ -82,6 +182,105 @@ export interface ConfigDto {
   };
 }
 
+export type TailRunStatus =
+  | "queued"
+  | "running"
+  | "interrupted"
+  | "ready_for_review"
+  | "blocked"
+  | "failed"
+  | "accepted"
+  | "aborted";
+
+export interface TailModelsDto {
+  baby: string;
+  promoted: string;
+  daddy: string;
+  super: string;
+}
+
+export interface TailJournalLineDto {
+  seq: number;
+  at: string;
+  line: string;
+  event: string;
+  driver: boolean;
+}
+
+export interface TailSnapshotDto {
+  runId: string;
+  summary: string | null;
+  status: TailRunStatus;
+  startedAt: string | null;
+  models: TailModelsDto;
+  promoted: boolean;
+  budget: number;
+  worktree: string;
+  outcomesDone: number;
+  outcomesTotal: number;
+  gateReason: string | null;
+  contextTokens: number;
+  turn: number;
+  rotations: number;
+  journal: TailJournalLineDto[];
+  lastSeq: number;
+}
+
+export type TailSpeaker = "baby" | "daddy" | "super";
+export type TailLineStyle = "think" | "text";
+
+export type TailEvent =
+  | {
+      kind: "tail.journal";
+      runId: string;
+      seq: number;
+      at: string;
+      line: string;
+      event: string;
+      driver: boolean;
+    }
+  | {
+      kind: "tail.stats";
+      runId: string;
+      seq?: number;
+      at: string;
+      contextTokens: number;
+      turn: number;
+      rotations: number;
+      outcomesDone: number;
+      outcomesTotal: number;
+      gateReason: string | null;
+      status: TailRunStatus;
+      promoted: boolean;
+    }
+  | {
+      kind: "tail.pane.delta";
+      runId: string;
+      speaker: TailSpeaker;
+      style: TailLineStyle;
+      text: string;
+    }
+  | {
+      kind: "tail.pane.tool";
+      runId: string;
+      speaker: TailSpeaker;
+      status: "completed" | "error";
+      tool: string;
+      detail: string;
+    }
+  | {
+      kind: "tail.super.verdict";
+      runId: string;
+      seq: number;
+      at: string;
+      verdict: string;
+      pass: number;
+      findings: string[];
+      lines: string[];
+    }
+  | { kind: "tail.run.changed"; runId: string; snapshot: TailSnapshotDto | null }
+  | { kind: "tail.ping" };
+
 /* ------------------- event stream payload (SSE sidecar) ------------------- */
 
 export type LatheEvent =
@@ -95,7 +294,7 @@ export type LatheEvent =
 /* ------------------------------- contract ------------------------------- */
 
 export interface LatheContract extends Contract<"LatheContract"> {
-  EnqueueRun: Endpoint<{
+  enqueueRun: Endpoint<{
     method: "POST";
     route: "/runs";
     input: EnqueueRunRequest;
@@ -103,7 +302,15 @@ export interface LatheContract extends Contract<"LatheContract"> {
     successStatus: 202;
   }>;
 
-  EnqueueChain: Endpoint<{
+  enqueueContent: Endpoint<{
+    method: "POST";
+    route: "/runs/content";
+    input: EnqueueContentRequest;
+    response: RunSummaryDto;
+    successStatus: 202;
+  }>;
+
+  enqueueChain: Endpoint<{
     method: "POST";
     route: "/chains";
     input: EnqueueChainRequest;
@@ -111,43 +318,88 @@ export interface LatheContract extends Contract<"LatheContract"> {
     successStatus: 202;
   }>;
 
-  ListRuns: Endpoint<{
+  listRuns: Endpoint<{
     method: "GET";
     route: "/runs";
     response: RunSummaryDto[];
   }>;
 
-  GetRun: Endpoint<{
+  getRun: Endpoint<{
     method: "GET";
     route: "/runs/{runId}";
+    params: { runId: string };
     response: RunDetailDto;
   }>;
 
-  AbortRun: Endpoint<{
+  getStatus: Endpoint<{
+    method: "GET";
+    route: "/status";
+    response: StatusDto;
+  }>;
+
+  getReview: Endpoint<{
+    method: "GET";
+    route: "/review";
+    response: ReviewDto;
+  }>;
+
+  validatePacket: Endpoint<{
+    method: "POST";
+    route: "/packet";
+    input: ValidatePacketRequest;
+    response: ValidatePacketResponse;
+    successStatus: 200;
+  }>;
+
+  abortRun: Endpoint<{
     method: "POST";
     route: "/runs/{runId}/abort";
+    params: { runId: string };
+    response: RunSummaryDto;
+  }>;
+
+  answerRun: Endpoint<{
+    method: "POST";
+    route: "/runs/{runId}/answer";
+    input: AnswerRunRequest;
+    params: { runId: string };
     response: RunSummaryDto;
   }>;
 
   // DESTRUCTIVE: merges the run branch to base and deletes it. Legal ONLY when
   // the run isChainTip — the supervisor returns 409 on a mid-chain link
   // ([[lathe-force-accept-tipbranch-bug]] is what mid-chain accept breaks).
-  AcceptRun: Endpoint<{
+  acceptRun: Endpoint<{
     method: "POST";
     route: "/runs/{runId}/accept";
+    params: { runId: string };
     response: RunSummaryDto;
   }>;
 
-  RejectRun: Endpoint<{
+  rejectRun: Endpoint<{
     method: "POST";
     route: "/runs/{runId}/reject";
     input: RejectRunRequest;
+    params: { runId: string };
     response: RunSummaryDto;
   }>;
 
-  GetConfig: Endpoint<{
+  getConfig: Endpoint<{
     method: "GET";
     route: "/config";
     response: ConfigDto;
+  }>;
+
+  getActiveTail: Endpoint<{
+    method: "GET";
+    route: "/tail/active";
+    response: TailSnapshotDto | null;
+  }>;
+
+  getTail: Endpoint<{
+    method: "GET";
+    route: "/tail/{runId}";
+    params: { runId: string };
+    response: TailSnapshotDto;
   }>;
 }

@@ -8,7 +8,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc"
+    "build": "tsup src/index.ts --format esm --out-dir dist --sourcemap",
+    "test": "tsx --test tests/*.test.ts"
   },
   "dependencies": {
     "@lathe/core": "workspace:*",
@@ -19,6 +20,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "tsup": "^8.5.0",
     "tsx": "^4.20.0",
     "typescript": "^5.7.0"
   }

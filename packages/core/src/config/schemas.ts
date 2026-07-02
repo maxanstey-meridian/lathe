@@ -2,8 +2,7 @@ import { z } from "zod";
 
 // ---------------------------------------------------------------------------
 // Config (CONTRACT §14)
-// Full C1 field set with every default (C2). Replicated from reference — this
-// is the schema; the shape is truth.
+// Full field set with every default. This schema owns the config shape.
 
 export const Config = z.object({
   stateRoot: z.string().default("~/.meridian/v3"),
@@ -34,23 +33,34 @@ export const Config = z.object({
       agent: z.string().default("baby"),
       contextWindow: z.number().int().default(114_688),
       timeoutMs: z.number().int().default(1_800_000),
-      turnSteps: z.number().int().default(12),
-      // Caps Baby's per-turn reasoning (oMLX `thinking_budget`, integer tokens):
+      turnSteps: z.number().int().default(30),
+      // Caps executor per-turn reasoning (oMLX `thinking_budget`, integer tokens):
       // on hitting it the server forces `</think>` and Baby answers from the
       // reasoning so far — bounds rumination spirals AND the reasoning tokens'
       // drain on the rotation budget (they count toward contextWindow). Start
       // generous and ratchet down in config.json; too low forces premature
       // answers on genuinely hard turns. null = uncapped (legacy behaviour).
       thinkingBudget: z.number().int().nullable().default(6_000),
+      // The model baby's inference is promoted to at a cap (stall recovery OR
+      // daddy's final-review rejection) — "one more set of retries on a bigger
+      // model". The agent stays "baby"; only the inference changes; the promotion
+      // is ephemeral (the run carries it, the next run resets).
+      //
+      // OPTIONAL — when unset, promotion tracks DADDY's configured model, so the
+      // two never drift (change daddy's model and promotion follows). Set this
+      // only to promote to something OTHER than daddy.
+      promoteTo: z
+        .object({
+          providerId: z.string(),
+          modelId: z.string(),
+        })
+        .optional(),
     })
     .default({}),
-  // Super-daddy: the convergence reviewer — the strongest frontier "pseudo-Max"
-  // tier, the ONE reviewer that MUST execute (bash enabled). Default is
+  // Super-daddy: the convergence reviewer. It must execute (bash enabled). Default is
   // openai/gpt-5.5: it resolves through opencode's global auth (NOT
-  // declared in the generated config, like daddy), it's the strongest reviewer
-  // currently authed, and it mirrors Max's manual loop (today he reviews by
-  // hand with GPT). Override modelId in config.json — e.g. "gpt-5.5-pro" for a
-  // heavier pass — exactly as daddy.modelId is overridden today.
+  // declared in the generated config, like daddy). Override modelId in config.json
+  // for a heavier pass.
   superdaddy: z
     .object({
       providerId: z.string().default("openai"),
@@ -72,12 +82,15 @@ export const Config = z.object({
       // provider options when present.
       apiKey: z.string().optional(),
       // One turn must run every verification command, inspect the tree, and emit
-      // a verdict — far more tool-rounds than daddy's bounded recon (§4 "must
-      // execute").
+      // a verdict.
       turnSteps: z.number().int().default(40),
-      // The judgement rubric (§4): the FULL skill, not the ambient SKILL_SMALL
-      // the executors inherit. Live path (§14.4) — read fresh each pass.
+      // The judgement rubric (§4): the FULL skill, not the ambient
+      // instructions the executors inherit. Live path (§14.4) — read fresh each pass.
       skillPath: z.string().default("~/.config/opencode/skills/meridian/SKILL.md"),
+      // The packet-authoring spec super-daddy follows when it authors a follow-up
+      // packet (request_changes → repair pass). The SAME skill the planner uses to
+      // author any handoff packet. Read fresh each authoring turn, like skillPath.
+      packetSkillPath: z.string().default("~/.config/opencode/skills/packet/SKILL.md"),
       // Opus has a large window; give it more of the diff inline than daddy's
       // 64KB.
       diffCapBytes: z.number().int().default(131_072),
@@ -91,27 +104,24 @@ export const Config = z.object({
   thresholds: z
     .object({
       rotationFraction: z.number().default(0.65),
-      // A no-progress backstop, not a checkpoint cadence: with the limit-shout
-      // now non-blocking (§10), 10 consecutive DEAD turns (no tool call, no
-      // diff) is an unambiguous wedge.
+      // A no-progress backstop, not a checkpoint cadence: 10 consecutive dead turns
+      // (no tool call, no diff) is an unambiguous wedge.
       ladderParkAt: z.number().int().default(10),
-      // No-progress ROTATION (L3, §10). A Baby that has stopped calling tools
-      // and is narrating in a loop is rescued by a FRESH session far more
-      // reliably than by more nudges. Must be ≥1 and < ladderParkAt so at
+      // No-progress ROTATION (L3, §10). A tool-inactive session is replaced rather
+      // than nudged indefinitely. Must be ≥1 and < ladderParkAt so at
       // least one rotation fires before the park backstop.
       ladderRotateAt: z.number().int().positive().default(4),
-      // NON-BLOCKING checkpoint reminder (§10): how long since Baby's last
+      // NON-BLOCKING checkpoint reminder (§10): how long since the executor's last
       // planner check-in before the driver starts prepending a soft "consider
       // ask_planner" nudge to its continue prompt. Once past it, the nudge fires
-      // EVERY turn until Baby actually checks in (which resets the clock) —
-      // deliberately repetitive: Baby is an easily-distracted child, so we keep
-      // shouting. It never latches and never ends the turn.
+      // EVERY turn until the executor checks in (which resets the clock). It never
+      // latches and never ends the turn.
       checkpointNudgeMs: z
         .number()
         .int()
         .default(20 * 60 * 1000),
-      // VOLUME checkpoint reminder (§10) — the work-interval cadence reborn as a
-      // non-blocking shout, on a count axis instead of a clock. Once Baby has
+      // VOLUME checkpoint reminder (§10): non-blocking count-axis reminder. Once
+      // the executor has
       // made `checkpointToolCalls` tool calls (any tool), or changed
       // `checkpointFiles`/`checkpointLoc` of diff, since its last planner
       // check-in, the SAME message a block would show is appended to every tool
@@ -130,20 +140,25 @@ export const Config = z.object({
       // recorded); at it the run parks for Max as a real "Codex durably down".
       // Distinct from maxPasses, which counts real verdicts.
       maxReviewerUnreachable: z.number().int().min(1).default(3),
-      // At the convergence cap, run one more pass with Baby's full harness on
-      // Daddy's model before escalating to Max. false restores today's
-      // escalate-at-cap behaviour.
+      // When daddy's final review rejects baby's report reportRejectionParkAt
+      // times, swap baby's model to baby.promoteTo for one more set of retries
+      // before failing the run. false disables the swap — baby just fails at the
+      // rejection cap as if promoteTo were absent.
       promoteAtCap: z.boolean().default(true),
       // P6 liveness. maxStallRetries: automatic post-stall requeues before a
-      // `wedged` run escalates to Max — the bounded "try again pls". maxRunMs:
+      // `wedged` run escalates to Max. maxRunMs:
       // wall-clock backstop on a single attempt — the livelock watchdog the
       // per-turn ladder can't catch (productive-looking turns that never
       // converge). Default 6h.
       maxStallRetries: z.number().int().min(0).default(2),
-      // P6 sibling for hallucination recovery: max consecutive reorients (Baby
-      // derailed → discard session, reseed with Daddy's fix) before the driver
-      // stops rotating and parks for Max. Mirrors maxStallRetries' bounded
-      // "try again pls"; 0 disables reorient.
+      // Bounded crash retry: auto-requeue a `blocked/crashed` run up to
+      // maxCrashRetries (front of the line) before escalating to Max. A
+      // transient crash (cold proxy, momentary IO blip) retriers; a
+      // deterministic crash parks for Max after the cap. Mirrors
+      // maxStallRetries for wedged stalls.
+      maxCrashRetries: z.number().int().min(0).default(2),
+      // P6 sibling for hallucination recovery: max consecutive reorients before
+      // the driver stops rotating and parks for Max. 0 disables reorient.
       maxReorientRetries: z.number().int().min(0).default(2),
       maxRunMs: z
         .number()
@@ -160,6 +175,12 @@ export const Config = z.object({
   // idleTimeoutMs of silence (no data chunks). Matches the headerTimeoutMs
   // pattern at line 60 (z.union with false to disable for diagnosis).
   idleTimeoutMs: z.union([z.number().int(), z.literal(false)]).default(120_000),
+  daemon: z
+    .object({
+      host: z.string().default("127.0.0.1"),
+      port: z.number().int().default(4198),
+    })
+    .default({}),
   mutationCommandPatterns: z
     .array(z.string())
     .default(["\\b(pnpm|npm|yarn)\\b.*\\bgenerate\\b", "task contracts", "dotnet-rivet"]),

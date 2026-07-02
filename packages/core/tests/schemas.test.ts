@@ -27,6 +27,7 @@ test("packet: PacketFrontmatter parses valid object", () => {
   const valid = {
     repo: "/tmp/my-repo",
     base: "main",
+    compare_commit: "main",
     outcomes: [{ id: "my-feature", description: "Adds the feature" }],
     expected_surface: ["src/**"],
     verification: [{ command: "pnpm test" }],
@@ -129,6 +130,10 @@ test("review-convergence: PlannerResponse round-trips", () => {
   assert.deepStrictEqual(result.constraints, []);
   assert.deepStrictEqual(result.evidence_used, []);
   assert.strictEqual(result.human_decision_needed, null);
+});
+
+test("review-convergence: PlannerStatus accepts promote_run", () => {
+  assert.strictEqual(PlannerStatus.parse("promote_run"), "promote_run");
 });
 
 test("review-convergence: Finding rejects invalid kebab id", () => {

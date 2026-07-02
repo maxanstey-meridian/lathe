@@ -1,7 +1,7 @@
 import assert from "node:assert";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { test } from "node:test";
 import { makePaths } from "../src/config/paths.js";
 import type { Config } from "../src/config/schemas.js";
@@ -254,7 +254,9 @@ test("config generation: skips copy when node_modules trio already present", () 
 });
 
 test("pluginPath resolves to an existing file", () => {
-  assert.ok(existsSync(pluginPath()), "pluginPath() must point to an existing gate-plugin.ts");
+  const path = pluginPath();
+  assert.ok(existsSync(path), "pluginPath() must point to an existing gate-plugin.ts");
+  assert.strictEqual(basename(path), "gate-plugin.ts");
 });
 
 test("config generation: seeds node_modules trio from global dir when missing", () => {
@@ -414,6 +416,41 @@ test("idle timeout: disabled (false) does not reject", async () => {
       info: { role: "assistant", model: "test", createdAt: "2026-01-01T00:00:00Z" },
       parts: [{ type: "text", text: "ok" }],
     });
+  } finally {
+    server?.close();
+  }
+});
+
+test("opencode executor: abortSession calls the server-side abort endpoint", async () => {
+  const PORT = 14201;
+  const seen: Array<{ method?: string; url?: string }> = [];
+
+  let server: ReturnType<typeof import("node:http").createServer>;
+  try {
+    const { createServer } = await import("node:http");
+    server = createServer((req, res) => {
+      seen.push({ method: req.method, url: req.url });
+      req.resume();
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve) => server.listen(PORT, resolve));
+    server.unref();
+
+    const config: Config = {
+      idleTimeoutMs: false,
+      opencode: { port: PORT },
+      daddy: {},
+      baby: {},
+      superdaddy: {},
+      thresholds: {},
+      mutationCommandPatterns: [],
+    };
+    const client = createOpencodeClient(config);
+
+    await client.abortSession("session-123");
+
+    assert.deepStrictEqual(seen, [{ method: "POST", url: "/session/session-123/abort" }]);
   } finally {
     server?.close();
   }

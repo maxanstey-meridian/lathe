@@ -3,21 +3,12 @@
 
 import assert from "node:assert";
 import { execSync } from "node:child_process";
-import {
-  mkdtempSync,
-  writeFileSync,
-  mkdirSync,
-  rmSync,
-  readFileSync,
-  existsSync,
-  statSync,
-} from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
   createSandbox,
-  isCloneSandbox,
   fetchBranchFromClone,
   removeSandbox,
   worktreeIsDirty,
@@ -101,7 +92,7 @@ test("createSandbox: a self-rooted clone — .git is a real dir (no worktree lin
   }
 });
 
-test("createSandbox: crash recovery — reuses an existing real sandbox (.git dir present)", () => {
+test("createSandbox: fresh restart — recreates an existing real sandbox cleanly", () => {
   const tmp = mkdtempSync(join(tmpdir(), "meridian-sandbox-reuse-"));
   try {
     const { repo, baseSha } = initSourceRepo(tmp);
@@ -114,30 +105,14 @@ test("createSandbox: crash recovery — reuses an existing real sandbox (.git di
     const firstSha = execSync("git rev-parse HEAD", { cwd: sandbox }).toString().trim();
     assert.equal(firstSha, baseSha);
 
-    // Calling again should be a no-op (reuse).
+    // Leave behind abandoned state that a fresh restart must not inherit.
+    writeFileSync(join(sandbox, "scratch.txt"), "dirty\n");
+
+    // Calling again should recreate a clean clone at base.
     createSandbox(repo, sandbox, "meridian/y", "main");
     const secondSha = execSync("git rev-parse HEAD", { cwd: sandbox }).toString().trim();
     assert.equal(secondSha, baseSha, "reused sandbox HEAD should be unchanged");
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test("isCloneSandbox: returns true for a self-rooted clone, false for a worktree-like .git file", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "meridian-isclone-"));
-  try {
-    const { repo } = initSourceRepo(tmp);
-    const runsDir = join(tmp, "runs");
-    const sandbox = join(runsDir, "20990101-000000-z", "worktree");
-    mkdirSync(join(runsDir, "20990101-000000-z"), { recursive: true });
-
-    createSandbox(repo, sandbox, "meridian/z", "main");
-    assert.ok(isCloneSandbox(sandbox), "should detect a clone sandbox");
-
-    // Simulate a worktree: replace .git directory with a pointer file.
-    rmSync(join(sandbox, ".git"), { recursive: true });
-    writeFileSync(join(sandbox, ".git"), "gitdir: /tmp/fake\n");
-    assert.ok(!isCloneSandbox(sandbox), "should NOT detect a worktree as clone");
+    assert.ok(!existsSync(join(sandbox, "scratch.txt")), "dirty files must be discarded");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -244,7 +219,7 @@ test("wipCommit: dirty → returns SHA; clean → undefined", () => {
 
     // Dirty → SHA.
     writeFileSync(join(repo, "new.txt"), "stuff\n");
-    const sha = wipCommit(repo, "meridian: WIP test");
+    const sha = wipCommit(repo, "lathe: WIP test");
     assert.ok(typeof sha === "string" && sha.length === 40, `expected 40-char SHA, got: ${sha}`);
 
     // Clean again → undefined.
@@ -265,7 +240,6 @@ test("amendCommit: rewords HEAD and returns new SHA", () => {
     writeFileSync(join(repo, "a.txt"), "a\n");
     execSync("git add -A && git commit -m 'first'", { cwd: repo, stdio: "ignore" });
 
-    const before = execSync("git rev-parse HEAD", { cwd: repo }).toString().trim();
     const beforeMsg = execSync("git log -1 --format=%s", { cwd: repo }).toString().trim();
     assert.equal(beforeMsg, "first");
 
@@ -274,9 +248,6 @@ test("amendCommit: rewords HEAD and returns new SHA", () => {
     const sha = amendCommit(repo, newMsg);
 
     assert.ok(typeof sha === "string" && sha.length === 40);
-    // HEAD sha should be different (tree changed because message changed).
-    // Actually amend without --no-edit keeps same tree, but --amend -m changes the commit object.
-    // The sha should be valid.
     const afterMsg = execSync("git log -1 --format=%s", { cwd: repo }).toString().trim();
     assert.equal(afterMsg, newMsg);
   } finally {
@@ -547,7 +518,7 @@ test("diffNameOnly: lists changed file names", () => {
 test("fetchBranchFromClone: pulls a branch from a clone into source repo refs", () => {
   const tmp = mkdtempSync(join(tmpdir(), "meridian-fetch-"));
   try {
-    const { repo: source, baseSha } = initSourceRepo(tmp);
+    const { repo: source } = initSourceRepo(tmp);
 
     // Create a sandbox clone, make a commit on a feature branch.
     const clonePath = join(tmp, "clone");
@@ -564,6 +535,48 @@ test("fetchBranchFromClone: pulls a branch from a clone into source repo refs", 
 
     // Source repo should now have the branch.
     assert.ok(branchExists(source, "feature"), "source repo should have fetched branch");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("fetchBranchFromClone: skips fetch when branch already exists in repo", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "meridian-fetch-skip-"));
+  try {
+    const { repo: source } = initSourceRepo(tmp);
+
+    // Create a sandbox clone, make a commit on a feature branch.
+    const clonePath = join(tmp, "clone");
+    mkdirSync(clonePath);
+    execSync(`git clone --local ${source} ${clonePath}`, { stdio: "ignore" });
+    execSync("git config user.email t@t.t", { cwd: clonePath, stdio: "ignore" });
+    execSync("git config user.name t", { cwd: clonePath, stdio: "ignore" });
+    execSync("git checkout -q -b feature", { cwd: clonePath, stdio: "ignore" });
+    writeFileSync(join(clonePath, "feature.txt"), "feat\n");
+    execSync("git add -A && git commit -qm feature", { cwd: clonePath, stdio: "ignore" });
+
+    // First fetch brings the branch into source.
+    fetchBranchFromClone(source, clonePath, "feature");
+    const originalSha = execSync("git rev-parse feature", {
+      cwd: source,
+      encoding: "utf-8",
+    }).trim();
+
+    // Simulate a child accept: advance the branch in source past the clone's ref.
+    execSync("git checkout -q feature", { cwd: source, stdio: "ignore" });
+    writeFileSync(join(source, "child.txt"), "child\n");
+    execSync("git add -A && git commit -qm child-merge", { cwd: source, stdio: "ignore" });
+    const advancedSha = execSync("git rev-parse feature", {
+      cwd: source,
+      encoding: "utf-8",
+    }).trim();
+
+    // Second fetch should skip (branch exists) — source branch must not regress.
+    fetchBranchFromClone(source, clonePath, "feature");
+    const afterSha = execSync("git rev-parse feature", { cwd: source, encoding: "utf-8" }).trim();
+
+    assert.notEqual(afterSha, originalSha, "should not regress to clone's stale ref");
+    assert.strictEqual(afterSha, advancedSha, "should keep repo's advanced ref");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

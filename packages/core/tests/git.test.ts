@@ -582,6 +582,46 @@ test("fetchBranchFromClone: skips fetch when branch already exists in repo", () 
   }
 });
 
+test("fetchBranchFromClone: force=true overwrites a stale local ref", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "meridian-fetch-force-"));
+  try {
+    const { repo: source } = initSourceRepo(tmp);
+
+    // Create a sandbox clone, make a commit on a feature branch.
+    const clonePath = join(tmp, "clone");
+    mkdirSync(clonePath);
+    execSync(`git clone --local ${source} ${clonePath}`, { stdio: "ignore" });
+    execSync("git config user.email t@t.t", { cwd: clonePath, stdio: "ignore" });
+    execSync("git config user.name t", { cwd: clonePath, stdio: "ignore" });
+    execSync("git checkout -q -b feature", { cwd: clonePath, stdio: "ignore" });
+    writeFileSync(join(clonePath, "feature.txt"), "feat\n");
+    execSync("git add -A && git commit -qm feature", { cwd: clonePath, stdio: "ignore" });
+    const cloneSha = execSync("git rev-parse feature", {
+      cwd: clonePath,
+      encoding: "utf-8",
+    }).trim();
+
+    // Bring the branch into source, then advance source past it (e.g. a
+    // checkout created a local ref that diverged from the clone's).
+    fetchBranchFromClone(source, clonePath, "feature");
+    execSync("git checkout -q feature", { cwd: source, stdio: "ignore" });
+    writeFileSync(join(source, "extra.txt"), "extra\n");
+    execSync("git add -A && git commit -qm diverged", { cwd: source, stdio: "ignore" });
+    execSync("git checkout -q main", { cwd: source, stdio: "ignore" });
+
+    // force=true must overwrite the diverged local ref with the clone's ref.
+    fetchBranchFromClone(source, clonePath, "feature", true);
+    const afterSha = execSync("git rev-parse feature", {
+      cwd: source,
+      encoding: "utf-8",
+    }).trim();
+
+    assert.strictEqual(afterSha, cloneSha, "force fetch should reset to clone's ref");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 // ===========================================================================
 // mergeAccept
 // ===========================================================================

@@ -79,7 +79,7 @@ export const fetchBranchFromClone = (
       /* branch not in repo yet — fetch from clone */
     }
   }
-  git(repo, ["fetch", clone, `${branch}:${branch}`]);
+  git(repo, ["fetch", clone, `${force ? "+" : ""}${branch}:${branch}`]);
 };
 
 // Guarded teardown. `rm -rf` is a footgun, so this refuses unless the target is

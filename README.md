@@ -8,6 +8,8 @@ That reviewer loop is where the value is. It says the things a 3B-active model w
 
 ## Status
 
+![Dashboard](docs/dashboard.png)
+
 This is a personal tool, not a polished public product. It is only tested on macOS.
 
 The old project name was Meridian. Some paths and source identifiers still say `meridian`, most importantly the `~/.meridian/v3/` state root and the `meridian/` run-branch prefix. These are functional and renaming them would break existing state; the MCP bridge tool prefix (`meridian-bridge_*`) is also retained. Everything user-facing now says Lathe.
@@ -61,6 +63,7 @@ Packets are Markdown files with YAML frontmatter. Required fields are:
 ---
 repo: /path/to/repo
 base: main
+compare_commit: main
 summary: Brief label shown in tail
 outcomes:
   - id: useful-outcome
@@ -131,4 +134,13 @@ Each run is turn-based. The driver watches tool use, context budget, progress, c
 pnpm check          # lint + typecheck across all packages
 pnpm test           # all packages
 pnpm build          # all packages
+```
+
+### Dashboard
+
+The dashboard is a Nuxt SPA at `apps/dashboard`. Start the daemon in one terminal and the dashboard in another:
+
+```sh
+pnpm serve          # daemon (HTTP API + SSE on 127.0.0.1:4198)
+pnpm dev            # dashboard (http://localhost:3000)
 ```

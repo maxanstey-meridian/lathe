@@ -3,59 +3,67 @@ import { onMounted } from "vue";
 
 import ActiveRunCard from "./index/components/ActiveRunCard.vue";
 import CampaignLadder from "./index/components/CampaignLadder.vue";
-import EventLog from "./index/components/EventLog.vue";
 import ParkedList from "./index/components/ParkedList.vue";
 import QueueList from "./index/components/QueueList.vue";
 import ReviewBadge from "./index/components/ReviewBadge.vue";
 import StagedChains from "./index/components/StagedChains.vue";
-import { useDaemonEvents } from "./index/composables/useDaemonEvents";
+import TailView from "./index/components/TailView.vue";
+import { useLatheTail } from "./index/composables/useLatheTail";
 import { useLatheStatus } from "./index/composables/useLatheStatus";
-import { provideDaemonEvents } from "./index/ports/daemon-events";
 import { provideLatheStatus } from "./index/ports/lathe-status";
+import { provideLatheTail } from "./index/ports/lathe-tail";
 
 const latheStatus = provideLatheStatus(useLatheStatus());
-provideDaemonEvents(useDaemonEvents());
+const latheTail = provideLatheTail(useLatheTail());
 
 onMounted(() => {
   void latheStatus.refresh();
+  void latheTail.refresh();
 });
 </script>
 
 <template>
-  <section class="space-y-6">
-    <div>
-      <p class="text-sm font-medium uppercase tracking-wide text-slate-500">Local dashboard</p>
-      <h1 class="mt-2 text-3xl font-semibold tracking-tight">Lathe daemon</h1>
-      <p class="mt-2 max-w-2xl text-slate-600">
-        Live overview of runs, queues, campaigns, and review status.
-      </p>
-    </div>
-
-    <ActiveRunCard />
+  <section class="flex h-full min-h-0 flex-col gap-4">
+    <header class="flex shrink-0 flex-col gap-3 md:flex-row md:items-end md:justify-between">
+      <div>
+        <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Local dashboard</p>
+        <h1 class="mt-1 text-2xl font-semibold tracking-tight">Lathe daemon</h1>
+      </div>
+      <div class="flex items-center gap-3">
+        <div class="flex items-center gap-2 text-xs text-slate-500">
+          <span class="h-2 w-2 rounded-full" :class="latheStatus.isLive.value ? 'bg-emerald-500' : 'bg-red-500'"></span>
+          <span>{{ latheStatus.isLive.value ? "status live" : "status offline" }}</span>
+        </div>
+        <UButton :loading="latheStatus.isLoading.value" color="neutral" variant="soft" size="sm" @click="latheStatus.refresh">
+          Refresh status
+        </UButton>
+      </div>
+    </header>
 
     <UAlert
       v-if="latheStatus.errorMessage.value"
+      class="shrink-0"
       color="error"
       variant="soft"
       :title="latheStatus.errorMessage.value"
     />
 
-    <QueueList />
+    <div class="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+      <TailView class="h-[80dvh] min-h-[30rem] xl:h-full xl:min-h-0" />
 
-    <ParkedList />
+      <aside class="min-h-0 space-y-4 xl:overflow-y-auto xl:pr-1">
+        <ActiveRunCard />
 
-    <CampaignLadder />
+        <QueueList />
 
-    <StagedChains />
+        <ParkedList />
 
-    <ReviewBadge />
+        <CampaignLadder />
 
-    <EventLog />
+        <StagedChains />
 
-    <div>
-      <UButton :loading="latheStatus.isLoading.value" color="neutral" variant="soft" @click="latheStatus.refresh">
-        Refresh
-      </UButton>
+        <ReviewBadge />
+      </aside>
     </div>
   </section>
 </template>

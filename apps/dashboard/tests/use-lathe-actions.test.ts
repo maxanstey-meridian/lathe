@@ -138,6 +138,87 @@ test("useLatheActions enqueueContent non-2xx", async () => {
   assert.equal(refreshCount, 0);
 });
 
+test("useLatheActions answer success and failure", async () => {
+  let refreshCount = 0;
+  const mockRefresh = async (): Promise<void> => {
+    refreshCount += 1;
+  };
+
+  const c = makeSequencedClient(
+    new Map([
+      [
+        "POST /runs/test/answer",
+        [fakeResponse({ id: "test-answer" }), fakeResponse({ message: "answer rejected" }, 400)],
+      ],
+    ]),
+  );
+  const actions = useLatheActions(mockRefresh, c);
+
+  const success = await actions.answer("test", "because it is ready");
+  assert.equal(success, true);
+  assert.equal(actions.lastError.value, null);
+  assert.equal(refreshCount, 1);
+
+  const failure = await actions.answer("test", "because it is ready");
+  assert.equal(failure, false);
+  assert.equal(actions.lastError.value, "answer rejected");
+  assert.equal(refreshCount, 1);
+});
+
+test("useLatheActions accept success and failure", async () => {
+  let refreshCount = 0;
+  const mockRefresh = async (): Promise<void> => {
+    refreshCount += 1;
+  };
+
+  const c = makeSequencedClient(
+    new Map([
+      [
+        "POST /runs/test/accept",
+        [fakeResponse({ id: "test-accept" }), fakeResponse({ message: "accept rejected" }, 403)],
+      ],
+    ]),
+  );
+  const actions = useLatheActions(mockRefresh, c);
+
+  const success = await actions.accept("test");
+  assert.equal(success, true);
+  assert.equal(actions.lastError.value, null);
+  assert.equal(refreshCount, 1);
+
+  const failure = await actions.accept("test");
+  assert.equal(failure, false);
+  assert.equal(actions.lastError.value, "accept rejected");
+  assert.equal(refreshCount, 1);
+});
+
+test("useLatheActions reject success and failure", async () => {
+  let refreshCount = 0;
+  const mockRefresh = async (): Promise<void> => {
+    refreshCount += 1;
+  };
+
+  const c = makeSequencedClient(
+    new Map([
+      [
+        "POST /runs/test/reject",
+        [fakeResponse({ id: "test-reject" }), fakeResponse({ message: "reject rejected" }, 500)],
+      ],
+    ]),
+  );
+  const actions = useLatheActions(mockRefresh, c);
+
+  const success = await actions.reject("test", "not good enough");
+  assert.equal(success, true);
+  assert.equal(actions.lastError.value, null);
+  assert.equal(refreshCount, 1);
+
+  const failure = await actions.reject("test", "not good enough");
+  assert.equal(failure, false);
+  assert.equal(actions.lastError.value, "reject rejected");
+  assert.equal(refreshCount, 1);
+});
+
 test("useLatheActions direct composable clears stale lastError after a later success", async () => {
   let refreshCount = 0;
   const mockRefresh = async (): Promise<void> => {

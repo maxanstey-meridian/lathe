@@ -1,7 +1,7 @@
 import type { components } from "@lathe/contract";
 import type { ComputedRef, Ref } from "vue";
 
-import { useProvideInject } from "~/composables/useProvideInject";
+import { useProvideInject } from "../../../composables/useProvideInject";
 
 export type StatusDto = components["schemas"]["StatusDto"];
 

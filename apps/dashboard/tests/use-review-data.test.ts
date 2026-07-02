@@ -1,67 +1,155 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import type { RivetClient, RivetFetch } from "@lathe/contract";
-import { createClient } from "@lathe/contract";
+import type { LatheStatus, StatusDto } from "../app/pages/index/ports/lathe-status";
+import { createRenderer, computed, defineComponent, nextTick, ref, type Ref } from "vue";
 
-import { fetchReviewRunsWithClient } from "../app/pages/index/composables/fetchReviewRuns";
+import { useReviewData } from "../app/pages/index/composables/useReviewData";
 
-const fakeResponse = (body: unknown, status = 200): Response =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-
-const makeFakeFetch = (responses: Map<string, Response>): RivetFetch => {
-  return async (request: Request): Promise<Response> => {
-    const pathname = new URL(request.url, "http://localhost").pathname;
-    const key = `${request.method} ${pathname}`;
-    const response = responses.get(key);
-    if (response) {
-      return response;
-    }
-    return fakeResponse({ error: "not found" }, 404);
-  };
+type ReviewRun = {
+  runId: string;
+  status: string;
+  outcomes: string;
+  branch: string;
+  repo: string;
+  base: string;
+  blockedQuestion: string | null;
 };
 
-const makeClient = (responses: Map<string, Response>): RivetClient =>
-  createClient({ baseUrl: "http://localhost", fetch: makeFakeFetch(responses) });
+type HostNode = {
+  kind: "root" | "element" | "text" | "comment";
+  children: HostNode[];
+  text?: string;
+};
 
-test("fetchReviewRuns returns runs from successful response", async () => {
-  const c = makeClient(new Map([["GET /review", fakeResponse({
-    runs: [
-      { runId: "run-1", status: "ready_for_review", outcomes: "outcome A", branch: "feat/1", repo: "test/repo", base: "main", blockedQuestion: null },
-      { runId: "run-2", status: "ready_for_review", outcomes: "outcome B", branch: "feat/2", repo: "test/repo", base: "main", blockedQuestion: "is this right?" },
-    ],
-  })]]));
-
-  const runs = await fetchReviewRunsWithClient(c);
-
-  assert.equal(runs.length, 2);
-  assert.equal(runs[0].runId, "run-1");
-  assert.equal(runs[0].status, "ready_for_review");
-  assert.equal(runs[1].runId, "run-2");
-  assert.equal(runs[1].blockedQuestion, "is this right?");
+const renderer = createRenderer<HostNode, HostNode>({
+  patchProp: () => undefined,
+  insert: (child, parent) => {
+    parent.children.push(child);
+  },
+  remove: () => undefined,
+  createElement: () => ({ kind: "element", children: [] }),
+  createText: (text) => ({ kind: "text", children: [], text }),
+  createComment: (text) => ({ kind: "comment", children: [], text }),
+  setText: (node, text) => {
+    node.text = text;
+  },
+  setElementText: (node, text) => {
+    node.text = text;
+  },
+  parentNode: () => null,
+  nextSibling: () => null,
+  setScopeId: () => undefined,
+  cloneNode: (node) => ({ ...node, children: [...node.children] }),
+  insertStaticContent: (content) => [
+    { kind: "comment", children: [], text: content },
+    { kind: "comment", children: [], text: content },
+  ],
 });
 
-test("fetchReviewRuns returns empty array when no runs", async () => {
-  const c = makeClient(new Map([["GET /review", fakeResponse({ runs: [] })]]));
-
-  const runs = await fetchReviewRunsWithClient(c);
-
-  assert.equal(runs.length, 0);
+const makeReviewRun = (runId: string, status: string): ReviewRun => ({
+  runId,
+  status,
+  outcomes: `outcomes for ${runId}`,
+  branch: `branch-${runId}`,
+  repo: "test/repo",
+  base: "main",
+  blockedQuestion: null,
 });
 
-test("fetchReviewRuns throws on network error", async () => {
-  const c = createClient({ baseUrl: "http://localhost", fetch: async () => { throw new Error("network error"); } });
-
-  await assert.rejects(fetchReviewRunsWithClient(c), /network error/);
+const makeStatus = (): StatusDto => ({
+  activeRun: null,
+  queued: [],
+  parked: [],
+  campaigns: [],
+  staged: [],
+  review: {
+    readyForReview: 0,
+    failed: 0,
+  },
 });
 
-test("fetchReviewRuns returns empty array when response has no runs field", async () => {
-  const c = makeClient(new Map([["GET /review", fakeResponse({})]]));
+const makeLatheStatus = (status: Ref<StatusDto | null>): LatheStatus => ({
+  status,
+  isLoading: ref(false),
+  errorMessage: ref(null),
+  isDaemonReachable: computed(() => true),
+  isLive: ref(false),
+  refresh: async () => undefined,
+});
 
-  const runs = await fetchReviewRunsWithClient(c);
+const flush = async (): Promise<void> => {
+  await nextTick();
+  await Promise.resolve();
+  await Promise.resolve();
+};
 
-  assert.equal(runs.length, 0);
+const mountReviewDataHarness = (loadReviewRuns: () => Promise<ReviewRun[]> | ReviewRun[]) => {
+  const status = ref<StatusDto | null>(null);
+  let api: ReturnType<typeof useReviewData> | undefined;
+
+  const Harness = defineComponent({
+    setup() {
+      api = useReviewData(makeLatheStatus(status), loadReviewRuns);
+      return () => null;
+    },
+  });
+
+  const app = renderer.createApp(Harness);
+  const root: HostNode = { kind: "root", children: [] };
+  app.mount(root);
+
+  if (!api) {
+    throw new Error("review data composable was not created");
+  }
+
+  return { api, app, status };
+};
+
+test("useReviewData fetches on mount and refetches when status changes", async () => {
+  const firstRun = makeReviewRun("run-1", "ready_for_review");
+  const secondRun = makeReviewRun("run-2", "failed");
+  let callCount = 0;
+
+  const { api, app, status } = mountReviewDataHarness(async () => {
+    callCount += 1;
+    return callCount === 1 ? [firstRun] : [secondRun];
+  });
+
+  await flush();
+  assert.deepEqual(api.reviewRuns.value, [firstRun]);
+  assert.equal(api.reviewError.value, null);
+
+  status.value = makeStatus();
+  await flush();
+
+  assert.deepEqual(api.reviewRuns.value, [secondRun]);
+  assert.equal(api.reviewError.value, null);
+
+  app.unmount();
+});
+
+test("useReviewData surfaces load failures and recovers on a later refresh", async () => {
+  const recoveredRun = makeReviewRun("run-3", "ready_for_review");
+  let callCount = 0;
+
+  const { api, app, status } = mountReviewDataHarness(async () => {
+    callCount += 1;
+    if (callCount === 1) {
+      throw new Error("review backend down");
+    }
+    return [recoveredRun];
+  });
+
+  await flush();
+  assert.deepEqual(api.reviewRuns.value, []);
+  assert.equal(api.reviewError.value, "Unable to fetch review data.");
+
+  status.value = makeStatus();
+  await flush();
+
+  assert.deepEqual(api.reviewRuns.value, [recoveredRun]);
+  assert.equal(api.reviewError.value, null);
+
+  app.unmount();
 });

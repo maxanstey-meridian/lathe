@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { injectLatheActions } from "../ports/lathe-actions";
 import { runStatusColor, truncate } from "../logic/formatters";
-import { useReviewData } from "../composables/useReviewData";
+import { injectReviewData } from "../ports/review-data";
 
-const { reviewRuns, reviewError, removeRun } = useReviewData();
+const { reviewRuns, reviewError, removeRun } = injectReviewData();
 const actions = injectLatheActions();
 
 const rejectReasons = ref<Record<string, string>>({});

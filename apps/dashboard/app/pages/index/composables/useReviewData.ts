@@ -1,23 +1,25 @@
-import { client } from "@lathe/contract";
 import type { components } from "@lathe/contract";
 import { onMounted, ref, watch } from "vue";
 
 import { injectLatheStatus } from "../ports/lathe-status";
+import type { LatheStatus } from "../ports/lathe-status";
+
+import { fetchReviewRuns } from "./fetchReviewRuns";
+
+export { fetchReviewRuns } from "./fetchReviewRuns";
 
 type ReviewRun = components["schemas"]["ReviewRunDto"];
 
-export const useReviewData = () => {
+export const useReviewData = (status?: LatheStatus) => {
   const reviewRuns = ref<ReviewRun[]>([]);
   const reviewError = ref<string | null>(null);
-  const status = injectLatheStatus();
+  const source = status ?? injectLatheStatus();
 
   const fetchReview = async (): Promise<void> => {
     reviewError.value = null;
     try {
-      const result = await client.GET("/review");
-      if (result.data) {
-        reviewRuns.value = result.data.runs;
-      }
+      const runs = await fetchReviewRuns();
+      reviewRuns.value = runs;
     } catch {
       reviewError.value = "Unable to fetch review data.";
     }
@@ -27,7 +29,7 @@ export const useReviewData = () => {
     void fetchReview();
   });
 
-  watch(status.status, () => {
+  watch(source.status, () => {
     void fetchReview();
   });
 

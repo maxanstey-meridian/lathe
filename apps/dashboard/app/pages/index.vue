@@ -12,13 +12,19 @@ import TailView from "./index/components/TailView.vue";
 import { useLatheActions } from "./index/composables/useLatheActions";
 import { useLatheStatus } from "./index/composables/useLatheStatus";
 import { useLatheTail } from "./index/composables/useLatheTail";
+import { usePacketValidation } from "./index/composables/usePacketValidation";
+import { useReviewData } from "./index/composables/useReviewData";
 import { provideLatheActions } from "./index/ports/lathe-actions";
 import { provideLatheStatus } from "./index/ports/lathe-status";
 import { provideLatheTail } from "./index/ports/lathe-tail";
+import { providePacketValidation } from "./index/ports/packet-validation";
+import { provideReviewData } from "./index/ports/review-data";
 
 const latheStatus = provideLatheStatus(useLatheStatus());
 const latheActions = provideLatheActions(useLatheActions(latheStatus.refresh));
 const latheTail = provideLatheTail(useLatheTail());
+providePacketValidation(usePacketValidation());
+provideReviewData(useReviewData(latheStatus));
 
 onMounted(() => {
   void latheStatus.refresh();

@@ -9,6 +9,10 @@ const actions = injectLatheActions();
 
 const showAbortConfirm = ref(false);
 
+const openAbortConfirm = (): void => {
+  showAbortConfirm.value = true;
+};
+
 const closeAbortConfirm = (): void => {
   showAbortConfirm.value = false;
 };
@@ -32,7 +36,17 @@ const handleAbort = async (runId: string): Promise<void> => {
         <div class="flex items-center gap-2">
           <span class="h-2 w-2 rounded-full" :class="status.isLive.value ? 'bg-emerald-500' : 'bg-red-500'"></span>
           <span class="text-xs text-slate-500">{{ status.isLive.value ? "live" : "offline" }}</span>
-          <UModal v-if="status.status.value?.activeRun" v-model:open="showAbortConfirm" title="Abort this run?" :persist="false">
+          <UButton
+            v-if="status.status.value?.activeRun"
+            size="xs"
+            color="error"
+            variant="soft"
+            :disabled="actions.abortLoading.value"
+            @click="openAbortConfirm"
+          >
+            Abort
+          </UButton>
+          <UModal v-if="status.status.value?.activeRun" :open="showAbortConfirm" @update:open="(val: boolean) => { if (!val) showAbortConfirm = false; }" title="Abort this run?" :persist="false">
             <template #body-content>
               <p class="text-sm text-slate-600">
                 Are you sure you want to abort <code class="font-mono text-xs">{{ status.status.value.activeRun.runId }}</code>?

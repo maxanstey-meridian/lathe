@@ -10,7 +10,7 @@ export { fetchReviewRuns } from "./fetchReviewRuns";
 
 type ReviewRun = components["schemas"]["ReviewRunDto"];
 
-export const useReviewData = (status?: LatheStatus) => {
+export const useReviewData = (status?: LatheStatus, loadReviewRuns: typeof fetchReviewRuns = fetchReviewRuns) => {
   const reviewRuns = ref<ReviewRun[]>([]);
   const reviewError = ref<string | null>(null);
   const source = status ?? injectLatheStatus();
@@ -18,7 +18,7 @@ export const useReviewData = (status?: LatheStatus) => {
   const fetchReview = async (): Promise<void> => {
     reviewError.value = null;
     try {
-      const runs = await fetchReviewRuns();
+      const runs = await loadReviewRuns();
       reviewRuns.value = runs;
     } catch {
       reviewError.value = "Unable to fetch review data.";

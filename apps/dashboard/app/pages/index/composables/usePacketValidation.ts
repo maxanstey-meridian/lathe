@@ -22,14 +22,14 @@ export const validatePacketWithClient = async (
   }
 };
 
-export const usePacketValidation = () => {
+export const usePacketValidation = (c: RivetClient = client) => {
   const preview = ref<ValidatePacketResponse | null>(null);
   const previewError = ref<string | null>(null);
 
   const validatePacket = async (content: string, filename: string): Promise<void> => {
     previewError.value = null;
     try {
-      const result = await client.POST("/packet", {
+      const result = await c.POST("/packet", {
         body: { content, filename },
       });
       preview.value = result.data ?? null;

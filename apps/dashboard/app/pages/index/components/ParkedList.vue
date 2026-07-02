@@ -2,6 +2,7 @@
 import type { components } from "@lathe/contract";
 import { injectLatheActions } from "../ports/lathe-actions";
 import { injectLatheStatus } from "../ports/lathe-status";
+import { clearAnswerAfterSuccess } from "../logic/action-results";
 import { truncate } from "../logic/formatters";
 
 type StatusParkedRunDto = components["schemas"]["StatusParkedRunDto"];
@@ -21,12 +22,12 @@ const openAnswer = (runId: string): void => {
 
 const handleAnswer = async (run: StatusParkedRunDto): Promise<void> => {
   const answer = answerTexts.value[run.runId] ?? "proceed";
-  try {
-    await actions.answer(run.runId, answer);
-    delete answerTexts.value[run.runId];
-  } catch {
-    // Error surfaced via latheActions.lastError
-  }
+  await clearAnswerAfterSuccess(
+    run.runId,
+    answer,
+    actions.answer,
+    cancelAnswer,
+  );
 };
 </script>
 

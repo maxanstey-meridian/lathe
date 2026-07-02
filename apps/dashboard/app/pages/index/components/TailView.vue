@@ -119,16 +119,6 @@ const isTerminal = computed(() => {
           >
             Abort
           </UButton>
-          <UButton
-            size="xs"
-            color="neutral"
-            variant="ghost"
-            :loading="tail.isLoading.value"
-            class="text-slate-500"
-            @click="tail.refresh"
-          >
-            Tail
-          </UButton>
         </div>
       </div>
     </header>

@@ -14,9 +14,9 @@ const props = defineProps<{
 }>();
 
 const accentClasses: Record<Accent, { readonly border: string; readonly text: string; readonly dot: string }> = {
-  green: { border: "border-emerald-500", text: "text-emerald-600", dot: "bg-emerald-500" },
-  magenta: { border: "border-fuchsia-500", text: "text-fuchsia-600", dot: "bg-fuchsia-500" },
-  blue: { border: "border-sky-500", text: "text-sky-600", dot: "bg-sky-500" },
+  green: { border: "border-emerald-500", text: "text-emerald-400", dot: "bg-emerald-500" },
+  magenta: { border: "border-fuchsia-500", text: "text-fuchsia-400", dot: "bg-fuchsia-500" },
+  blue: { border: "border-sky-500", text: "text-sky-400", dot: "bg-sky-500" },
 };
 
 const isActive = computed(() => props.now - props.pane.lastAt < 10_000);
@@ -36,36 +36,36 @@ watch(lines, async () => {
 
 <template>
   <section
-    class="flex min-h-[22rem] flex-1 flex-col overflow-hidden rounded-xl border bg-white shadow-sm lg:min-h-0"
-    :class="isActive ? classes.border : 'border-slate-200'"
+    class="flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-950 border-t-2"
+    :class="isActive ? classes.border : 'border-transparent'"
   >
-    <header class="flex items-center justify-between gap-3 border-b border-slate-100 px-3 py-2">
+    <header class="flex shrink-0 items-center justify-between gap-3 border-b border-slate-800 px-3 py-1.5">
       <div class="min-w-0">
         <div class="flex items-center gap-2">
-          <span class="h-2 w-2 rounded-full" :class="isActive ? classes.dot : 'bg-slate-300'"></span>
-          <h3 class="truncate text-sm font-semibold" :class="isActive ? classes.text : 'text-slate-500'">{{ title }}</h3>
-          <span v-if="!isActive" class="text-xs text-slate-400">waiting</span>
+          <span class="h-1.5 w-1.5 rounded-full" :class="isActive ? classes.dot : 'bg-slate-700'"></span>
+          <h3 class="truncate text-xs font-semibold" :class="isActive ? classes.text : 'text-slate-600'">{{ title }}</h3>
+          <span v-if="!isActive" class="text-xs text-slate-700">idle</span>
         </div>
-        <p class="mt-0.5 truncate text-xs text-slate-400">{{ model }}</p>
+        <p class="mt-0.5 truncate font-mono text-xs text-slate-700">{{ model }}</p>
       </div>
     </header>
 
-    <div ref="scrollContainer" class="min-h-0 flex-1 overflow-y-auto p-3 font-mono text-xs leading-5">
-      <div v-if="lines.length" class="space-y-1">
+    <div ref="scrollContainer" class="min-h-0 flex-1 overflow-y-auto px-3 py-2 font-mono text-xs leading-5">
+      <div v-if="lines.length" class="space-y-0.5">
         <p
           v-for="(line, index) in lines"
           :key="`${index}-${line.text}`"
           class="whitespace-pre-wrap break-words"
           :class="{
-            'text-slate-400': line.style === 'think',
-            'text-cyan-700': line.style === 'tool',
-            'text-slate-800': line.style === 'text',
+            'text-slate-600': line.style === 'think',
+            'text-cyan-500': line.style === 'tool',
+            'text-slate-300': line.style === 'text',
           }"
         >
           {{ line.text }}
         </p>
       </div>
-      <div v-else class="flex h-full items-center justify-center text-sm text-slate-400">No output yet</div>
+      <div v-else class="flex h-full items-center justify-center font-mono text-xs text-slate-700">—</div>
     </div>
   </section>
 </template>

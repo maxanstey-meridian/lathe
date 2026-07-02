@@ -32,78 +32,78 @@ const handleAnswer = async (run: StatusParkedRunDto): Promise<void> => {
 </script>
 
 <template>
-  <UCard>
-    <template #header>
-      <h2 class="text-base font-semibold">Parked Runs</h2>
-    </template>
+  <section>
+    <h2 class="mb-2 text-sm font-semibold text-slate-300">Parked <span class="text-slate-600 font-normal">({{ status.status.value?.parked.length ?? 0 }})</span></h2>
 
     <template v-if="status.status.value?.parked.length">
-      <ul class="space-y-3">
-        <li
-          v-for="run in status.status.value.parked"
-          :key="run.runId"
-          class="rounded-lg border border-slate-200 bg-white px-3 py-3"
-        >
-          <div class="flex items-center justify-between gap-3">
-            <span class="font-mono text-sm font-medium">{{ run.runId }}</span>
-            <UBadge v-if="run.stallRetries > 0" color="warning" variant="soft" size="xs">
-              {{ run.stallRetries }} auto-retr{{ run.stallRetries === 1 ? 'y' : 'ies' }}
-            </UBadge>
-          </div>
-
-          <div v-if="run.blockedReason" class="mt-1 text-xs text-slate-600">
-            {{ run.blockedReason }}
-          </div>
-
-          <div v-if="run.blockedQuestion" class="mt-1 text-xs text-slate-500">
-            {{ truncate(run.blockedQuestion, 120) }}
-          </div>
-
-          <div v-if="answerTexts[run.runId] !== undefined" class="mt-2 flex items-start gap-2">
-            <UTextarea
-              v-model="answerTexts[run.runId]"
-              :rows="2"
-              size="xs"
-              placeholder="Answer the blocked question..."
-              class="flex-1"
-            />
-            <div class="flex flex-col gap-1">
-              <UButton
-                size="xs"
-                color="success"
-                variant="soft"
-                :loading="actions.answerLoading.value"
-                :disabled="actions.answerLoading.value"
-                @click="handleAnswer(run)"
-              >
-                Submit
-              </UButton>
-              <UButton
-                size="xs"
-                color="neutral"
-                variant="soft"
-                @click="cancelAnswer(run.runId)"
-              >
-                Cancel
-              </UButton>
-            </div>
-          </div>
-
-          <UButton
-            v-else
-            size="xs"
-            color="success"
-            variant="soft"
-            :loading="actions.answerLoading.value"
-            :disabled="actions.answerLoading.value"
-            @click="openAnswer(run.runId)"
+      <div class="overflow-hidden rounded-lg border border-slate-800">
+        <ul class="divide-y divide-slate-800">
+          <li
+            v-for="run in status.status.value.parked"
+            :key="run.runId"
+            class="bg-slate-900/50 px-3 py-3"
           >
-            Answer
-          </UButton>
-        </li>
-      </ul>
+            <div class="flex items-center justify-between gap-3">
+              <span class="font-mono text-xs text-slate-300">{{ run.runId }}</span>
+              <UBadge v-if="run.stallRetries > 0" color="warning" variant="soft" size="xs">
+                {{ run.stallRetries }} auto-retr{{ run.stallRetries === 1 ? 'y' : 'ies' }}
+              </UBadge>
+            </div>
+
+            <div v-if="run.blockedReason" class="mt-1 text-xs text-amber-400">
+              {{ run.blockedReason }}
+            </div>
+
+            <div v-if="run.blockedQuestion" class="mt-1 text-xs text-slate-500">
+              {{ truncate(run.blockedQuestion, 200) }}
+            </div>
+
+            <div v-if="answerTexts[run.runId] !== undefined" class="mt-2 flex items-start gap-2">
+              <UTextarea
+                v-model="answerTexts[run.runId]"
+                :rows="2"
+                size="xs"
+                placeholder="Answer the blocked question..."
+                class="flex-1"
+              />
+              <div class="flex flex-col gap-1">
+                <UButton
+                  size="xs"
+                  color="success"
+                  variant="soft"
+                  :loading="actions.answerLoading.value"
+                  :disabled="actions.answerLoading.value"
+                  @click="handleAnswer(run)"
+                >
+                  Submit
+                </UButton>
+                <UButton
+                  size="xs"
+                  color="neutral"
+                  variant="ghost"
+                  @click="cancelAnswer(run.runId)"
+                >
+                  Cancel
+                </UButton>
+              </div>
+            </div>
+
+            <UButton
+              v-else
+              size="xs"
+              color="success"
+              variant="soft"
+              :loading="actions.answerLoading.value"
+              :disabled="actions.answerLoading.value"
+              @click="openAnswer(run.runId)"
+            >
+              Answer
+            </UButton>
+          </li>
+        </ul>
+      </div>
     </template>
 
-    <div v-else class="py-6 text-center text-sm text-slate-500">No parked runs</div>
-  </UCard>
+    <div v-else class="rounded-lg border border-slate-800 py-6 text-center text-sm text-slate-600">No parked runs</div>
+  </section>
 </template>

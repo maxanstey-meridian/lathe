@@ -6,13 +6,13 @@
 // parsed frontmatter and any problems without enqueuing.
 // ---------------------------------------------------------------------------
 
-import type { Repo } from "../ports/repo.js";
 import {
   extractRepoFromYaml,
   extractBaseFromYaml,
   stampBase,
   parsePacketShape,
 } from "../../domain/packet.js";
+import type { Repo } from "../ports/repo.js";
 
 export type ValidatePacketResult = {
   repoPath: string | undefined;

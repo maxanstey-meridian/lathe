@@ -13,107 +13,117 @@ const openReject = (run: { runId: string }): void => {
   rejectReasons.value[run.runId] = "";
 };
 
-const cancelReject = (run: { runId: string }): void => {
-  delete rejectReasons.value[run.runId];
+const cancelReject = (runId: string): void => {
+  delete rejectReasons.value[runId];
 };
 
-const handleReject = async (run: { runId: string; status: string; outcomes: string; branch: string; repo: string; base: string; blockedQuestion: string | null }): Promise<void> => {
+const handleReject = async (run: { runId: string }): Promise<void> => {
   const reason = rejectReasons.value[run.runId] ?? "rejected";
   await removeReviewRunAfterSuccess(
     run.runId,
     (runId) => actions.reject(runId, reason),
     removeRun,
   );
+  delete rejectReasons.value[run.runId];
 };
 
-const handleAccept = async (run: { runId: string; status: string; outcomes: string; branch: string; repo: string; base: string; blockedQuestion: string | null }): Promise<void> => {
+const handleAccept = async (run: { runId: string }): Promise<void> => {
   await removeReviewRunAfterSuccess(run.runId, actions.accept, removeRun);
 };
 </script>
 
 <template>
-  <UCard>
-    <template #header>
-      <h2 class="text-base font-semibold">Review</h2>
-    </template>
+  <div>
+    <h2 class="mb-3 text-sm font-semibold text-slate-300">Review Queue</h2>
 
-    <UAlert v-if="reviewError" color="error" variant="soft" :title="reviewError" />
+    <UAlert v-if="reviewError" color="error" variant="soft" :title="reviewError" class="mb-3" />
 
     <template v-if="reviewRuns.length">
-      <ul class="space-y-3">
-        <li
-          v-for="run in reviewRuns"
-          :key="run.runId"
-          class="rounded-lg border border-slate-200 bg-white px-3 py-3"
-        >
-          <div class="flex items-center justify-between gap-3">
-            <div class="flex items-center gap-2">
-              <span class="font-mono text-sm font-medium">{{ run.runId }}</span>
-              <UBadge :color="runStatusColor(run.status as 'ready_for_review' | 'blocked')" variant="soft" size="xs">
-                {{ run.status }}
-              </UBadge>
-            </div>
-            <div class="flex items-center gap-2">
-              <UButton
-                size="xs"
-                color="success"
-                variant="soft"
-                :loading="actions.acceptLoading.value"
-                :disabled="actions.acceptLoading.value"
-                @click="handleAccept(run)"
-              >
-                Accept
-              </UButton>
-              <div v-if="!rejectReasons[run.runId]" class="flex items-center gap-2">
-                <UButton
-                  size="xs"
-                  color="error"
-                  variant="soft"
-                  :loading="actions.rejectLoading.value"
-                  :disabled="actions.rejectLoading.value"
-                  @click="openReject(run)"
-                >
-                  Reject
-                </UButton>
-              </div>
-              <div v-else class="flex items-center gap-2">
-                <UTextarea
-                  v-model="rejectReasons[run.runId]"
-                  :rows="1"
-                  size="xs"
-                  placeholder="Reason..."
-                  class="w-40"
-                />
-                <UButton
-                  size="xs"
-                  color="error"
-                  variant="soft"
-                  :loading="actions.rejectLoading.value"
-                  :disabled="actions.rejectLoading.value"
-                  @click="handleReject(run)"
-                >
-                  Confirm
-                </UButton>
-                <UButton
-                  size="xs"
-                  color="neutral"
-                  variant="soft"
-                  @click="cancelReject(run)"
-                >
-                  Cancel
-                </UButton>
-              </div>
-            </div>
-          </div>
-          <div v-if="run.outcomes" class="mt-1 text-xs text-slate-500">
-            {{ truncate(run.outcomes, 100) }}
-          </div>
-        </li>
-      </ul>
+      <div class="overflow-hidden rounded-lg border border-slate-800">
+        <table class="w-full text-sm">
+          <thead class="border-b border-slate-800 bg-slate-900 text-xs uppercase text-slate-500">
+            <tr>
+              <th class="px-3 py-2 text-left font-medium">Run</th>
+              <th class="px-3 py-2 text-left font-medium">Status</th>
+              <th class="px-3 py-2 text-left font-medium">Outcomes</th>
+              <th class="px-3 py-2 text-right font-medium">Actions</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800">
+            <template v-for="run in reviewRuns" :key="run.runId">
+              <tr class="text-slate-300">
+                <td class="px-3 py-2.5 font-mono text-xs">{{ run.runId }}</td>
+                <td class="px-3 py-2.5">
+                  <UBadge :color="runStatusColor(run.status as 'ready_for_review' | 'blocked')" variant="soft" size="xs">
+                    {{ run.status }}
+                  </UBadge>
+                </td>
+                <td class="max-w-md px-3 py-2.5 text-xs text-slate-500">{{ truncate(run.outcomes, 120) }}</td>
+                <td class="px-3 py-2.5">
+                  <div class="flex items-center justify-end gap-2">
+                    <UButton
+                      size="xs"
+                      color="success"
+                      variant="soft"
+                      :loading="actions.acceptLoading.value"
+                      :disabled="actions.acceptLoading.value"
+                      @click="handleAccept(run)"
+                    >
+                      Accept
+                    </UButton>
+                    <UButton
+                      v-if="rejectReasons[run.runId] === undefined"
+                      size="xs"
+                      color="error"
+                      variant="soft"
+                      :loading="actions.rejectLoading.value"
+                      :disabled="actions.rejectLoading.value"
+                      @click="openReject(run)"
+                    >
+                      Reject
+                    </UButton>
+                  </div>
+                </td>
+              </tr>
+              <tr v-if="rejectReasons[run.runId] !== undefined" class="bg-slate-900/50">
+                <td colspan="4" class="px-3 py-2">
+                  <div class="flex items-center gap-2">
+                    <UTextarea
+                      v-model="rejectReasons[run.runId]"
+                      :rows="1"
+                      size="xs"
+                      placeholder="Reason..."
+                      class="flex-1"
+                    />
+                    <UButton
+                      size="xs"
+                      color="error"
+                      variant="soft"
+                      :loading="actions.rejectLoading.value"
+                      :disabled="actions.rejectLoading.value"
+                      @click="handleReject(run)"
+                    >
+                      Confirm
+                    </UButton>
+                    <UButton
+                      size="xs"
+                      color="neutral"
+                      variant="ghost"
+                      @click="cancelReject(run.runId)"
+                    >
+                      Cancel
+                    </UButton>
+                  </div>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
     </template>
 
-    <div v-else class="py-6 text-center text-sm text-slate-500">
+    <div v-else class="rounded-lg border border-slate-800 py-12 text-center text-sm text-slate-600">
       Nothing to review
     </div>
-  </UCard>
+  </div>
 </template>

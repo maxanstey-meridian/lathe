@@ -1,19 +1,20 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { onMounted, ref } from "vue";
 
-import ActiveRunCard from "./index/components/ActiveRunCard.vue";
+import CommandBar from "./index/components/CommandBar.vue";
+import PacketUpload from "./index/components/PacketUpload.vue";
+import ReviewList from "./index/components/ReviewList.vue";
+import TailView from "./index/components/TailView.vue";
 import CampaignLadder from "./index/components/CampaignLadder.vue";
 import ParkedList from "./index/components/ParkedList.vue";
-import PacketUpload from "./index/components/PacketUpload.vue";
 import QueueList from "./index/components/QueueList.vue";
-import ReviewList from "./index/components/ReviewList.vue";
 import StagedChains from "./index/components/StagedChains.vue";
-import TailView from "./index/components/TailView.vue";
 import { useLatheActions } from "./index/composables/useLatheActions";
 import { useLatheStatus } from "./index/composables/useLatheStatus";
 import { useLatheTail } from "./index/composables/useLatheTail";
 import { usePacketValidation } from "./index/composables/usePacketValidation";
 import { useReviewData } from "./index/composables/useReviewData";
+import type { TabId } from "./index/logic/tabs";
 import { provideLatheActions } from "./index/ports/lathe-actions";
 import { provideLatheStatus } from "./index/ports/lathe-status";
 import { provideLatheTail } from "./index/ports/lathe-tail";
@@ -26,6 +27,9 @@ const latheTail = provideLatheTail(useLatheTail());
 providePacketValidation(usePacketValidation());
 provideReviewData(useReviewData(latheStatus));
 
+const activeTab = ref<TabId>("console");
+const showUpload = ref(false);
+
 onMounted(() => {
   void latheStatus.refresh();
   void latheTail.refresh();
@@ -33,26 +37,16 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="flex h-full min-h-0 flex-col gap-4">
-    <header class="flex shrink-0 flex-col gap-3 md:flex-row md:items-end md:justify-between">
-      <div>
-        <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Local dashboard</p>
-        <h1 class="mt-1 text-2xl font-semibold tracking-tight">Lathe daemon</h1>
-      </div>
-      <div class="flex items-center gap-3">
-        <div class="flex items-center gap-2 text-xs text-slate-500">
-          <span class="h-2 w-2 rounded-full" :class="latheStatus.isLive.value ? 'bg-emerald-500' : 'bg-red-500'"></span>
-          <span>{{ latheStatus.isLive.value ? "status live" : "status offline" }}</span>
-        </div>
-        <UButton :loading="latheStatus.isLoading.value" color="neutral" variant="soft" size="sm" @click="latheStatus.refresh">
-          Refresh status
-        </UButton>
-      </div>
-    </header>
+  <div class="flex h-dvh flex-col">
+    <CommandBar
+      :active-tab="activeTab"
+      @update:active-tab="activeTab = $event"
+      @upload="showUpload = true"
+    />
 
     <UAlert
       v-if="latheActions.lastError.value"
-      class="shrink-0"
+      class="shrink-0 rounded-none"
       color="error"
       variant="soft"
       :title="latheActions.lastError.value"
@@ -60,30 +54,40 @@ onMounted(() => {
 
     <UAlert
       v-if="latheStatus.errorMessage.value"
-      class="shrink-0"
+      class="shrink-0 rounded-none"
       color="error"
       variant="soft"
       :title="latheStatus.errorMessage.value"
     />
 
-    <div class="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
-      <TailView class="h-[80dvh] min-h-[30rem] xl:h-full xl:min-h-0" />
+    <div class="min-h-0 flex-1">
+      <TailView v-show="activeTab === 'console'" class="h-full" />
 
-      <aside class="min-h-0 space-y-4 xl:overflow-y-auto xl:pr-1">
-        <PacketUpload />
+      <div v-if="activeTab === 'runs'" class="h-full overflow-y-auto p-4">
+        <div class="mx-auto max-w-5xl space-y-4">
+          <QueueList />
+          <ParkedList />
+          <CampaignLadder />
+          <StagedChains />
+        </div>
+      </div>
 
-        <ActiveRunCard />
-
-        <QueueList />
-
-        <ParkedList />
-
-        <CampaignLadder />
-
-        <StagedChains />
-
-        <ReviewList />
-      </aside>
+      <div v-if="activeTab === 'review'" class="h-full overflow-y-auto p-4">
+        <div class="mx-auto max-w-5xl">
+          <ReviewList />
+        </div>
+      </div>
     </div>
-  </section>
+
+    <UModal
+      :open="showUpload"
+      title="Upload Packet"
+      :persist="false"
+      @update:open="(val: boolean) => { if (!val) showUpload = false; }"
+    >
+      <template #body>
+        <PacketUpload @queued="showUpload = false" />
+      </template>
+    </UModal>
+  </div>
 </template>

@@ -1,9 +1,10 @@
 import assert from "node:assert";
 import { test } from "node:test";
-
 import { validatePacket } from "../src/application/use-cases/validate-packet.ts";
 
-const makeRepo = (opts: { repoValid?: boolean; branchExists?: boolean; headBranch?: string } = {}) => ({
+const makeRepo = (
+  opts: { repoValid?: boolean; branchExists?: boolean; headBranch?: string } = {},
+) => ({
   createSandbox: () => {
     throw new Error("unused");
   },
@@ -14,7 +15,13 @@ const makeRepo = (opts: { repoValid?: boolean; branchExists?: boolean; headBranc
   readDiffStats: () => ({}),
   reviewableDiff: () => "",
   reviewableDiffAgainst: () => "",
-  reconciliationGitState: () => ({ head: "main", status: [], diffHash: "", untracked: [], changedFiles: [] }),
+  reconciliationGitState: () => ({
+    head: "main",
+    status: [],
+    diffHash: "",
+    untracked: [],
+    changedFiles: [],
+  }),
   fetchBranchFromClone: () => {
     throw new Error("unused");
   },

@@ -13,7 +13,8 @@ import { logger } from "hono/logger";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { registerRivetHonoRoutes, rivetHttpError } from "rivet-ts/hono";
-import type { AnswerRunRequest, LatheContract, LatheEvent, RejectRunRequest, RunSummaryDto, TailEvent, TailSnapshotDto } from "@lathe/contract";
+import type { AnswerRunRequest, EnqueueContentRequest, LatheContract, LatheEvent, RejectRunRequest, RunSummaryDto, TailEvent, TailSnapshotDto, ValidatePacketResponse } from "@lathe/contract";
+import type { ValidatePacketResult } from "@lathe/core";
 export type { LatheEvent, TailEvent };
 import contract from "@lathe/contract/generated/api.contract.json" with { type: "json" };
 
@@ -95,6 +96,71 @@ export const createApp = (
         }
         const ctx = buildDtoCtx(supervisor, meta);
         return runToSummary(meta, ctx);
+      },
+
+      enqueueContent: async ({ body }) => {
+        let runId: string;
+        try {
+          runId = supervisor.enqueueContent((body as EnqueueContentRequest).content, (body as EnqueueContentRequest).filename);
+        } catch (err) {
+          throw rivetHttpError(400, { code: "invalid_packet", message: err instanceof Error ? err.message : String(err) });
+        }
+        const meta = supervisor.getRun(runId);
+        if (!meta) {
+          throw rivetHttpError(500, { code: "internal_error", message: "enqueue succeeded but run not found" });
+        }
+        const ctx = buildDtoCtx(supervisor, meta);
+        return runToSummary(meta, ctx);
+      },
+
+      validatePacket: async ({ body }) => {
+        const result = supervisor.validatePacket((body as { content: string; filename?: string }).content, (body as { content: string; filename?: string }).filename);
+
+        // Fast path: all validation passes.
+        if (result.shape.ok && result.repoValid && result.baseExists) {
+          return {
+            ok: true,
+            frontmatter: {
+              repo: result.shape.packet.frontmatter.repo,
+              base: result.shape.packet.frontmatter.base,
+              compare_commit: result.shape.packet.frontmatter.compare_commit,
+              summary: result.shape.packet.frontmatter.summary,
+              outcomes: result.shape.packet.frontmatter.outcomes,
+              expected_surface: result.shape.packet.frontmatter.expected_surface,
+              suspicious_surface: result.shape.packet.frontmatter.suspicious_surface,
+              verification: result.shape.packet.frontmatter.verification,
+              constraints: result.shape.packet.frontmatter.constraints,
+              autofix_commands: result.shape.packet.frontmatter.autofix_commands,
+              campaign_id: result.shape.packet.frontmatter.campaign_id,
+              parent_run_id: result.shape.packet.frontmatter.parent_run_id,
+              pass: result.shape.packet.frontmatter.pass,
+              regression_outcomes: result.shape.packet.frontmatter.regression_outcomes,
+              promoted: result.shape.packet.frontmatter.promoted,
+            },
+            body: result.shape.packet.body,
+            problems: [],
+          };
+        }
+
+        // Slow path: collect problems from shape, repo, or base failures.
+        const problems: string[] = [];
+        if (!result.shape.ok) {
+          problems.push(...result.shape.problems);
+        } else {
+          if (!result.repoValid && result.repoPath) {
+            problems.push(`repo "${result.repoPath}" is not a valid git repository`);
+          }
+          if (!result.baseExists && result.base) {
+            problems.push(`base branch "${result.base}" does not exist in ${result.repoPath}`);
+          }
+        }
+
+        return {
+          ok: false,
+          frontmatter: null,
+          body: result.shape.ok ? result.shape.packet.body : "",
+          problems,
+        };
       },
 
       enqueueChain: async ({ body }) => {

@@ -80,6 +80,28 @@
       ]
     },
     {
+      "name": "EnqueueContentRequest",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "content",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "filename",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
       "name": "EnqueueRunRequest",
       "typeParameters": [],
       "properties": [
@@ -1050,6 +1072,265 @@
           "optional": false
         }
       ]
+    },
+    {
+      "name": "ValidatePacketFrontmatter",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "repo",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "base",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "compare_commit",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "summary",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": true
+        },
+        {
+          "name": "outcomes",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "inlineObject",
+              "properties": [
+                {
+                  "name": "id",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "string"
+                  }
+                },
+                {
+                  "name": "description",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "string"
+                  }
+                }
+              ]
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "expected_surface",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "suspicious_surface",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "verification",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "inlineObject",
+              "properties": [
+                {
+                  "name": "command",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "string"
+                  }
+                }
+              ]
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "constraints",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "autofix_commands",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "inlineObject",
+              "properties": [
+                {
+                  "name": "command",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "string"
+                  }
+                }
+              ]
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "campaign_id",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": true
+        },
+        {
+          "name": "parent_run_id",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": true
+        },
+        {
+          "name": "pass",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "regression_outcomes",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "inlineObject",
+              "properties": [
+                {
+                  "name": "id",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "string"
+                  }
+                },
+                {
+                  "name": "description",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "string"
+                  }
+                }
+              ]
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "promoted",
+          "type": {
+            "kind": "primitive",
+            "type": "boolean"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "ValidatePacketRequest",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "content",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "filename",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": true
+        }
+      ]
+    },
+    {
+      "name": "ValidatePacketResponse",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "ok",
+          "type": {
+            "kind": "primitive",
+            "type": "boolean"
+          },
+          "optional": false
+        },
+        {
+          "name": "frontmatter",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "ref",
+              "name": "ValidatePacketFrontmatter"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "body",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "problems",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        }
+      ]
     }
   ],
   "enums": [
@@ -1090,6 +1371,36 @@
           "type": {
             "kind": "ref",
             "name": "EnqueueRunRequest"
+          },
+          "source": "body",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "ref",
+        "name": "RunSummaryDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 202,
+          "dataType": {
+            "kind": "ref",
+            "name": "RunSummaryDto"
+          }
+        }
+      ]
+    },
+    {
+      "name": "enqueueContent",
+      "httpMethod": "POST",
+      "routeTemplate": "/runs/content",
+      "params": [
+        {
+          "name": "body",
+          "type": {
+            "kind": "ref",
+            "name": "EnqueueContentRequest"
           },
           "source": "body",
           "isOptional": false
@@ -1238,6 +1549,36 @@
           "dataType": {
             "kind": "ref",
             "name": "ReviewDto"
+          }
+        }
+      ]
+    },
+    {
+      "name": "validatePacket",
+      "httpMethod": "POST",
+      "routeTemplate": "/packet",
+      "params": [
+        {
+          "name": "body",
+          "type": {
+            "kind": "ref",
+            "name": "ValidatePacketRequest"
+          },
+          "source": "body",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "ref",
+        "name": "ValidatePacketResponse"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "ref",
+            "name": "ValidatePacketResponse"
           }
         }
       ]

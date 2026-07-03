@@ -54,11 +54,13 @@ const isoToTimestamp = (iso: string): string =>
 
 const campaignPassOf = (
   runId: string,
+  attempt: number,
   pass: number,
   review: SuperReviewResult,
   atIso: string,
 ): CampaignPass => ({
   runId,
+  attempt,
   pass,
   verdict: review.review.verdict,
   groundedBlockers: review.review.findings.filter((f) => f.grounding.kind !== "none").length,
@@ -155,7 +157,7 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
       const maxPasses = config.thresholds.maxPasses;
 
       // S10: pass already recorded → pure early return, zero side effects.
-      if (alreadyReviewed(campaign, runId)) {
+      if (alreadyReviewed(campaign, runId, meta.attempt)) {
         return;
       }
 
@@ -458,7 +460,7 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
         }
 
         // 5. Campaign ledger — upsert the pass.
-        const campaignPass = campaignPassOf(runId, pass, result, atIso);
+        const campaignPass = campaignPassOf(runId, meta.attempt, pass, result, atIso);
         const campaignStatus: "open" | "converged" | "needs_max" = (() => {
           switch (decision.action) {
             case "stop":

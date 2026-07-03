@@ -240,14 +240,14 @@
         }
       }
     },
-    "/runs/{runId}/abort": {
+    "/runs/{runId}/stop": {
       "post": {
-        "operationId": "lathe_abortRun",
+        "operationId": "lathe_stopRun",
         "tags": [
           "Lathe"
         ],
         "x-rivet-contract": "lathe",
-        "x-rivet-endpoint": "abortRun",
+        "x-rivet-endpoint": "stopRun",
         "parameters": [
           {
             "name": "runId",
@@ -374,6 +374,38 @@
             }
           }
         },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunSummaryDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/runs/{runId}/requeue": {
+      "post": {
+        "operationId": "lathe_requeueRun",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "requeueRun",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "201": {
             "description": "Created",
@@ -935,6 +967,12 @@
           },
           "review": {
             "$ref": "#/components/schemas/StatusReviewSummaryDto"
+          },
+          "stopped": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusStoppedRunDto"
+            }
           }
         },
         "required": [
@@ -943,7 +981,8 @@
           "parked",
           "campaigns",
           "staged",
-          "review"
+          "review",
+          "stopped"
         ]
       },
       "StatusParkedRunDto": {
@@ -1017,6 +1056,21 @@
         "required": [
           "runId",
           "parentRunId"
+        ]
+      },
+      "StatusStoppedRunDto": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "status"
         ]
       },
       "TailJournalLineDto": {
@@ -1332,7 +1386,7 @@
           "paused",
           "converged",
           "accepted",
-          "aborted",
+          "stopped",
           "failed"
         ]
       },
@@ -1346,7 +1400,7 @@
           "blocked",
           "failed",
           "accepted",
-          "aborted"
+          "stopped"
         ]
       }
     }

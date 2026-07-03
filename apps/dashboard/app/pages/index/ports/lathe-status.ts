@@ -12,6 +12,7 @@ export interface LatheStatus {
   readonly isDaemonReachable: ComputedRef<boolean>;
   readonly isLive: Ref<boolean>;
   readonly refresh: () => Promise<void>;
+  readonly requeue: (runId: string) => Promise<void>;
 }
 
 export const [injectLatheStatus, provideLatheStatus] = useProvideInject<LatheStatus>("LatheStatus");

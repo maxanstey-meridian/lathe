@@ -118,14 +118,16 @@ export type Supervisor = {
   listRuns(): RunMeta[];
   /** Read a single run's metadata. */
   getRun(runId: string): RunMeta | undefined;
-  /** Abort a queued (archiveQueue) or running (fire per-run abort) run. */
-  abortRun(runId: string): void;
+  /** Stop a queued (archiveQueue) or running (fire per-run abort) run. */
+  stopRun(runId: string): void;
   /** Answer a parked blocked run and requeue it. */
   answerRun(runId: string, answer: string): void;
   /** Accept a ready_for_review run (chain-tip guarded). */
   acceptRun(runId: string): number;
   /** Reject a run — archive if queued, mark blocked if running. */
   rejectRun(runId: string, reason: string): void;
+  /** Requeue a stopped run — flip status to queued, resume from sandbox. */
+  requeueRun(runId: string): RunMeta;
   /** Whether runId is the chain tip (no staged child references it as parent). */
   isChainTip(runId: string): boolean;
   /** Latest reviewer verdict summary for a run (from store.readDecisions). */
@@ -312,6 +314,8 @@ const startTailOpenCode = (
         return;
       }
       toolSeen.add(seenKey);
+      const inputObj = (state.input ?? {}) as Record<string, unknown>;
+      const hasStructuredInput = Object.keys(inputObj).length > 0;
       tailBus.publish({
         kind: "tail.pane.tool",
         runId,
@@ -319,6 +323,7 @@ const startTailOpenCode = (
         status,
         tool: typeof part.tool === "string" ? part.tool : "tool",
         detail: tailToolDetail(state),
+        ...(hasStructuredInput ? { input: JSON.stringify(inputObj, null, 2) } : {}),
       });
       return;
     }
@@ -465,7 +470,7 @@ export const createSupervisor = (
   const stopController = new AbortController();
 
   // Per-run AbortController map keyed by runId. runLoop creates and populates
-  // it; supervisor reads and fires it for the abortRun path.
+  // it; supervisor reads and fires it for the stopRun path.
   const abortMap = new Map<string, AbortController>();
 
   // Seams wired to runDriver.
@@ -497,7 +502,7 @@ export const createSupervisor = (
     status === "accepted" ||
     status === "blocked" ||
     status === "failed" ||
-    status === "aborted";
+    status === "stopped";
 
   const isChainTip = (runId: string): boolean => {
     // A run is a chain tip if no staged entry references it as a parent.
@@ -742,10 +747,10 @@ export const createSupervisor = (
           }
         : null;
 
-      const parked = store
-        .listRunIds()
-        .map((id) => store.readMetaIfExists(id))
-        .filter((meta): meta is RunMeta => meta !== undefined && meta.status === "blocked")
+      const allMeta = store.listMeta();
+
+      const parked = allMeta
+        .filter((meta) => meta.status === "blocked")
         .map((meta) => ({
           runId: meta.runId,
           blockedReason: meta.blockedReason ?? null,
@@ -764,21 +769,18 @@ export const createSupervisor = (
         };
       });
 
-      const review = store
-        .listRunIds()
-        .map((id) => store.readMetaIfExists(id))
-        .reduce(
-          (summary, meta) => {
-            if (meta?.status === "ready_for_review") {
-              summary.readyForReview += 1;
-            }
-            if (meta?.status === "failed") {
-              summary.failed += 1;
-            }
-            return summary;
-          },
-          { readyForReview: 0, failed: 0 },
-        );
+      const review = allMeta.reduce(
+        (summary, meta) => {
+          if (meta.status === "ready_for_review") {
+            summary.readyForReview += 1;
+          }
+          if (meta.status === "failed") {
+            summary.failed += 1;
+          }
+          return summary;
+        },
+        { readyForReview: 0, failed: 0 },
+      );
 
       return {
         activeRun,
@@ -790,14 +792,16 @@ export const createSupervisor = (
           parentRunId: entry.parentRunId ?? null,
         })),
         review,
+        stopped: allMeta
+          .filter((meta) => meta.status === "stopped")
+          .map((meta) => ({ runId: meta.runId, status: meta.status })),
       };
     },
 
     getReview(): ReviewDto {
       const runs = store
-        .listRunIds()
-        .map((id) => store.readMetaIfExists(id))
-        .filter((meta): meta is RunMeta => meta !== undefined && meta.status !== "running" && meta.status !== "queued")
+        .listMeta()
+        .filter((meta) => meta.status !== "running" && meta.status !== "queued")
         .map((meta) => ({
           runId: meta.runId,
           status: meta.status,
@@ -945,7 +949,7 @@ export const createSupervisor = (
       return store.readMetaIfExists(runId);
     },
 
-    abortRun(runId: string): void {
+    stopRun(runId: string): void {
       // Queued runs are represented by run meta with status = "queued".
       if (store.listQueue().some((q) => q.runId === runId)) {
         store.archiveQueue(runId);
@@ -1025,9 +1029,9 @@ export const createSupervisor = (
         return;
       }
 
-      // Irreversible terminal states: accepted/aborted/failed cannot be
+      // Irreversible terminal states: accepted/stopped/failed cannot be
       // rewritten to blocked — the work is merged/gone or already failed.
-      if (meta.status === "accepted" || meta.status === "aborted" || meta.status === "failed") {
+      if (meta.status === "accepted" || meta.status === "stopped" || meta.status === "failed") {
         throw new TerminalRunError(runId, meta.status);
       }
 
@@ -1039,6 +1043,19 @@ export const createSupervisor = (
         blockedQuestion: reason,
         updatedAt: clock.nowIso(),
       });
+    },
+
+    requeueRun(runId: string): RunMeta {
+      const meta = store.readMetaIfExists(runId);
+      if (!meta) {
+        throw new RunNotFoundError(runId);
+      }
+      if (meta.status !== "stopped") {
+        throw new TerminalRunError(runId, meta.status);
+      }
+      const updated: RunMeta = { ...meta, status: "queued" as const, updatedAt: clock.nowIso() };
+      store.writeMeta(updated);
+      return updated;
     },
   };
 };

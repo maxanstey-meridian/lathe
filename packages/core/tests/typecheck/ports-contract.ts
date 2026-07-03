@@ -70,6 +70,7 @@ const _storeContract: Store = {
   readMetaIfExists: () => undefined,
   writeMeta: () => {},
   listRunIds: () => [],
+  listMeta: () => [],
   initialLedger: () => ({ runId: "fake", outcomes: [], updatedAt: "00000000-00:00:00.000Z" }),
   readLedger: () => ({ runId: "fake", outcomes: [], updatedAt: "00000000-00:00:00.000Z" }),
   writeLedger: () => {},

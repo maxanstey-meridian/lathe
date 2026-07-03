@@ -25,7 +25,7 @@ export type RunStatus =
   | "paused"
   | "converged" // super-daddy passed; awaiting accept/reject
   | "accepted" // merged to base, branch deleted
-  | "aborted"
+  | "stopped"
   | "failed";
 
 export type Reviewer = "daddy" | "superdaddy";
@@ -92,6 +92,11 @@ export interface StatusReviewSummaryDto {
   failed: number;
 }
 
+export interface StatusStoppedRunDto {
+  runId: string;
+  status: string;
+}
+
 export interface StatusDto {
   activeRun: StatusActiveRunDto | null;
   queued: StatusQueuedRunDto[];
@@ -99,6 +104,7 @@ export interface StatusDto {
   campaigns: StatusCampaignDto[];
   staged: StatusStagedRunDto[];
   review: StatusReviewSummaryDto;
+  stopped: StatusStoppedRunDto[];
 }
 
 export interface ReviewRunDto {
@@ -190,7 +196,7 @@ export type TailRunStatus =
   | "blocked"
   | "failed"
   | "accepted"
-  | "aborted";
+  | "stopped";
 
 export interface TailModelsDto {
   baby: string;
@@ -267,6 +273,7 @@ export type TailEvent =
       status: "completed" | "error";
       tool: string;
       detail: string;
+      input?: string;
     }
   | {
       kind: "tail.super.verdict";
@@ -351,9 +358,9 @@ export interface LatheContract extends Contract<"LatheContract"> {
     successStatus: 200;
   }>;
 
-  abortRun: Endpoint<{
+  stopRun: Endpoint<{
     method: "POST";
-    route: "/runs/{runId}/abort";
+    route: "/runs/{runId}/stop";
     params: { runId: string };
     response: RunSummaryDto;
   }>;
@@ -380,6 +387,13 @@ export interface LatheContract extends Contract<"LatheContract"> {
     method: "POST";
     route: "/runs/{runId}/reject";
     input: RejectRunRequest;
+    params: { runId: string };
+    response: RunSummaryDto;
+  }>;
+
+  requeueRun: Endpoint<{
+    method: "POST";
+    route: "/runs/{runId}/requeue";
     params: { runId: string };
     response: RunSummaryDto;
   }>;

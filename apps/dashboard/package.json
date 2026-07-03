@@ -15,10 +15,12 @@
     "@nuxt/ui": "^4.6.1",
     "@vueuse/core": "^14.2.1",
     "nuxt": "^4.4.2",
+    "prismjs": "^1.30.0",
     "vue": "^3.5.32"
   },
   "devDependencies": {
     "@nuxt/eslint": "^1.12.1",
+    "@types/prismjs": "^1.26.6",
     "tsx": "^4.20.0",
     "typescript": "^6.0.2",
     "vue-tsc": "^3.2.6"

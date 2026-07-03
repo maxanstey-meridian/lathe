@@ -184,6 +184,19 @@ export const Config = z.object({
   mutationCommandPatterns: z
     .array(z.string())
     .default(["\\b(pnpm|npm|yarn)\\b.*\\bgenerate\\b", "task contracts", "dotnet-rivet"]),
+  repos: z
+    .record(
+      z.string(),
+      z.object({
+        seed: z
+          .object({
+            copies: z.array(z.string()).default([]),
+            writes: z.record(z.string(), z.string()).default({}),
+          })
+          .default({}),
+      }),
+    )
+    .default({}),
 });
 
 export type Config = z.infer<typeof Config>;

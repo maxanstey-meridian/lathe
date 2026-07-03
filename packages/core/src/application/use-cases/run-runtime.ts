@@ -68,7 +68,7 @@ export type RunOutcome =
   | { status: "ready_for_review" }
   | { status: "failed"; note: string }
   | { status: "blocked"; reason: BlockedReason; question: string }
-  | { status: "aborted" };
+  | { status: "stopped" };
 
 // The turn loop returns the outcome plus, for a ready_for_review, the accepted
 // report and Daddy's final review so finalize can render report.md. They are

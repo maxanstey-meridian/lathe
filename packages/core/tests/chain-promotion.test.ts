@@ -120,6 +120,7 @@ const parentCampaignConverged = (tipRunId: string): Campaign => ({
   passes: [
     {
       runId: tipRunId,
+      attempt: 1,
       pass: 1,
       verdict: "accept" as const,
       groundedBlockers: 0,
@@ -148,6 +149,7 @@ const parentCampaignOpen: Campaign = {
   passes: [
     {
       runId: "20260101-000000-pass1",
+      attempt: 1,
       pass: 1,
       verdict: "request_changes" as const,
       groundedBlockers: 0,

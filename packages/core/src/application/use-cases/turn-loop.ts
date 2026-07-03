@@ -550,11 +550,11 @@ export const turnLoop = async (
         };
         sendFailures = 0;
       } else {
-        // Signal-aborted by caller (supervisor.abortRun) — terminate the run
+        // Signal-aborted by caller (supervisor.stopRun) — terminate the run
         // immediately, NOT as a dead-session failure (the opencode adapter fires
         // req.destroy with a plain Error, not AbortError).
         if (signal?.aborted) {
-          return finish({ status: "aborted" });
+          return finish({ status: "stopped" });
         }
         // A dead/timed-out turn is the crash path (R10): rotate to a fresh session
         // via reconciliation (O6) once; a second consecutive failure parks wedged.

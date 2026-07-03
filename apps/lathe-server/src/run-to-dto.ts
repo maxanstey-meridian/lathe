@@ -22,7 +22,7 @@ const DOMAIN_TO_WIRE: Record<RunMeta["status"], RunStatus> = {
   blocked: "paused",
   failed: "failed",
   accepted: "accepted",
-  aborted: "aborted",
+  stopped: "stopped",
 } as const satisfies Record<RunMeta["status"], RunStatus>;
 
 /**

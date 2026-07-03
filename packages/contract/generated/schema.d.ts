@@ -116,7 +116,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/runs/{runId}/abort": {
+    "/runs/{runId}/stop": {
         parameters: {
             query?: never;
             header?: never;
@@ -125,7 +125,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        post: operations["lathe_abortRun"];
+        post: operations["lathe_stopRun"];
         delete?: never;
         options?: never;
         head?: never;
@@ -174,6 +174,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["lathe_rejectRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/runs/{runId}/requeue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["lathe_requeueRun"];
         delete?: never;
         options?: never;
         head?: never;
@@ -341,6 +357,7 @@ export interface components {
             campaigns: components["schemas"]["StatusCampaignDto"][];
             staged: components["schemas"]["StatusStagedRunDto"][];
             review: components["schemas"]["StatusReviewSummaryDto"];
+            stopped: components["schemas"]["StatusStoppedRunDto"][];
         };
         StatusParkedRunDto: {
             runId: string;
@@ -358,6 +375,10 @@ export interface components {
         StatusStagedRunDto: {
             runId: string;
             parentRunId: string | null;
+        };
+        StatusStoppedRunDto: {
+            runId: string;
+            status: string;
         };
         TailJournalLineDto: {
             seq: number;
@@ -428,9 +449,9 @@ export interface components {
             problems: string[];
         };
         /** @enum {string} */
-        RunStatus: "queued" | "running" | "paused" | "converged" | "accepted" | "aborted" | "failed";
+        RunStatus: "queued" | "running" | "paused" | "converged" | "accepted" | "stopped" | "failed";
         /** @enum {string} */
-        TailRunStatus: "queued" | "running" | "interrupted" | "ready_for_review" | "blocked" | "failed" | "accepted" | "aborted";
+        TailRunStatus: "queued" | "running" | "interrupted" | "ready_for_review" | "blocked" | "failed" | "accepted" | "stopped";
     };
     responses: never;
     parameters: never;
@@ -618,7 +639,7 @@ export interface operations {
             };
         };
     };
-    lathe_abortRun: {
+    lathe_stopRun: {
         parameters: {
             query?: never;
             header?: never;
@@ -702,6 +723,28 @@ export interface operations {
                 "application/json": components["schemas"]["RejectRunRequest"];
             };
         };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSummaryDto"];
+                };
+            };
+        };
+    };
+    lathe_requeueRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Created */
             201: {

@@ -670,6 +670,7 @@ test("convergeRun: alreadyReviewed — pure early return", async () => {
     passes: [
       {
         runId: RUN_ID,
+        attempt: 1,
         pass: 1,
         verdict: "accept",
         groundedBlockers: 0,
@@ -729,6 +730,62 @@ test("convergeRun: alreadyReviewed — pure early return", async () => {
 
   // Campaign unchanged
   deepEqual(ports.getCampaign(), existingCampaign);
+});
+
+test("convergeRun: same runId new attempt is reviewed again", async () => {
+  const existingCampaign: Campaign = {
+    campaignId: CAMPAIGN_ID,
+    originalRunId: RUN_ID,
+    originalIntent: "x",
+    status: "needs_max",
+    maxPasses: 3,
+    passes: [
+      {
+        runId: RUN_ID,
+        attempt: 1,
+        pass: 1,
+        verdict: "request_changes",
+        groundedBlockers: 1,
+        atIso: "2026-01-01T00:00:00.000Z",
+      },
+    ],
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  let convergenceEntries = 0;
+
+  const skillPath = createSkillFile();
+  const ports = makeFakePorts(
+    skillPath,
+    { attempt: 2 },
+    existingCampaign,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    () => {
+      convergenceEntries++;
+    },
+  );
+
+  const runner = convergeRun({
+    store: ports.store,
+    repo: ports.repo,
+    reviewer: ports.reviewer,
+    verify: ports.verify,
+    clock: ports.clock,
+    config: ports.config,
+    paths: ports.paths,
+  });
+
+  await runner(RUN_ID);
+
+  equal(convergenceEntries, 1, "a new attempt for the same run id must be reviewed");
+  const campaign = ports.getCampaign();
+  ok(campaign, "campaign should be updated");
+  equal(campaign?.status, "converged");
+  equal(campaign?.passes.length, 1, "new attempt supersedes the stale pass for this run id");
+  equal(campaign?.passes[0].attempt, 2);
+  equal(campaign?.passes[0].verdict, "accept");
 });
 
 // ---------------------------------------------------------------------------
@@ -1252,6 +1309,7 @@ test("convergeRun: pass from packet.frontmatter.pass, not meta.attempt", async (
   const campaign = ports.getCampaign();
   ok(campaign, "campaign should be written");
   equal(campaign?.passes[0].pass, 1);
+  equal(campaign?.passes[0].attempt, 5);
 });
 
 // ---------------------------------------------------------------------------

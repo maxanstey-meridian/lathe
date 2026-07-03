@@ -35,7 +35,7 @@ export function runStatusColor(status: RunStatus | "ready_for_review" | "blocked
       return "warning";
     case "accepted":
       return "success";
-    case "aborted":
+    case "stopped":
       return "error";
     case "failed":
       return "error";
@@ -60,5 +60,9 @@ export function campaignStatusIcon(status: string): string {
 }
 
 export function truncate(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max)}…`;
+  if (text.length <= max) return text;
+  const sliced = text.slice(0, max);
+  const lastSpace = sliced.lastIndexOf(" ");
+  const cut = lastSpace > max * 0.7 ? lastSpace : max;
+  return `${sliced.slice(0, cut).replace(/[\s.…]+$/, "")}…`;
 }

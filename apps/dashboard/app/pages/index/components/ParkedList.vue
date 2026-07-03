@@ -3,7 +3,6 @@ import type { components } from "@lathe/contract";
 import { injectLatheActions } from "../ports/lathe-actions";
 import { injectLatheStatus } from "../ports/lathe-status";
 import { clearAnswerAfterSuccess } from "../logic/action-results";
-import { truncate } from "../logic/formatters";
 
 type StatusParkedRunDto = components["schemas"]["StatusParkedRunDto"];
 
@@ -55,7 +54,7 @@ const handleAnswer = async (run: StatusParkedRunDto): Promise<void> => {
             </div>
 
             <div v-if="run.blockedQuestion" class="mt-1 text-xs text-slate-500">
-              {{ truncate(run.blockedQuestion, 200) }}
+              {{ run.blockedQuestion }}
             </div>
 
             <div v-if="answerTexts[run.runId] !== undefined" class="mt-2 flex items-start gap-2">

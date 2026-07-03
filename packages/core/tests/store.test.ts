@@ -707,7 +707,7 @@ verification:
   await cleanTemp(tmp);
 });
 
-test("store: archiveQueue marks run aborted in SQLite", async () => {
+test("store: archiveQueue marks run stopped in SQLite", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-arch-"));
   const clock = fixedClock();
   const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
@@ -737,7 +737,7 @@ verification:
     "should not be queued after archive",
   );
   const meta = store.readMetaIfExists("20260101-000000-test");
-  equal(meta?.status, "aborted");
+  equal(meta?.status, "stopped");
   await cleanTemp(tmp);
 });
 
@@ -1193,7 +1193,7 @@ verification:
       false,
     );
     const meta = store.readMetaIfExists("20260101-000000-test");
-    equal(meta?.status, "aborted");
+    equal(meta?.status, "stopped");
     await cleanTemp(tmp);
   }
 

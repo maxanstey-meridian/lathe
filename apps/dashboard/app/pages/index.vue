@@ -9,6 +9,7 @@ import CampaignLadder from "./index/components/CampaignLadder.vue";
 import ParkedList from "./index/components/ParkedList.vue";
 import QueueList from "./index/components/QueueList.vue";
 import StagedChains from "./index/components/StagedChains.vue";
+import StoppedList from "./index/components/StoppedList.vue";
 import { useLatheActions } from "./index/composables/useLatheActions";
 import { useLatheStatus } from "./index/composables/useLatheStatus";
 import { useLatheTail } from "./index/composables/useLatheTail";
@@ -69,6 +70,7 @@ onMounted(() => {
           <ParkedList />
           <CampaignLadder />
           <StagedChains />
+          <StoppedList />
         </div>
       </div>
 

@@ -44,7 +44,7 @@ Lathe's lifecycle is owned by domain/application use cases and persisted state. 
 
 ## Run Invariants
 
-- Run statuses are `queued`, `running`, `interrupted`, `ready_for_review`, `blocked`, `failed`, `accepted`, and `aborted`.
+- Run statuses are `queued`, `running`, `interrupted`, `ready_for_review`, `blocked`, `failed`, `accepted`, and `stopped`.
 - A run branch is `meridian/<runId>`.
 - A run sandbox is a self-rooted local clone, not a git worktree.
 - Baby works inside the sandbox clone.

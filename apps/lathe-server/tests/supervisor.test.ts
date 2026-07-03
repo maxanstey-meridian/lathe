@@ -112,28 +112,28 @@ test("createSupervisor constructs with a temp paths dir", async () => {
     ok(typeof supervisor.enqueueRun === "function");
     ok(typeof supervisor.listRuns === "function");
     ok(typeof supervisor.getRun === "function");
-    ok(typeof supervisor.abortRun === "function");
+    ok(typeof supervisor.stopRun === "function");
     ok(typeof supervisor.acceptRun === "function");
     ok(typeof supervisor.rejectRun === "function");
   });
 });
 
 // ---------------------------------------------------------------------------
-// abortRun — not found
+// stopRun — not found
 
-test("abortRun throws RunNotFoundError for unknown runId", async () => {
+test("stopRun throws RunNotFoundError for unknown runId", async () => {
   await withSupervisor(async (supervisor) => {
     throws(
-      () => supervisor.abortRun("nonexistent"),
+      () => supervisor.stopRun("nonexistent"),
       (err: Error) => err instanceof RunNotFoundError,
     );
   });
 });
 
 // ---------------------------------------------------------------------------
-// abortRun — terminal run
+// stopRun — terminal run
 
-test("abortRun throws TerminalRunError for a terminal run", async () => {
+test("stopRun throws TerminalRunError for a terminal run", async () => {
   await withSupervisor(async (supervisor, paths) => {
     const runId = "test-terminal";
     const meta = makeTestMeta({
@@ -148,16 +148,16 @@ test("abortRun throws TerminalRunError for a terminal run", async () => {
     store.writeMeta(meta);
 
     throws(
-      () => supervisor.abortRun(runId),
+      () => supervisor.stopRun(runId),
       (err: Error) => err instanceof TerminalRunError && err.message.includes("already terminal"),
     );
   });
 });
 
 // ---------------------------------------------------------------------------
-// abortRun — queued run (admitted, has meta with status "queued")
+// stopRun — queued run (admitted, has meta with status "queued")
 
-test("abortRun archives a queued run (meta status queued)", async () => {
+test("stopRun archives a queued run (meta status queued)", async () => {
   await withSupervisor(async (supervisor, paths) => {
     const repo = fakeRepo();
     const store = SqliteStoreAdapter.create(paths, repo, systemClock);
@@ -170,17 +170,17 @@ test("abortRun archives a queued run (meta status queued)", async () => {
     ok(store.listQueue().some(q => q.runId === runId), "run should be in the queue");
 
     // No exception means success.
-    supervisor.abortRun(runId);
+    supervisor.stopRun(runId);
 
-    // Run should no longer be in the queue (status flipped to aborted).
+    // Run should no longer be in the queue (status flipped to stopped).
     equal(store.listQueue().some(q => q.runId === runId), false);
   });
 });
 
 // ---------------------------------------------------------------------------
-// abortRun — running run (no abortMap entry — fires silently)
+// stopRun — running run (no abortMap entry — fires silently)
 
-test("abortRun for a running run does not throw when no abortMap entry", async () => {
+test("stopRun for a running run does not throw when no abortMap entry", async () => {
   await withSupervisor(async (supervisor, paths) => {
     const repo = fakeRepo();
     const store = SqliteStoreAdapter.create(paths, repo, systemClock);
@@ -194,10 +194,10 @@ test("abortRun for a running run does not throw when no abortMap entry", async (
       updatedAt: systemClock.nowIso(),
     }));
 
-    // No exception: abortRun fires abortMap.get(runId) which is undefined
+    // No exception: stopRun fires abortMap.get(runId) which is undefined
     // in this test — the supervisor's private abortMap has no entry.
-    // The run status should remain "running" (no state change for running abort).
-    supervisor.abortRun(runId);
+    // The run status should remain "running" (no state change for running stop).
+    supervisor.stopRun(runId);
     const after = supervisor.getRun(runId);
     equal(after!.status, "running");
   });
@@ -274,7 +274,7 @@ test("acceptRun throws NonChainTipError for a non-chain-tip run", async () => {
     enqueueChain: () => {},
     listRuns: () => Array.from(metaStore.values()),
     getRun: (id: string) => metaStore.get(id),
-    abortRun: () => {},
+    stopRun: () => {},
     answerRun: () => {},
     isChainTip: (id: string) => !stagedEntries.some(s => s.parentRunId === id),
     lastVerdict: () => null,
@@ -424,7 +424,7 @@ test("acceptRun throws NonChainTipError with chainTip for a non-chain-tip run", 
     enqueueChain: () => {},
     listRuns: () => [],
     getRun: () => undefined,
-    abortRun: () => {},
+    stopRun: () => {},
     answerRun: () => {},
     isChainTip: (id: string) => id === childRunId,
     lastVerdict: () => null,
@@ -468,7 +468,7 @@ test("acceptRun throws NonChainTipError with correct chainTip when multiple chai
     enqueueChain: () => {},
     listRuns: () => [],
     getRun: () => undefined,
-    abortRun: () => {},
+    stopRun: () => {},
     answerRun: () => {},
     isChainTip: (id: string) => id === "a-chain" || id === "b-child-chain",
     lastVerdict: () => null,

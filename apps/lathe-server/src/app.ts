@@ -203,9 +203,9 @@ export const createApp = (
         return supervisor.getReview();
       },
 
-      abortRun: async ({ params }) => {
+      stopRun: async ({ params }) => {
         try {
-          supervisor.abortRun(params.runId);
+          supervisor.stopRun(params.runId);
         } catch (err) {
           if (err instanceof RunNotFoundError) {
             throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
@@ -217,7 +217,7 @@ export const createApp = (
         }
         const meta = supervisor.getRun(params.runId);
         if (!meta) {
-          return mutationSummary(params.runId, "aborted");
+          return mutationSummary(params.runId, "stopped");
         }
         const ctx = buildDtoCtx(supervisor, meta);
         return runToSummary(meta, ctx);
@@ -290,6 +290,23 @@ export const createApp = (
         const meta = supervisor.getRun(params.runId);
         if (!meta) {
           return mutationSummary(params.runId, "paused");
+        }
+        const ctx = buildDtoCtx(supervisor, meta);
+        return runToSummary(meta, ctx);
+      },
+
+      requeueRun: async ({ params }) => {
+        let meta: RunMeta;
+        try {
+          meta = supervisor.requeueRun(params.runId);
+        } catch (err) {
+          if (err instanceof RunNotFoundError) {
+            throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+          }
+          if (err instanceof TerminalRunError) {
+            throw rivetHttpError(409, { code: "terminal", message: err.message });
+          }
+          throw err;
         }
         const ctx = buildDtoCtx(supervisor, meta);
         return runToSummary(meta, ctx);
@@ -494,7 +511,7 @@ const buildDtoCtx = (sup: Supervisor, meta: RunMeta): RunDtoCtx => ({
   outcomes: sup.outcomes(meta.runId),
 });
 
-const mutationSummary = (runId: string, status: "aborted" | "paused"): RunSummaryDto => ({
+const mutationSummary = (runId: string, status: "stopped" | "paused"): RunSummaryDto => ({
   runId,
   campaignId: "",
   packet: runId,

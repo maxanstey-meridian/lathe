@@ -36,7 +36,7 @@ const performMutation = async <T>(
 };
 
 export const useLatheActions = (refresh: () => Promise<void>, c: RivetClient = client): LatheActions => {
-  const abortLoading = ref(false);
+  const stopLoading = ref(false);
   const answerLoading = ref(false);
   const acceptLoading = ref(false);
   const rejectLoading = ref(false);
@@ -45,17 +45,17 @@ export const useLatheActions = (refresh: () => Promise<void>, c: RivetClient = c
 
   const isLoading = computed(
     () =>
-      abortLoading.value ||
+      stopLoading.value ||
       answerLoading.value ||
       acceptLoading.value ||
       rejectLoading.value ||
       enqueueContentLoading.value,
   );
 
-  const abort = async (runId: string): Promise<boolean> => {
+  const stop = async (runId: string): Promise<boolean> => {
     lastError.value = null;
     try {
-      await performMutation(c, (client) => client.POST("/runs/{runId}/abort", { params: { path: { runId } } }), abortLoading, refresh);
+      await performMutation(c, (client) => client.POST("/runs/{runId}/stop", { params: { path: { runId } } }), stopLoading, refresh);
       return true;
     } catch (err) {
       lastError.value = mapError(err);
@@ -128,14 +128,14 @@ export const useLatheActions = (refresh: () => Promise<void>, c: RivetClient = c
   };
 
   return {
-    abort,
+    stop,
     answer,
     accept,
     reject,
     enqueueContent,
     lastError,
     isLoading,
-    abortLoading,
+    stopLoading,
     answerLoading,
     acceptLoading,
     rejectLoading,

@@ -735,6 +735,17 @@
             "name": "StatusReviewSummaryDto"
           },
           "optional": false
+        },
+        {
+          "name": "stopped",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "StatusStoppedRunDto"
+            }
+          },
+          "optional": false
         }
       ]
     },
@@ -838,6 +849,28 @@
               "kind": "primitive",
               "type": "string"
             }
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "StatusStoppedRunDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "status",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
           },
           "optional": false
         }
@@ -1342,7 +1375,7 @@
         "paused",
         "converged",
         "accepted",
-        "aborted",
+        "stopped",
         "failed"
       ]
     },
@@ -1356,7 +1389,7 @@
         "blocked",
         "failed",
         "accepted",
-        "aborted"
+        "stopped"
       ]
     }
   ],
@@ -1584,9 +1617,9 @@
       ]
     },
     {
-      "name": "abortRun",
+      "name": "stopRun",
       "httpMethod": "POST",
-      "routeTemplate": "/runs/{runId}/abort",
+      "routeTemplate": "/runs/{runId}/stop",
       "params": [
         {
           "name": "runId",
@@ -1703,6 +1736,36 @@
             "name": "RejectRunRequest"
           },
           "source": "body",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "ref",
+        "name": "RunSummaryDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 201,
+          "dataType": {
+            "kind": "ref",
+            "name": "RunSummaryDto"
+          }
+        }
+      ]
+    },
+    {
+      "name": "requeueRun",
+      "httpMethod": "POST",
+      "routeTemplate": "/runs/{runId}/requeue",
+      "params": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "source": "route",
           "isOptional": false
         }
       ],

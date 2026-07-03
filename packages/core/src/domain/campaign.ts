@@ -9,6 +9,9 @@ export type CampaignStatus = z.infer<typeof CampaignStatus>;
 
 export const CampaignPass = z.object({
   runId: z.string(),
+  // A run id can be resumed after Max answers a park. The same run id then
+  // represents a fresh execution attempt and must be reviewed again.
+  attempt: z.number().int().min(1).default(1),
   pass: z.number().int().min(1),
   verdict: FinalReviewVerdict,
   groundedBlockers: z.number().int(),
@@ -46,8 +49,11 @@ export const campaignIdForRun = (
   runId: string,
 ): string => packet.frontmatter.campaign_id ?? runId;
 
-export const alreadyReviewed = (campaign: Campaign | undefined, runId: string): boolean =>
-  campaign?.passes?.some((p) => p.runId === runId) ?? false;
+export const alreadyReviewed = (
+  campaign: Campaign | undefined,
+  runId: string,
+  attempt: number,
+): boolean => campaign?.passes?.some((p) => p.runId === runId && p.attempt === attempt) ?? false;
 
 // Pure: fold a reviewed pass into the campaign, creating it on the first pass.
 // Re-recording the same runId replaces its prior entry, so a re-converge is

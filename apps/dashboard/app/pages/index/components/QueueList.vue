@@ -5,23 +5,23 @@ import { injectLatheStatus } from "../ports/lathe-status";
 const status = injectLatheStatus();
 const actions = injectLatheActions();
 
-const showAbortConfirm = ref<string | null>(null);
+const showStopConfirm = ref<string | null>(null);
 
-const closeAbortConfirm = (): void => {
-  showAbortConfirm.value = null;
+const closeStopConfirm = (): void => {
+  showStopConfirm.value = null;
 };
 
-const openAbortConfirm = (runId: string): void => {
-  showAbortConfirm.value = runId;
+const openStopConfirm = (runId: string): void => {
+  showStopConfirm.value = runId;
 };
 
-const handleAbort = async (runId: string): Promise<void> => {
+const handleStop = async (runId: string): Promise<void> => {
   try {
-    await actions.abort(runId);
+    await actions.stop(runId);
   } catch {
     // Error surfaced via latheActions.lastError
   } finally {
-    showAbortConfirm.value = null;
+    showStopConfirm.value = null;
   }
 };
 </script>
@@ -43,25 +43,25 @@ const handleAbort = async (runId: string): Promise<void> => {
             </span>
             <span class="font-mono text-xs text-slate-400">{{ entry.runId }}</span>
             <div class="ml-auto">
-              <UModal :open="showAbortConfirm === entry.runId" title="Abort this run?" :persist="false" @update:open="(val: boolean) => { if (!val) showAbortConfirm = null; }">
+              <UModal :open="showStopConfirm === entry.runId" title="Stop this run?" :persist="false" @update:open="(val: boolean) => { if (!val) showStopConfirm = null; }">
                 <template #body>
                   <p class="text-sm text-slate-400">
-                    Abort <code class="font-mono text-xs text-slate-300">{{ entry.runId }}</code>?
+                    Stop <code class="font-mono text-xs text-slate-300">{{ entry.runId }}</code>?
                   </p>
                 </template>
                 <template #footer>
                   <div class="flex justify-end gap-2">
-                    <UButton color="neutral" variant="soft" @click="closeAbortConfirm">
+                    <UButton color="neutral" variant="soft" @click="closeStopConfirm">
                       Cancel
                     </UButton>
                     <UButton
                       color="error"
                       variant="soft"
-                      :loading="actions.abortLoading.value"
-                      :disabled="actions.abortLoading.value"
-                      @click="handleAbort(entry.runId)"
+                      :loading="actions.stopLoading.value"
+                      :disabled="actions.stopLoading.value"
+                      @click="handleStop(entry.runId)"
                     >
-                      Abort
+                      Stop
                     </UButton>
                   </div>
                 </template>
@@ -70,10 +70,10 @@ const handleAbort = async (runId: string): Promise<void> => {
                 size="xs"
                 color="error"
                 variant="ghost"
-                :disabled="actions.abortLoading.value"
-                @click="openAbortConfirm(entry.runId)"
+                :disabled="actions.stopLoading.value"
+                @click="openStopConfirm(entry.runId)"
               >
-                Abort
+                Stop
               </UButton>
             </div>
           </li>

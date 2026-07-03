@@ -12,7 +12,7 @@
 // loop and the bridge's concrete Ref (the application cannot import the bridge).
 // ---------------------------------------------------------------------------
 
-import { readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { TurnResponse } from "../../domain/agent-response.js";
 import { priorReconciliationAccepted, rotationGateState } from "../../domain/gate-decisions.js";
@@ -137,6 +137,25 @@ export const makeExecuteRun =
       // A self-rooted clone: opencode roots on the sandbox, never climbing a
       // worktree linkage back into the source repo. Resume reuses the sandbox.
       repo.createSandbox(repoPath, worktree, branch, base);
+
+      // Seed non-tracked files (gitignored configs, test fixtures, fakes) that
+      // the clone won't carry. Per-repo, config-driven — not packet-coupled.
+      const seed = config.repos[repoPath]?.seed;
+      if (seed) {
+        for (const rel of seed.copies) {
+          const src = join(repoPath, rel);
+          if (existsSync(src)) {
+            const dst = join(worktree, rel);
+            mkdirSync(dirname(dst), { recursive: true });
+            copyFileSync(src, dst);
+          }
+        }
+        for (const [rel, content] of Object.entries(seed.writes)) {
+          const dst = join(worktree, rel);
+          mkdirSync(dirname(dst), { recursive: true });
+          writeFileSync(dst, content);
+        }
+      }
     } else {
       // Resume: REFRESH config-derived gate fields (cadence + mutation patterns)
       // from current config; preserve run-state (phase, baseline,

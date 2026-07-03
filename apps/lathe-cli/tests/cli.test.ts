@@ -9,7 +9,7 @@ import { Config as ConfigSchema, makePaths } from "@lathe/core";
 import { createDaemonClient } from "../src/client.js";
 import {
   checkDaemon,
-  cmdAbort,
+  cmdStop,
   cmdAccept,
   cmdAnswer,
   cmdEnqueue,
@@ -197,9 +197,9 @@ test("cmdEnqueue: a 400 surfaces a 'packet rejected' message", async () => {
   });
 });
 
-test("cmdAbort: a 404 reports the run as not found", async () => {
+test("cmdStop: a 404 reports the run as not found", async () => {
   const h = harness(() => jsonResponse(404, { code: "not_found", message: "nope" }));
-  const code = await cmdAbort(h.env, "missing-run");
+  const code = await cmdStop(h.env, "missing-run");
   equal(code, 1);
   ok(
     h.errs.some((e) => e.includes("run missing-run not found")),
@@ -289,8 +289,8 @@ test("cmdReject: success reports the rejected run", async () => {
 });
 
 test("mutating commands fail loud when the daemon is down", async () => {
-  const h = harness(() => jsonResponse(201, summary("x", "aborted")), false);
-  const code = await cmdAbort(h.env, "x");
+  const h = harness(() => jsonResponse(201, summary("x", "stopped")), false);
+  const code = await cmdStop(h.env, "x");
   equal(code, 1);
   equal(h.paths.length, 0, "daemon not contacted when down");
   ok(
@@ -455,18 +455,18 @@ test("queue add: routes through the daemon (POST /runs), not the local Store", a
   });
 });
 
-test("queue drop: routes through the daemon abort endpoint", async () => {
-  const h = harness(() => jsonResponse(201, summary("d", "aborted")));
+test("queue drop: routes through the daemon stop endpoint", async () => {
+  const h = harness(() => jsonResponse(201, summary("d", "stopped")));
   const code = await runCommand(h.env, "queue", ["drop", "d"]);
   equal(code, 0);
   ok(
-    h.paths.some((p) => p.endsWith("/abort")),
-    `queue drop hit abort: ${h.paths.join(",")}`,
+    h.paths.some((p) => p.endsWith("/stop")),
+    `queue drop hit stop: ${h.paths.join(",")}`,
   );
 });
 
 test("queue drop: missing runId is rejected with usage, no daemon call", async () => {
-  const h = harness(() => jsonResponse(201, summary("d", "aborted")));
+  const h = harness(() => jsonResponse(201, summary("d", "stopped")));
   const code = await runCommand(h.env, "queue", ["drop"]);
   equal(code, 1);
   equal(h.paths.length, 0);
@@ -613,7 +613,7 @@ const fakeSupervisor = (order: string[], config = ConfigSchema.parse({})): Super
   enqueueChain: () => {},
   listRuns: () => [],
   getRun: () => undefined,
-  abortRun: () => {},
+  stopRun: () => {},
   answerRun: () => {},
   acceptRun: () => 0,
   rejectRun: () => {},

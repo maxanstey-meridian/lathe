@@ -12,7 +12,8 @@
     "lint": "pnpm -r --reporter=append-only lint",
     "fmt": "pnpm -r --reporter=append-only fmt",
     "dev": "pnpm --filter dashboard dev",
-    "serve": "pnpm --filter @lathe/cli exec tsx src/index.ts serve"
+    "serve": "pnpm --filter @lathe/cli exec tsx src/index.ts serve",
+    "generate": "pnpm --filter @lathe/contract gen"
   },
   "engines": {
     "node": ">=22"

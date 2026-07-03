@@ -36,6 +36,7 @@ const makeStore = (meta?: ReturnType<typeof makeMeta>): Store => {
       lastMeta = m;
     },
     listRunIds: () => [],
+    listMeta: () => [],
     initialLedger: () => ({ runId: "fake", outcomes: [], updatedAt: "" }),
     readLedger: () => ({ runId: "fake", outcomes: [], updatedAt: "" }),
     writeLedger: () => {},

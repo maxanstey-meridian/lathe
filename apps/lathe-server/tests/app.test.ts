@@ -95,10 +95,10 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
 
     getRun: (runId: string): RunMeta | undefined => metaStore.get(runId),
 
-    abortRun: (runId: string): void => {
+    stopRun: (runId: string): void => {
       const meta = metaStore.get(runId);
       if (!meta) throw new RunNotFoundError(runId);
-      metaStore.set(runId, { ...meta, status: "aborted" as const, updatedAt: new Date().toISOString() });
+      metaStore.set(runId, { ...meta, status: "stopped" as const, updatedAt: new Date().toISOString() });
     },
 
     answerRun: (runId: string, _answer: string): void => {
@@ -196,11 +196,11 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
   const merged = { ...base, ...overrides };
 
   // Re-bind CRUD methods that need access to the merged getRun/isChainTip
-  merged.abortRun = (runId: string) => {
-    if (overrides?.abortRun) return overrides.abortRun!(runId);
+  merged.stopRun = (runId: string) => {
+    if (overrides?.stopRun) return overrides.stopRun!(runId);
     const meta = merged.getRun!(runId);
     if (!meta) throw new RunNotFoundError(runId);
-    metaStore.set(runId, { ...meta, status: "aborted" as const, updatedAt: new Date().toISOString() });
+    metaStore.set(runId, { ...meta, status: "stopped" as const, updatedAt: new Date().toISOString() });
   };
 
   merged.answerRun = (runId: string, answer: string) => {
@@ -274,7 +274,7 @@ const makeAcceptSupervisor = (meta: RunMeta, currentBranch: string, isDirty = fa
     enqueueChain: (_chainDir: string): void => {},
     listRuns: (): RunMeta[] => Array.from(metaStore.values()),
     getRun: (runId: string): RunMeta | undefined => metaStore.get(runId),
-    abortRun: (_runId: string): void => {},
+    stopRun: (_runId: string): void => {},
     acceptRun: (runId: string): number =>
       acceptRunUc(runId, undefined, { store, repo, clock, runsDir: "/tmp/runs" }),
     rejectRun: (_runId: string, _reason: string): void => {},
@@ -665,24 +665,24 @@ test("AcceptRun 409 names the tip of the correct chain when multiple chains exis
   ok(!body.message.includes("a-chain"), "409 does not name a-chain (tip of unrelated chain)");
 });
 
-test("AbortRun for unknown runId returns 404", async () => {
+test("StopRun for unknown runId returns 404", async () => {
   const supervisor = makeFakeSupervisor();
   const app = createApp(supervisor.appDeps, supervisor);
 
-  const req = new Request("http://localhost/runs/nonexistent/abort", { method: "POST" });
+  const req = new Request("http://localhost/runs/nonexistent/stop", { method: "POST" });
   const res = await app.request(req);
   equal(res.status, 404);
 });
 
-test("AbortRun for a running run returns updated summary", async () => {
-  const runId = "abort-running";
+test("StopRun for a running run returns updated summary", async () => {
+  const runId = "stop-running";
   const meta = {
     runId,
     status: "running" as const,
     attempt: 1,
     repo: "/tmp/test",
     base: "main",
-    branch: "meridian/abort-running",
+    branch: "meridian/stop-running",
     worktree: "/tmp/w",
     stallRetries: 0,
     reorientRetries: 0,
@@ -695,20 +695,20 @@ test("AbortRun for a running run returns updated summary", async () => {
   const supervisor = makeFakeSupervisor({
     getRun: (id: string) => (id === runId ? meta : undefined),
     listRuns: () => [meta],
-    abortRun: (id: string) => {
+    stopRun: (id: string) => {
       if (id !== runId) throw new RunNotFoundError(id);
-      meta.status = "aborted" as const;
+      meta.status = "stopped" as const;
     },
     isChainTip: () => true,
   });
   const app = createApp(supervisor.appDeps, supervisor);
 
-  const req = new Request(`http://localhost/runs/${runId}/abort`, { method: "POST" });
+  const req = new Request(`http://localhost/runs/${runId}/stop`, { method: "POST" });
   const res = await app.request(req);
   equal(res.status, 201);
   const body = await res.json() as { runId: string; status: string };
   equal(body.runId, runId);
-  ok(["blocked", "aborted"].includes(body.status));
+  ok(["blocked", "stopped"].includes(body.status));
 });
 
 test("AnswerRun returns updated queued summary", async () => {
@@ -755,20 +755,20 @@ test("AnswerRun returns updated queued summary", async () => {
   equal(answerSeen, "go ahead");
 });
 
-test("AbortRun for a queue-only run returns success without meta", async () => {
-  const runId = "abort-queued";
+test("StopRun for a queue-only run returns success without meta", async () => {
+  const runId = "stop-queued";
   const supervisor = makeFakeSupervisor({
     getRun: () => undefined,
-    abortRun: () => {},
+    stopRun: () => {},
   });
   const app = createApp(supervisor.appDeps, supervisor);
 
-  const req = new Request(`http://localhost/runs/${runId}/abort`, { method: "POST" });
+  const req = new Request(`http://localhost/runs/${runId}/stop`, { method: "POST" });
   const res = await app.request(req);
   equal(res.status, 201);
   const body = await res.json() as { runId: string; status: string };
   equal(body.runId, runId);
-  equal(body.status, "aborted");
+  equal(body.status, "stopped");
 });
 
 test("AnswerRun for a non-blocked run returns 409", async () => {
@@ -1492,5 +1492,5 @@ test("status mapping handles all domain values", async () => {
   strictEqual(mapStatus("blocked"), "paused");
   strictEqual(mapStatus("failed"), "failed");
   strictEqual(mapStatus("accepted"), "accepted");
-  strictEqual(mapStatus("aborted"), "aborted");
+  strictEqual(mapStatus("stopped"), "stopped");
 });

@@ -5,6 +5,7 @@ export type TailPaneLineStyle = TailLineStyle | "tool";
 export type TailPaneLine = {
   readonly text: string;
   readonly style: TailPaneLineStyle;
+  readonly attachment?: string;
 };
 
 export type TailPaneState = {
@@ -95,11 +96,11 @@ const pushDelta = (pane: TailPaneState, delta: string, style: TailPaneLineStyle,
   };
 };
 
-const pushToolLine = (pane: TailPaneState, text: string, now: number): TailPaneState => ({
+const pushToolLine = (pane: TailPaneState, text: string, now: number, attachment?: string): TailPaneState => ({
   lines: [
     ...pane.lines,
     ...(pane.current.trim() ? [{ text: pane.current, style: pane.currentStyle }] : []),
-    { text, style: "tool" as const },
+    { text, style: "tool" as const, ...(attachment !== undefined ? { attachment } : {}) },
   ].slice(-MAX_PANE_LINES),
   current: "",
   currentStyle: pane.currentStyle,
@@ -198,7 +199,7 @@ export const applyTailEvent = (state: TailViewState, event: TailEvent, now: numb
   if (event.kind === "tail.pane.tool") {
     const marker = event.status === "error" ? "x" : ".";
     const detail = event.detail ? ` ${event.detail}` : "";
-    return updatePane(state, event.speaker, (pane) => pushToolLine(pane, `${marker} ${event.tool}${detail}`, now));
+    return updatePane(state, event.speaker, (pane) => pushToolLine(pane, `${marker} ${event.tool}${detail}`, now, event.input));
   }
 
   if (event.kind === "tail.super.verdict") {

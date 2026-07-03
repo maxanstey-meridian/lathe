@@ -8,14 +8,14 @@ export type ActionState = {
 };
 
 export interface LatheActions {
-  readonly abortLoading: Ref<boolean>;
+  readonly stopLoading: Ref<boolean>;
   readonly answerLoading: Ref<boolean>;
   readonly acceptLoading: Ref<boolean>;
   readonly rejectLoading: Ref<boolean>;
   readonly enqueueContentLoading: Ref<boolean>;
   readonly lastError: Ref<string | null>;
   readonly isLoading: ComputedRef<boolean>;
-  abort(runId: string): Promise<boolean>;
+  stop(runId: string): Promise<boolean>;
   answer(runId: string, answer: string): Promise<boolean>;
   accept(runId: string): Promise<boolean>;
   reject(runId: string, reason?: string): Promise<boolean>;

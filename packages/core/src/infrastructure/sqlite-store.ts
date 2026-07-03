@@ -207,6 +207,13 @@ export class SqliteStoreAdapter implements Store {
     return rows.map((r) => r.run_id);
   }
 
+  listMeta(): RunMeta[] {
+    const rows = this.db.prepare("SELECT meta FROM runs ORDER BY run_id").all() as {
+      meta: string;
+    }[];
+    return rows.map((r) => RunMetaSchema.parse(jsonParse(r.meta)));
+  }
+
   // ---------------------------------------------------------------------------
   // Outcome ledger
 
@@ -442,7 +449,7 @@ export class SqliteStoreAdapter implements Store {
   // A queued run IS the queue: a run row with status = 'queued'. Admission
   // validates the packet, writes the live run packet file, and stamps meta
   // with status = 'queued'. listQueue is a SQL query. archiveQueue marks
-  // the run aborted. readQueuePacket reads the current live packet file.
+  // the run stopped. readQueuePacket reads the current live packet file.
   // ---------------------------------------------------------------------------
 
   listQueue(): QueueEntry[] {
@@ -527,11 +534,11 @@ export class SqliteStoreAdapter implements Store {
   }
 
   archiveQueue(runId: string): void {
-    // Mark the run aborted in SQLite. The live packet file stays in the run
+    // Mark the run stopped in SQLite. The live packet file stays in the run
     // dir (harmless; the run is terminal).
     const meta = this.readMetaIfExists(runId);
     if (meta) {
-      this.writeMeta({ ...meta, status: "aborted", updatedAt: this.clock.nowIso() });
+      this.writeMeta({ ...meta, status: "stopped" as const, updatedAt: this.clock.nowIso() });
     }
   }
 

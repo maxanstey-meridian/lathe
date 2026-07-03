@@ -43,52 +43,52 @@ const makeClient = (responses: Map<string, Response>): RivetClient =>
 const makeSequencedClient = (responses: Map<string, Response[]>): RivetClient =>
   createClient({ baseUrl: "http://localhost", fetch: makeSequencedFetch(responses) });
 
-test("useLatheActions abort success: returns true and clears lastError", async () => {
+test("useLatheActions stop success: returns true and clears lastError", async () => {
   let refreshCount = 0;
   const mockRefresh = async (): Promise<void> => {
     refreshCount += 1;
   };
 
-  const c = makeClient(new Map([["POST /runs/test/abort", fakeResponse({ id: "test" })]]));
+  const c = makeClient(new Map([["POST /runs/test/stop", fakeResponse({ id: "test" })]]));
   const actions = useLatheActions(mockRefresh, c);
-  const result = await actions.abort("test");
+  const result = await actions.stop("test");
 
   assert.equal(result, true);
   assert.equal(actions.lastError.value, null);
   assert.equal(refreshCount, 1);
 });
 
-test("useLatheActions abort non-2xx: lastError populated and not refreshed", async () => {
+test("useLatheActions stop non-2xx: lastError populated and not refreshed", async () => {
   let refreshCount = 0;
   const mockRefresh = async (): Promise<void> => {
     refreshCount += 1;
   };
 
-  const c = makeClient(new Map([["POST /runs/test/abort", fakeResponse({ message: "run not found" }, 404)]]));
+  const c = makeClient(new Map([["POST /runs/test/stop", fakeResponse({ message: "run not found" }, 404)]]));
   const actions = useLatheActions(mockRefresh, c);
-  const result = await actions.abort("test");
+  const result = await actions.stop("test");
 
   assert.equal(result, false);
   assert.equal(actions.lastError.value, "run not found");
   assert.equal(refreshCount, 0);
 });
 
-test("useLatheActions abort missing data: returns false and records an error", async () => {
+test("useLatheActions stop missing data: returns false and records an error", async () => {
   let refreshCount = 0;
   const mockRefresh = async (): Promise<void> => {
     refreshCount += 1;
   };
 
-  const c = makeClient(new Map([["POST /runs/test/abort", new Response(null, { status: 200 })]]));
+  const c = makeClient(new Map([["POST /runs/test/stop", new Response(null, { status: 200 })]]));
   const actions = useLatheActions(mockRefresh, c);
-  const result = await actions.abort("test");
+  const result = await actions.stop("test");
 
   assert.equal(result, false);
   assert.ok(actions.lastError.value);
   assert.equal(refreshCount, 0);
 });
 
-test("useLatheActions abort throws: returns false and records the thrown error", async () => {
+test("useLatheActions stop throws: returns false and records the thrown error", async () => {
   let refreshCount = 0;
   const mockRefresh = async (): Promise<void> => {
     refreshCount += 1;
@@ -101,7 +101,7 @@ test("useLatheActions abort throws: returns false and records the thrown error",
     },
   });
   const actions = useLatheActions(mockRefresh, c);
-  const result = await actions.abort("test");
+  const result = await actions.stop("test");
 
   assert.equal(result, false);
   assert.equal(actions.lastError.value, "network failure");
@@ -228,19 +228,19 @@ test("useLatheActions direct composable clears stale lastError after a later suc
   const c = makeSequencedClient(
     new Map([
       [
-        "POST /runs/test/abort",
+        "POST /runs/test/stop",
         [fakeResponse({ message: "run not found" }, 404), fakeResponse({ id: "test" })],
       ],
     ]),
   );
   const actions = useLatheActions(mockRefresh, c);
 
-  const first = await actions.abort("test");
+  const first = await actions.stop("test");
   assert.equal(first, false);
   assert.equal(actions.lastError.value, "run not found");
   assert.equal(refreshCount, 0);
 
-  const second = await actions.abort("test");
+  const second = await actions.stop("test");
   assert.equal(second, true);
   assert.equal(actions.lastError.value, null);
   assert.equal(refreshCount, 1);

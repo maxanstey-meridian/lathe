@@ -59,6 +59,7 @@ export type Store = {
   readMetaIfExists(runId: string): RunMeta | undefined;
   writeMeta(meta: RunMeta): void;
   listRunIds(): string[];
+  listMeta(): RunMeta[];
 
   // Outcome ledger
   initialLedger(packet: Packet): OutcomeLedger;

@@ -22,5 +22,17 @@ export default defineNuxtConfig({
     },
   },
 
+  pages: {
+    pattern: [
+      '**/*.vue',
+
+      // colocated non-pages
+      '!**/components/**',
+      '!**/composables/**',
+      '!**/logic/**',
+      '!**/ports/**',
+    ],
+  },
+
   compatibilityDate: "2026-07-01",
 });

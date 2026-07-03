@@ -253,7 +253,7 @@ export const runLoop = async <Ref>(
             continue;
           }
 
-          if (status === "aborted") {
+          if (status === "stopped") {
             if (terminalMeta.worktree) {
               repo.wipCommit(terminalMeta.worktree, `lathe: WIP ${runId} [${status}]`);
             }
@@ -325,7 +325,7 @@ export const runLoop = async <Ref>(
     }
     // Abort any in-flight per-run controller (e.g. a run still executing
     // when stopSignal fires). The supervisor itself fires per-run controllers
-    // via abortMap for the explicit abortRun path.
+    // via abortMap for the explicit stopRun path.
     for (const [, ac] of abortMap) {
       ac.abort();
     }

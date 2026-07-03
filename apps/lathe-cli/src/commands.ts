@@ -183,16 +183,16 @@ export const cmdChain = (env: CliEnv, dir: string): Promise<number> => {
   );
 };
 
-export const cmdAbort = (env: CliEnv, runId: string): Promise<number> => {
+export const cmdStop = (env: CliEnv, runId: string): Promise<number> => {
   if (!runId) {
-    env.err("usage: lathe abort <runId>");
+    env.err("usage: lathe stop <runId>");
     return Promise.resolve(1);
   }
 
-  return runDaemon<PathJsonResponse<"/runs/{runId}/abort", "post", 201>>(
+  return runDaemon<PathJsonResponse<"/runs/{runId}/stop", "post", 201>>(
     env,
-    (client) => client.POST("/runs/{runId}/abort", { params: { path: { runId } } }),
-    (data) => env.log(`aborted: ${data.runId} (${data.status})`),
+    (client) => client.POST("/runs/{runId}/stop", { params: { path: { runId } } }),
+    (data) => env.log(`stopped: ${data.runId} (${data.status})`),
     (status) => {
       if (status === 404) {
         env.err(`run ${runId} not found`);
@@ -505,7 +505,7 @@ export const cmdReview = (env: CliEnv): Promise<number> =>
   );
 
 // `queue` lists through daemon status; `queue add`/`queue drop` are daemon
-// aliases for enqueue/abort, so they never mutate the Store behind the daemon's
+// aliases for enqueue/stop, so they never mutate the Store behind the daemon's
 // back.
 export const cmdQueue = (env: CliEnv, args: string[]): Promise<number> => {
   const sub = args[0];
@@ -521,7 +521,7 @@ export const cmdQueue = (env: CliEnv, args: string[]): Promise<number> => {
       env.err("usage: lathe queue drop <runId>");
       return Promise.resolve(1);
     }
-    return cmdAbort(env, args[1]);
+    return cmdStop(env, args[1]);
   }
   return runDaemon<PathJsonResponse<"/status", "get", 200>>(
     env,
@@ -729,7 +729,7 @@ export const usage = `lathe — sequential overnight executor of human-written s
   lathe serve                  boot the daemon (always-on run engine + HTTP API)
   lathe enqueue <packet.md>    add a packet to the queue (via daemon)
   lathe chain add <dir>        stage a chain of packets (via daemon)
-  lathe abort <runId>          abort a run (via daemon)
+  lathe stop <runId>           stop a run (via daemon)
   lathe answer <runId> <decision>  answer a parked or failed run, requeue it (via daemon)
   lathe accept <runId>         accept a ready_for_review run (via daemon, chain-tip guarded)
   lathe reject <runId> [reason]  reject a run (via daemon)
@@ -755,8 +755,8 @@ export const runCommand = async (env: CliEnv, command: string, args: string[]): 
         return 1;
       }
       return cmdChain(env, args[1] ?? "");
-    case "abort":
-      return cmdAbort(env, args[0] ?? "");
+    case "stop":
+      return cmdStop(env, args[0] ?? "");
     case "answer":
       return cmdAnswer(env, args[0] ?? "", args.slice(1).join(" "));
     case "accept":

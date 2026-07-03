@@ -36,6 +36,11 @@ export const useLatheStatus = (): LatheStatus => {
     }
   };
 
+  const requeue = async (runId: string): Promise<void> => {
+    await client.POST("/runs/{runId}/requeue", { params: { path: { runId } } });
+    await refresh();
+  };
+
   const liveConnection = connectLatheStatusLiveUpdates({
     url: daemonEventsUrl(runtimeConfig.public.apiBaseUrl),
     onLiveChange: (live) => {
@@ -62,5 +67,6 @@ export const useLatheStatus = (): LatheStatus => {
     isDaemonReachable,
     isLive,
     refresh,
+    requeue,
   };
 };

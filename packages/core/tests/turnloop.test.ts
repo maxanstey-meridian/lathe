@@ -1451,9 +1451,9 @@ test("turnLoop: gate trigger at turn end → latch + demand checkpoint (Q4)", ()
 });
 
 // ---------------------------------------------------------------------------
-// report rejection cap → failed
+// report rejection cap → failed / promoted
 
-test("turnLoop: report rejected at the cap → terminal failed", () => {
+test("turnLoop: report rejected at the cap with promoteAtCap=false → terminal failed", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-reject-"));
     const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
@@ -1461,10 +1461,98 @@ test("turnLoop: report rejected at the cap → terminal failed", () => {
     seedRun(store, packet);
 
     const channel = emptyChannel();
-    // The bridge already counted reportRejectionCount up to the cap (3) and
-    // pushed a report-rejected intent → evaluateTurn returns terminal failed.
     const executor = scriptedExecutor(channel, [
       { intents: [{ kind: "report-rejected", problems: ["outcome not done"] }], bumpRejection: 3 },
+    ]);
+    const ports = makePorts(
+      store,
+      fakeRepo(),
+      executor,
+      fakePlanner(),
+      Config.parse({ thresholds: { promoteAtCap: false } }),
+    );
+
+    const result = await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    equal(result.outcome.status, "failed");
+    await cleanTemp(tmp);
+  })();
+});
+
+test("turnLoop: mechanical-floor rejection at cap with promoteAtCap=true → promotes once", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-reject-promote-"));
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+
+    const channel = emptyChannel();
+    // First turn: report-rejected at cap → promote_rejection → rotation.
+    // Second turn: after rotation on promoted model, submit a report to terminate.
+    const modelsUsed: string[] = [];
+    const executor = scriptedExecutor(channel, [
+      { intents: [{ kind: "report-rejected", problems: ["structural: incomplete ledger"] }], bumpRejection: 3 },
+      { intents: [{ kind: "report-accepted", status: "ready_for_review", summary: "done" }] },
+    ], ["baby-1"], modelsUsed);
+    const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
+
+    const result = await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    // Promotion happened on the first cap hit; second turn continues on promoted model
+    // and submits a report → ready_for_review.
+    equal(result.outcome.status, "ready_for_review");
+    // Verify model was promoted: first turn on baby model, second on promoted model.
+    equal(modelsUsed.length, 2, "expected exactly two model calls");
+    equal(modelsUsed[0], `${Config.parse({}).baby.providerId}/${Config.parse({}).baby.modelId}`);
+    const promCfg = Config.parse({});
+    const promotedModel = promCfg.baby.promoteTo
+      ? `${promCfg.baby.promoteTo.providerId}/${promCfg.baby.promoteTo.modelId}`
+      : `${promCfg.daddy.providerId}/${promCfg.daddy.modelId}`;
+    equal(modelsUsed[1], promotedModel);
+    // Verify promotion was journalled
+    const journal = store.readJournal(RUN_ID);
+    ok(journal.some((e) => e.event === "model_promoted"));
+    // Verify meta was latched
+    const meta = store.readMetaIfExists(RUN_ID);
+    ok(meta?.promoted, "meta promoted should be latched");
+    await cleanTemp(tmp);
+  })();
+});
+
+test("turnLoop: report rejected at cap after promotion → terminal failed", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-reject-promoted-fail-"));
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+
+    // Latch promoted in meta so the run already has its promotion.
+    const meta = store.readMetaIfExists(RUN_ID);
+    if (meta) {
+      store.writeMeta({ ...meta, promoted: true, updatedAt: fixedClock().nowIso() });
+    }
+
+    const channel = emptyChannel();
+    // The bridge already counted reportRejectionCount up to the cap (3) and
+    // the run is already promoted → evaluateTurn returns terminal failed.
+    const executor = scriptedExecutor(channel, [
+      { intents: [{ kind: "report-rejected", problems: ["structural: incomplete ledger"] }], bumpRejection: 3 },
     ]);
     const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
 
@@ -1479,6 +1567,8 @@ test("turnLoop: report rejected at the cap → terminal failed", () => {
     );
 
     equal(result.outcome.status, "failed");
+    const journal = store.readJournal(RUN_ID);
+    ok(journal.some((e) => e.event === "model_promoted"));
     await cleanTemp(tmp);
   })();
 });

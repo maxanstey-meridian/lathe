@@ -82,6 +82,8 @@ export const TurnFacts = z.object({
   // Report rejection (branch 4)
   reportRejectionCount: z.number(),
   reportRejectionParkAt: z.number(),
+  promoted: z.boolean(),
+  promoteAtCap: z.boolean(),
 
   // Ladder (branch 10)
   ladder: z.number(),
@@ -121,6 +123,9 @@ export type TurnDecision =
 
   // 4. Report rejected (`problems` in facts); app layer sends Q7
   | { kind: "reject_report"; problems: string[] }
+
+  // 4. Report rejected at cap, promotion available → promote once
+  | { kind: "promote_rejection" }
 
   // 5. Pending consult → application runs off-MCP Daddy consult
   | { kind: "run_consult" }
@@ -183,6 +188,8 @@ export const evaluateTurn = (facts: z.infer<typeof TurnFacts>): Dec => {
     checkpointBounceLimit,
     reportRejectionCount,
     reportRejectionParkAt,
+    promoted,
+    promoteAtCap,
     ladder,
     ladderRotateAt,
     ladderParkAt,
@@ -267,11 +274,18 @@ export const evaluateTurn = (facts: z.infer<typeof TurnFacts>): Dec => {
   // ---- Branch 4: Report rejected ----
   if (reportRejectedProblems) {
     if (reportRejectionCount >= reportRejectionParkAt) {
-      // At cap → terminal failure (evaluateTurn checks internally)
+      // At cap — try one promotion if available
+      if (promoteAtCap && !promoted) {
+        return { kind: "promote_rejection" };
+      }
+      // Otherwise terminal failure
+      const noteSuffix = promoted
+        ? "; after promotion to the strong model"
+        : "";
       return {
         kind: "terminal",
         status: "failed",
-        note: `report rejected ${reportRejectionCount} times; last problems: ${reportRejectedProblems.join("; ")}`,
+        note: `report rejected ${reportRejectionCount} times; last problems: ${reportRejectedProblems.join("; ")}${noteSuffix}`,
       };
     }
     return { kind: "reject_report", problems: reportRejectedProblems };

@@ -25,6 +25,8 @@ const def = (overrides: Record<string, unknown>) => {
     sendFailureCount: 0,
     reportRejectionCount: 0,
     reportRejectionParkAt: 3,
+    promoted: false,
+    promoteAtCap: true,
     ladder: 0,
     ladderRotateAt: 4,
     ladderParkAt: 10,
@@ -117,9 +119,36 @@ test("evaluateTurn: branch 4 — under cap returns reject_report", () => {
 });
 
 test("evaluateTurn: branch 4 — at cap returns terminal failed", () => {
+  // Promoted run that already spent its promotion — terminal fallback
   const facts = def({
     reportRejectionCount: 3,
     reportRejectionParkAt: 3,
+    promoted: true,
+    bridgeIntents: [{ kind: "report-rejected", problems: ["ts error"] }],
+  });
+  const result = run(facts);
+  assert.strictEqual(result.kind, "terminal");
+  assert.strictEqual(result.status, "failed");
+  assert.ok(result.note?.includes("report rejected 3 times"));
+  assert.ok(result.note?.includes("after promotion to the strong model"));
+});
+
+test("evaluateTurn: branch 4 — at cap with promotion available returns promote_rejection", () => {
+  const facts = def({
+    reportRejectionCount: 3,
+    reportRejectionParkAt: 3,
+    promoteAtCap: true,
+    bridgeIntents: [{ kind: "report-rejected", problems: ["ts error"] }],
+  });
+  const result = run(facts);
+  assert.strictEqual(result.kind, "promote_rejection");
+});
+
+test("evaluateTurn: branch 4 — at cap with promoteAtCap=false returns terminal failed", () => {
+  const facts = def({
+    reportRejectionCount: 3,
+    reportRejectionParkAt: 3,
+    promoteAtCap: false,
     bridgeIntents: [{ kind: "report-rejected", problems: ["ts error"] }],
   });
   const result = run(facts);

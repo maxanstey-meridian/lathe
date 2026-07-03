@@ -647,6 +647,8 @@ export const turnLoop = async (
       sendFailureCount: sendFailures,
       reportRejectionCount: channel.reportRejectionCount,
       reportRejectionParkAt: config.thresholds.reportRejectionParkAt,
+      promoted,
+      promoteAtCap: config.thresholds.promoteAtCap,
       ladder,
       ladderRotateAt: config.thresholds.ladderRotateAt,
       ladderParkAt: config.thresholds.ladderParkAt,
@@ -697,6 +699,42 @@ export const turnLoop = async (
 
       case "reject_report":
         next = { name: "Q7", text: q7ReportRejected(decision.problems) };
+        continue;
+
+      case "promote_rejection":
+        // Promotion: mechanical-floor structural check rejected the report
+        // reportRejectionParkAt times. Swap to the promoteTo model and give
+        // baby one more set of retries. Ephemeral — the next run starts fresh
+        // on baby's normal model. Only fires once per run.
+        promoted = true;
+        babyModel = promotedModelConfig(config);
+        channel.reportRejectionCount = 0;
+        const pm = store.readMetaIfExists(runId);
+        if (pm) {
+          store.writeMeta({ ...pm, promoted: true, updatedAt: clock.nowIso() });
+        }
+        journal(ports, runId, turn, {
+          event: "model_promoted",
+          from: `${config.baby.providerId}/${config.baby.modelId}`,
+          to: promotedModelLabel(config),
+        });
+        const {
+          seed: reseed,
+          needsReconciliation,
+          handoffInjected,
+        } = reseedFromCheckpoint(ports, packet, worktree);
+        sessionId = await rotateSession(
+          ports,
+          packet,
+          worktree,
+          sessionId,
+          turn,
+          needsReconciliation,
+        );
+        next = reseed;
+        if (handoffInjected) {
+          channel.awaitingVerification = true;
+        }
         continue;
 
       case "run_consult": {

@@ -442,13 +442,54 @@ export class SqliteStoreAdapter implements Store {
   listQueue(): QueueEntry[] {
     return this.db
       .prepare(
-        "SELECT run_id, meta FROM runs WHERE json_extract(meta, '$.status') = 'queued' ORDER BY run_id",
+        "SELECT run_id, meta FROM runs WHERE json_extract(meta, '$.status') = 'queued' ORDER BY CASE WHEN json_extract(meta, '$.attempt') > 1 THEN 0 ELSE 1 END, run_id",
       )
       .all()
       .map((r) => {
         const meta = RunMetaSchema.parse(JSON.parse(String(r.meta)));
         return { runId: meta.runId, admittedAt: meta.updatedAt };
       });
+  }
+
+  claimNextQueuedRun(
+    excludedRepos: string[],
+    seams?: { beforeUpdate?: (runId: string) => void },
+  ): QueueEntry | undefined {
+    // Build the SELECT with optional repo exclusion.
+    let selectSql = "SELECT run_id, meta FROM runs WHERE json_extract(meta, '$.status') = 'queued'";
+    if (excludedRepos.length > 0) {
+      const placeholders = excludedRepos.map(() => "?").join(", ");
+      selectSql += ` AND json_extract(meta, '$.repo') NOT IN (${placeholders})`;
+    }
+    selectSql +=
+      " ORDER BY CASE WHEN json_extract(meta, '$.attempt') > 1 THEN 0 ELSE 1 END, run_id LIMIT 1";
+
+    // CAS retry loop: pick a candidate, attempt conditional UPDATE, retry if another worker snatched it.
+    const bindArgs = excludedRepos.length > 0 ? excludedRepos : [];
+    for (;;) {
+      const row = this.db.prepare(selectSql).all(...bindArgs) as {
+        run_id: string;
+        meta: string;
+      }[];
+      if (row.length === 0) {
+        return undefined;
+      }
+
+      const runId = row.at(0)!.run_id;
+      seams?.beforeUpdate?.(runId);
+      const nowIso = this.clock.nowIso();
+      const result = this.db
+        .prepare(
+          "UPDATE runs SET meta = json_set(meta, '$.status', 'running', '$.updatedAt', ?) WHERE run_id = ? AND json_extract(meta, '$.status') = 'queued'",
+        )
+        .run(nowIso, runId);
+
+      if (result.changes === 1) {
+        const meta = this.readMeta(runId);
+        return { runId: meta.runId, admittedAt: meta.updatedAt };
+      }
+      // changes === 0: another worker claimed it — retry loop.
+    }
   }
 
   admitQueue(runId: string, raw: string): void {

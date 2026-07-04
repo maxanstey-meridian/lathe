@@ -1,5 +1,5 @@
 import { deepEqual, equal, strictEqual, ok, match, rejects } from "node:assert";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -606,10 +606,187 @@ verification:
   store.admitQueue("20260101-000000-fresh", packet);
   const entries = store.listQueue();
   strictEqual(entries.length, 2);
-  // Lexical order: 'f' < 'r'
+  // Lexical order: 'f' < 'r' (both attempt=1, so run_id sorts lexically)
   equal(entries[0].runId, "20260101-000000-fresh");
   ok(entries[0].admittedAt);
   equal(entries[1].runId, runId);
+  await cleanTemp(tmp);
+});
+
+test("store: listQueue returns requeued runs (attempt>1) before fresh runs", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-qlist-requeue-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  // Fresh runs (attempt=1)
+  store.admitQueue("20260101-000000-fresh-a", makeTestPacket().raw);
+  store.admitQueue("20260101-000000-fresh-b", makeTestPacket({ repo: "/tmp/other-repo" }).raw);
+  // Requeued run (attempt=2) — should be first
+  const requeuedMeta = {
+    runId: "20260101-000000-requeued",
+    status: "queued" as const,
+    attempt: 2,
+    repo: "/tmp/r",
+    base: "main",
+    branch: "b",
+    worktree: join(tmp, "w"),
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    reviewerUnreachable: 0,
+    promoted: false,
+    updatedAt: clock.nowIso(),
+  };
+  store.writeMeta(requeuedMeta);
+  const entries = store.listQueue();
+  strictEqual(entries.length, 3);
+  // Requeued (attempt=2) comes first despite run_id ordering
+  equal(entries[0].runId, "20260101-000000-requeued");
+  // Fresh runs sorted lexically after
+  equal(entries[1].runId, "20260101-000000-fresh-a");
+  equal(entries[2].runId, "20260101-000000-fresh-b");
+  await cleanTemp(tmp);
+});
+
+test("store: claimNextQueuedRun returns one run and marks it running", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-claim-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const packet = makeTestPacket();
+  store.admitQueue("20260101-000000-run-a", packet.raw);
+  strictEqual(store.listQueue().length, 1);
+  const claimed = store.claimNextQueuedRun([]);
+  ok(claimed, "should claim a run");
+  equal(claimed!.runId, "20260101-000000-run-a");
+  // Run is now running — listQueue should be empty
+  strictEqual(store.listQueue().length, 0);
+  // Meta should show status: running
+  const meta = store.readMeta("20260101-000000-run-a");
+  equal(meta.status, "running");
+  await cleanTemp(tmp);
+});
+
+test("store: claimNextQueuedRun second call returns undefined when queue empty", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-claim-dup-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  store.admitQueue("20260101-000000-run-a", makeTestPacket().raw);
+  const first = store.claimNextQueuedRun([]);
+  ok(first, "first claim should succeed");
+  const second = store.claimNextQueuedRun([]);
+  strictEqual(second, undefined, "second claim should return undefined");
+  await cleanTemp(tmp);
+});
+
+test("store: claimNextQueuedRun skips excluded repos", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-claim-excl-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  store.admitQueue("20260101-000000-run-a", makeTestPacket().raw);
+  const metaB = {
+    runId: "20260101-000000-run-b",
+    status: "queued" as const,
+    attempt: 1,
+    repo: "/tmp/other-repo",
+    base: "main",
+    branch: "b",
+    worktree: join(tmp, "run-b", "worktree"),
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    reviewerUnreachable: 0,
+    promoted: false,
+    updatedAt: clock.nowIso(),
+  };
+  mkdirSync(join(tmp, "run-b", "worktree"), { recursive: true });
+  store.writeMeta(metaB);
+  // Exclude repo-a — should get repo-b
+  const claimed = store.claimNextQueuedRun(["/tmp/test-repo"]);
+  ok(claimed, "should claim the non-excluded run");
+  equal(claimed!.runId, "20260101-000000-run-b");
+  await cleanTemp(tmp);
+});
+
+test("store: claimNextQueuedRun claims requeued (attempt>1) before fresh", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-claim-prio-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  // Fresh runs
+  store.admitQueue("20260101-000000-fresh-a", makeTestPacket().raw);
+  store.admitQueue("20260101-000000-fresh-b", makeTestPacket({ repo: "/tmp/other-repo" }).raw);
+  // Requeued run
+  const requeuedMeta = {
+    runId: "20260101-000000-requeued",
+    status: "queued" as const,
+    attempt: 3,
+    repo: "/tmp/r",
+    base: "main",
+    branch: "b",
+    worktree: join(tmp, "w"),
+    stallRetries: 2,
+    crashRetries: 0,
+    reorientRetries: 0,
+    reviewerUnreachable: 0,
+    promoted: false,
+    updatedAt: clock.nowIso(),
+  };
+  store.writeMeta(requeuedMeta);
+  // Claim should pick requeued first
+  const claimed = store.claimNextQueuedRun([]);
+  ok(claimed, "should claim requeued run first");
+  equal(claimed!.runId, "20260101-000000-requeued");
+  // Next claim should pick a fresh run
+  const next = store.claimNextQueuedRun([]);
+  ok(next, "should claim a fresh run next");
+  equal(next!.runId, "20260101-000000-fresh-a");
+  await cleanTemp(tmp);
+});
+
+test("store: claimNextQueuedRun retries when first candidate loses CAS race", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-claim-retry-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  // Queue two runs: run-a and run-b (both /tmp/test-repo, run-a sorts first).
+  store.admitQueue("20260101-000000-run-a", makeTestPacket().raw);
+  const metaB = {
+    runId: "20260101-000000-run-b",
+    status: "queued" as const,
+    attempt: 1,
+    repo: "/tmp/test-repo",
+    base: "main",
+    branch: "b",
+    worktree: join(tmp, "run-b", "worktree"),
+    updatedAt: clock.nowIso(),
+  };
+  mkdirSync(join(tmp, "run-b", "worktree"), { recursive: true });
+  store.writeMeta(metaB);
+  strictEqual(store.listQueue().length, 2);
+
+  let beforeUpdateCalledWith: string | undefined;
+  const claimed = store.claimNextQueuedRun([], {
+    beforeUpdate: (runId) => {
+      if (beforeUpdateCalledWith === undefined) {
+        beforeUpdateCalledWith = runId;
+      }
+      if (runId !== "20260101-000000-run-a") {
+        return;
+      }
+      // Flip the selected candidate to 'running' so the conditional UPDATE
+      // (WHERE status = 'queued') returns changes === 0, triggering the retry.
+      const m = store.readMeta(runId);
+      store.writeMeta({ ...m, status: "running" as const, updatedAt: clock.nowIso() });
+    },
+  });
+
+  ok(claimed, "should claim a run after retry");
+  equal(claimed!.runId, "20260101-000000-run-b", "should return the second run after CAS loss");
+  equal(
+    beforeUpdateCalledWith,
+    "20260101-000000-run-a",
+    "should have called beforeUpdate for the first candidate that lost the race",
+  );
+  // run-a remains 'running', run-b is now 'running'.
+  equal(store.readMeta("20260101-000000-run-a").status, "running");
+  equal(store.readMeta("20260101-000000-run-b").status, "running");
   await cleanTemp(tmp);
 });
 

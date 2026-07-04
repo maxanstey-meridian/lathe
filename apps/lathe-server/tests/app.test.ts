@@ -253,6 +253,8 @@ const makeAcceptSupervisor = (meta: RunMeta, currentBranch: string, isDirty = fa
       metaStore.set(next.runId, next);
     },
     readConvergence: (_runId: string): Array<{ kind: string; primary?: { verdict: string } }> => [],
+    listActiveRuns: () => [],
+    listActiveConvergences: () => [],
   };
   const repo = {
     headBranch: (_repoPath: string): string => currentBranch,

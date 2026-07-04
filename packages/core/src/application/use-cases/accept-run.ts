@@ -74,6 +74,17 @@ export const acceptRun = (
     return 1;
   }
 
+  // 3b. Repo affinity guard: refuse if another run or convergence is active on this repo.
+  const activeRepos = [
+    ...store.listActiveRuns().map((r) => store.readMetaIfExists(r.runId)?.repo),
+    ...store.listActiveConvergences().map((c) => store.readMetaIfExists(c.runId)?.repo),
+  ].filter((r): r is string => r !== undefined);
+
+  if (activeRepos.includes(meta.repo)) {
+    console.error(`repo ${meta.repo} has an active run or convergence — refuse accept`);
+    return 1;
+  }
+
   // 4. Fetch the run branch into the source repo (clone refs are local to the
   // sandbox — the merge can't resolve without fetching). Force-fetch to always
   // pull the sandbox tip, avoiding a stale local ref from a prior convergence fetch.

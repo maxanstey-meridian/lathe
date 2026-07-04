@@ -6,6 +6,7 @@ import { test } from "node:test";
 import type { BridgePort } from "../src/application/ports/bridge.js";
 import type { Clock } from "../src/application/ports/clock.js";
 import type { Repo } from "../src/application/ports/repo.js";
+import type { Store } from "../src/application/ports/store.js";
 import {
   recoverOrphanedRuns,
   recoverStalledRun,
@@ -18,7 +19,7 @@ import {
 import { makePaths } from "../src/config/paths.js";
 import { Config } from "../src/config/schemas.js";
 import { decideCrashRecovery } from "../src/domain/liveness.js";
-import type { RunMeta } from "../src/domain/run.js";
+import type { ActiveConvergence, ActiveRun, RunMeta } from "../src/domain/run.js";
 import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 
 // ---------------------------------------------------------------------------
@@ -861,19 +862,6 @@ test("runLoop crash path clears active run pointer on executeRun throw", () => {
       }),
     );
 
-    // Also seed an active run — the crash path should clear this
-    store.addActiveRun({
-      runId,
-      runDir: join(tmp, "runs", runId),
-      worktree: join(tmp, "runs", runId, "worktree"),
-      babySessionId: "test-session",
-      startedAt: clock.nowIso(),
-    });
-
-    // Verify the active run was added
-    equal(store.listActiveRuns().length, 1);
-    equal(store.listActiveRuns()[0].runId, runId);
-
     // stopSignal is passed but NOT aborted — this keeps stopRequested=false
     // so the crash path's removeActiveRun executes. waitForWork aborts it
     // after a tick to exit the loop.
@@ -886,8 +874,16 @@ test("runLoop crash path clears active run pointer on executeRun throw", () => {
     };
 
     let executeRunCalls = 0;
-    const executeRun: ExecuteRunCallback = async () => {
+    const executeRun: ExecuteRunCallback = async (runIdArg) => {
       executeRunCalls++;
+      // Simulate what real executeRun does before crashing: set the active run.
+      store.addActiveRun({
+        runId: runIdArg,
+        runDir: join(tmp, "runs", runIdArg),
+        worktree: join(tmp, "runs", runIdArg, "worktree"),
+        babySessionId: "test-session",
+        startedAt: clock.nowIso(),
+      });
       throw new Error("crash boom");
     };
 
@@ -913,5 +909,200 @@ test("runLoop crash path clears active run pointer on executeRun throw", () => {
     ok(executeRunCalls > 0);
     deepEqual(store.listActiveRuns(), []);
     await cleanTemp(tmp);
+  })();
+});
+
+// ---------------------------------------------------------------------------
+// runLoop: repo-affinity wiring — excludedRepos from active runs + convergences
+
+test("runLoop: excludedRepos is built from listActiveRuns and listActiveConvergences", () => {
+  return (async () => {
+    const clock = fixedClock();
+
+    let capturedExcludedRepos: string[] = [];
+
+    const mockStore: Store = {
+      // Startup recovery sweeps — empty, so no ops.
+      listRunIds: () => [],
+      readMetaIfExists: (runId) => {
+        if (runId === "20260101-000000-active-a") {
+          return {
+            runId: "20260101-000000-active-a",
+            status: "running" as const,
+            attempt: 1,
+            repo: "/tmp/active-repo",
+            base: "main",
+            branch: "b",
+            worktree: "/tmp/worktree/active-a",
+            updatedAt: clock.nowIso(),
+          } as RunMeta;
+        }
+        if (runId === "20260101-000000-converge-x") {
+          return {
+            runId: "20260101-000000-converge-x",
+            status: "running" as const,
+            attempt: 1,
+            repo: "/tmp/convergence-repo",
+            base: "main",
+            branch: "b",
+            worktree: "/tmp/worktree/converge-x",
+            updatedAt: clock.nowIso(),
+          } as RunMeta;
+        }
+        return undefined;
+      },
+      writeMeta: () => {
+        throw new Error("writeMeta should not be called");
+      },
+      listStaged: () => [],
+      readCampaign: () => undefined,
+      listActiveRuns: () => [
+        {
+          runId: "20260101-000000-active-a",
+          runDir: "/tmp/runs/active-a",
+          worktree: "/tmp/worktree/active-a",
+          babySessionId: "sess1",
+          startedAt: clock.nowIso(),
+        } as ActiveRun,
+      ],
+      listActiveConvergences: () => [
+        {
+          runId: "20260101-000000-converge-x",
+          startedAt: clock.nowIso(),
+        } as ActiveConvergence,
+      ],
+      claimNextQueuedRun: (excludedRepos) => {
+        capturedExcludedRepos = [...excludedRepos];
+        // Return undefined so runLoop goes to the wait path.
+        return undefined;
+      },
+      // Unused stubs (not called with stopSignal + empty queue).
+      readMeta: () => {
+        throw new Error("readMeta should not be called");
+      },
+      listMeta: () => [],
+      initialLedger: () => {
+        throw new Error("not called");
+      },
+      readLedger: () => {
+        throw new Error("not called");
+      },
+      writeLedger: () => {
+        throw new Error("not called");
+      },
+      initialReviewState: () => {
+        throw new Error("not called");
+      },
+      readReviewState: () => {
+        throw new Error("not called");
+      },
+      replaceObligations: () => {
+        throw new Error("not called");
+      },
+      appendDecision: () => {
+        throw new Error("not called");
+      },
+      readDecisions: () => [],
+      latestCheckpoint: () => undefined,
+      writeCheckpoint: () => {
+        throw new Error("not called");
+      },
+      nextCheckpointNumber: () => 1,
+      readGateState: () => {
+        throw new Error("not called");
+      },
+      writeGateState: () => {
+        throw new Error("not called");
+      },
+      readReport: () => "",
+      writeReport: () => {
+        throw new Error("not called");
+      },
+      readNits: () => "",
+      writeNits: () => {
+        throw new Error("not called");
+      },
+      appendConvergence: () => {
+        throw new Error("not called");
+      },
+      readConvergence: () => [],
+      addActiveRun: () => {
+        throw new Error("not called");
+      },
+      removeActiveRun: () => {
+        throw new Error("not called");
+      },
+      addActiveConvergence: () => {
+        throw new Error("not called");
+      },
+      removeActiveConvergence: () => {
+        throw new Error("not called");
+      },
+      writeCampaign: () => {
+        throw new Error("not called");
+      },
+      listCampaigns: () => [],
+      listQueue: () => [],
+      admitQueue: () => {
+        throw new Error("not called");
+      },
+      archiveQueue: () => {
+        throw new Error("not called");
+      },
+      readQueuePacket: () => undefined,
+      initMetaFromQueue: () => undefined,
+      readStaged: () => undefined,
+      writeStaged: () => {
+        throw new Error("not called");
+      },
+      removeStaged: () => {
+        throw new Error("not called");
+      },
+      appendJournal: () => {
+        throw new Error("not called");
+      },
+      readJournal: () => [],
+      readJournalSince: () => [],
+      clearResumeArtifacts: () => {
+        throw new Error("not called");
+      },
+    };
+
+    const stopController = new AbortController();
+    const waitForWork = async (_signal: AbortSignal) => {
+      // Abort the signal synchronously to break the loop (runLoop checks
+      // stopRequested after waitForWork returns). This fires after the abort
+      // listener is registered by runLoop, so stopRequested becomes true and
+      // runLoop exits cleanly.
+      stopController.abort();
+    };
+
+    await runLoop(
+      Config.parse({}),
+      mockStore,
+      fakeRepo(),
+      { holdPowerAssertion: async () => {} },
+      clock,
+      {
+        bind: () => Promise.resolve({ current: undefined }),
+        clearActive: () => undefined,
+        close: () => undefined,
+      },
+      async () => {
+        throw new Error("executeRun should not be called — no claim");
+      },
+      async () => {
+        throw new Error("convergeStep should not be called — no claim");
+      },
+      waitForWork,
+      { stopSignal: stopController.signal },
+    );
+
+    // Verify: excludedRepos contains the repos from active runs and active convergences.
+    deepEqual(
+      capturedExcludedRepos.sort(),
+      ["/tmp/active-repo", "/tmp/convergence-repo"].sort(),
+      "excludedRepos should contain repos from active runs and active convergences",
+    );
   })();
 });

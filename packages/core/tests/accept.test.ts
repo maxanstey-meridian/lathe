@@ -202,6 +202,254 @@ describe("acceptRun — refusal", () => {
     const code = acceptRun("20260618-070000-test", undefined, ports);
     equal(code, 1);
   });
+
+  it("refuses when repo has an active run", () => {
+    const meta = makeMeta();
+    const activeRunMeta = {
+      runId: "20260618-080000-active",
+      status: "running" as const,
+      attempt: 1,
+      repo: "/tmp/test-repo",
+      base: "main",
+      branch: "meridian/20260618-080000-active",
+      worktree: "/tmp/runs/20260618-080000-active/worktree",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const store = {
+      readMetaIfExists: (runId: string): ReturnType<typeof makeMeta> | undefined =>
+        runId === meta.runId
+          ? meta
+          : runId === "20260618-080000-active"
+            ? activeRunMeta
+            : undefined,
+      writeMeta: () => {},
+      listRunIds: () => [],
+      listMeta: () => [],
+      initialLedger: () => ({ runId: "fake", outcomes: [], updatedAt: "" }),
+      readLedger: () => ({ runId: "fake", outcomes: [], updatedAt: "" }),
+      writeLedger: () => {},
+      initialReviewState: () => ({ runId: "fake", obligations: [], updatedAt: "" }),
+      readReviewState: () => ({ runId: "fake", obligations: [], updatedAt: "" }),
+      replaceObligations: () => ({ runId: "fake", obligations: [], updatedAt: "" }),
+      appendDecision: () => {},
+      readDecisions: () => [],
+      latestCheckpoint: () => undefined,
+      writeCheckpoint: () => {},
+      nextCheckpointNumber: () => 1,
+      readGateState: () => ({
+        runId: "fake",
+        phase: { phase: "initial" },
+        expectedGlobs: [],
+        suspiciousGlobs: [],
+        baselineDiffStats: {},
+        mutationCommandPatterns: [],
+        updatedAt: "",
+      }),
+      writeGateState: () => {},
+      readReport: () => "",
+      writeReport: () => {},
+      readNits: () => "",
+      writeNits: () => {},
+      appendConvergence: () => {},
+      readConvergence: () => [],
+      listActiveRuns: () => [
+        {
+          runId: "20260618-080000-active",
+          runDir: "/tmp/runs/20260618-080000-active",
+          worktree: "/tmp/runs/20260618-080000-active/worktree",
+          babySessionId: "test-session",
+          startedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      addActiveRun: () => {},
+      removeActiveRun: () => {},
+      listActiveConvergences: () => [],
+      addActiveConvergence: () => {},
+      removeActiveConvergence: () => {},
+      readCampaign: () => undefined,
+      writeCampaign: () => {},
+      listQueue: () => [],
+      admitQueue: () => {},
+      archiveQueue: () => {},
+      claimNextQueuedRun: () => undefined,
+      readQueuePacket: () => undefined,
+      initMetaFromQueue: () => undefined,
+      listStaged: () => [],
+      readStaged: () => undefined,
+      writeStaged: () => {},
+      removeStaged: () => {},
+      appendJournal: () => {},
+      readJournal: () => [],
+    } as unknown as Store;
+    const ports = {
+      store,
+      repo: makeRepo({ currentBranch: "main", isDirty: false }),
+      clock: makeClock(),
+      runsDir: "/tmp/runs",
+    };
+    const code = acceptRun(meta.runId, undefined, ports);
+    equal(code, 1);
+  });
+
+  it("refuses when repo has an active convergence", () => {
+    const meta = makeMeta();
+    const activeConvergenceMeta = {
+      runId: "20260618-090000-converge",
+      status: "running" as const,
+      attempt: 1,
+      repo: "/tmp/test-repo",
+      base: "main",
+      branch: "meridian/20260618-090000-converge",
+      worktree: "/tmp/runs/20260618-090000-converge/worktree",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const store = {
+      readMetaIfExists: (runId: string): ReturnType<typeof makeMeta> | undefined =>
+        runId === meta.runId
+          ? meta
+          : runId === "20260618-090000-converge"
+            ? activeConvergenceMeta
+            : undefined,
+      writeMeta: () => {},
+      listRunIds: () => [],
+      listMeta: () => [],
+      initialLedger: () => ({ runId: "fake", outcomes: [], updatedAt: "" }),
+      readLedger: () => ({ runId: "fake", outcomes: [], updatedAt: "" }),
+      writeLedger: () => {},
+      initialReviewState: () => ({ runId: "fake", obligations: [], updatedAt: "" }),
+      readReviewState: () => ({ runId: "fake", obligations: [], updatedAt: "" }),
+      replaceObligations: () => ({ runId: "fake", obligations: [], updatedAt: "" }),
+      appendDecision: () => {},
+      readDecisions: () => [],
+      latestCheckpoint: () => undefined,
+      writeCheckpoint: () => {},
+      nextCheckpointNumber: () => 1,
+      readGateState: () => ({
+        runId: "fake",
+        phase: { phase: "initial" },
+        expectedGlobs: [],
+        suspiciousGlobs: [],
+        baselineDiffStats: {},
+        mutationCommandPatterns: [],
+        updatedAt: "",
+      }),
+      writeGateState: () => {},
+      readReport: () => "",
+      writeReport: () => {},
+      readNits: () => "",
+      writeNits: () => {},
+      appendConvergence: () => {},
+      readConvergence: () => [],
+      listActiveRuns: () => [],
+      addActiveRun: () => {},
+      removeActiveRun: () => {},
+      listActiveConvergences: () => [
+        { runId: "20260618-090000-converge", startedAt: "2026-01-01T00:00:00.000Z" },
+      ],
+      addActiveConvergence: () => {},
+      removeActiveConvergence: () => {},
+      readCampaign: () => undefined,
+      writeCampaign: () => {},
+      listQueue: () => [],
+      admitQueue: () => {},
+      archiveQueue: () => {},
+      claimNextQueuedRun: () => undefined,
+      readQueuePacket: () => undefined,
+      initMetaFromQueue: () => undefined,
+      listStaged: () => [],
+      readStaged: () => undefined,
+      writeStaged: () => {},
+      removeStaged: () => {},
+      appendJournal: () => {},
+      readJournal: () => [],
+    } as unknown as Store;
+    const ports = {
+      store,
+      repo: makeRepo({ currentBranch: "main", isDirty: false }),
+      clock: makeClock(),
+      runsDir: "/tmp/runs",
+    };
+    const code = acceptRun(meta.runId, undefined, ports);
+    equal(code, 1);
+  });
+
+  it("accepts when active runs have different repos", () => {
+    const meta = makeMeta({ repo: "/tmp/test-repo" });
+    const store = {
+      readMetaIfExists: (runId: string): ReturnType<typeof makeMeta> | undefined =>
+        runId === meta.runId
+          ? meta
+          : runId === "20260618-080000-other"
+            ? { ...makeMeta(), repo: "/tmp/other-repo" }
+            : undefined,
+      writeMeta: () => {},
+      listRunIds: () => [],
+      listMeta: () => [],
+      initialLedger: () => ({ runId: "fake", outcomes: [], updatedAt: "" }),
+      readLedger: () => ({ runId: "fake", outcomes: [], updatedAt: "" }),
+      writeLedger: () => {},
+      initialReviewState: () => ({ runId: "fake", obligations: [], updatedAt: "" }),
+      readReviewState: () => ({ runId: "fake", obligations: [], updatedAt: "" }),
+      replaceObligations: () => ({ runId: "fake", obligations: [], updatedAt: "" }),
+      appendDecision: () => {},
+      readDecisions: () => [],
+      latestCheckpoint: () => undefined,
+      writeCheckpoint: () => {},
+      nextCheckpointNumber: () => 1,
+      readGateState: () => ({
+        runId: "fake",
+        phase: { phase: "initial" },
+        expectedGlobs: [],
+        suspiciousGlobs: [],
+        baselineDiffStats: {},
+        mutationCommandPatterns: [],
+        updatedAt: "",
+      }),
+      writeGateState: () => {},
+      readReport: () => "",
+      writeReport: () => {},
+      readNits: () => "",
+      writeNits: () => {},
+      appendConvergence: () => {},
+      readConvergence: () => [],
+      listActiveRuns: () => [
+        {
+          runId: "20260618-080000-other",
+          runDir: "/tmp/runs/20260618-080000-other",
+          worktree: "/tmp/runs/20260618-080000-other/worktree",
+          babySessionId: "test-session",
+          startedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      addActiveRun: () => {},
+      removeActiveRun: () => {},
+      listActiveConvergences: () => [],
+      addActiveConvergence: () => {},
+      removeActiveConvergence: () => {},
+      readCampaign: () => undefined,
+      writeCampaign: () => {},
+      listQueue: () => [],
+      admitQueue: () => {},
+      archiveQueue: () => {},
+      claimNextQueuedRun: () => undefined,
+      readQueuePacket: () => undefined,
+      initMetaFromQueue: () => undefined,
+      listStaged: () => [],
+      readStaged: () => undefined,
+      writeStaged: () => {},
+      removeStaged: () => {},
+      appendJournal: () => {},
+      readJournal: () => [],
+    } as unknown as Store;
+    const ports = {
+      store,
+      repo: makeRepo({ currentBranch: "main", isDirty: false }),
+      clock: makeClock(),
+      runsDir: "/tmp/runs",
+    };
+    const code = acceptRun(meta.runId, undefined, ports);
+    equal(code, 0);
+  });
 });
 
 describe("acceptRun — success", () => {

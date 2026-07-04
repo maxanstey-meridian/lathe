@@ -111,10 +111,12 @@ export type Store = {
   writeCampaign(campaign: Campaign): void;
   listCampaigns(): Campaign[];
 
-  // Queue (list/admit/archive)
+  // Queue (list/admit/archive/claim)
   listQueue(): QueueEntry[];
   admitQueue(runId: string, raw: string): void;
   archiveQueue(runId: string): void;
+  /** Atomically claim one queued run, excluding active repos. Returns undefined if no eligible runs. */
+  claimNextQueuedRun(excludedRepos: string[]): QueueEntry | undefined;
 
   // Queue packet read — fresh-run raw packet source
   readQueuePacket(runId: string): string | undefined;

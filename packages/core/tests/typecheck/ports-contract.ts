@@ -118,6 +118,7 @@ const _storeContract: Store = {
   listQueue: () => [],
   admitQueue: () => {},
   archiveQueue: () => {},
+  claimNextQueuedRun: () => undefined,
   readQueuePacket: () => undefined,
   initMetaFromQueue: () => undefined,
   listStaged: () => [],

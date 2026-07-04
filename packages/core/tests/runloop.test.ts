@@ -1136,3 +1136,60 @@ test("runLoop: excludedRepos is built from listActiveRuns and listActiveConverge
     );
   })();
 });
+
+// ---------------------------------------------------------------------------
+// Worker-pool: two workers claim different-repo runs concurrently
+// ---------------------------------------------------------------------------
+
+test("runLoop with maxWorkers=2: two workers claim different-repo runs", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "runloop-two-workers-"));
+    const clock = fixedClock();
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+    // Seed 2 queued runs with different repos.
+    store.writeMeta(
+      makeMeta({ runId: "20260101-000000-repo-a", status: "queued" as const, repo: "/tmp/repo-a" }),
+    );
+    store.writeMeta(
+      makeMeta({ runId: "20260101-000000-repo-b", status: "queued" as const, repo: "/tmp/repo-b" }),
+    );
+
+    let executeRunCallCount = 0;
+    const stopController = new AbortController();
+    const executeRun: ExecuteRunCallback = async (runId, meta, ref, clock) => {
+      executeRunCallCount++;
+      const m = store.readMeta(runId);
+      store.writeMeta({ ...m, status: "accepted" as const, updatedAt: clock.nowIso() });
+      if (executeRunCallCount >= 2) {
+        stopController.abort();
+      }
+    };
+
+    const waitForWork: WaitForWorkCallback = async () => {};
+
+    const convergeStep: ConvergeCallback = async () => {};
+
+    const bridge: BridgePort = {
+      bind: () => Promise.resolve({ byRunId: new Map() }),
+      clearActive: (_ref, _runId) => undefined,
+      close: () => undefined,
+    };
+
+    await runLoop(
+      Config.parse({ concurrency: { maxWorkers: 2 } }),
+      store,
+      fakeRepo(),
+      { holdPowerAssertion: async () => {} },
+      clock,
+      bridge,
+      executeRun,
+      convergeStep,
+      waitForWork,
+      { stopSignal: stopController.signal },
+    );
+
+    strictEqual(executeRunCallCount, 2, "both runs should be claimed and executed");
+    await cleanTemp(tmp);
+  })();
+});

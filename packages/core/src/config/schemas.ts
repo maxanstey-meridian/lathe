@@ -175,6 +175,11 @@ export const Config = z.object({
   // idleTimeoutMs of silence (no data chunks). Matches the headerTimeoutMs
   // pattern at line 60 (z.union with false to disable for diagnosis).
   idleTimeoutMs: z.union([z.number().int(), z.literal(false)]).default(120_000),
+  concurrency: z
+    .object({
+      maxWorkers: z.number().int().min(1).default(1),
+    })
+    .default({}),
   daemon: z
     .object({
       host: z.string().default("127.0.0.1"),

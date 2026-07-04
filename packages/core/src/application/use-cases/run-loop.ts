@@ -21,6 +21,7 @@ import type { Caffeinate } from "../ports/caffeinate.js";
 import type { Clock } from "../ports/clock.js";
 import type { Repo } from "../ports/repo.js";
 import type { Store } from "../ports/store.js";
+import type { QueueEntry } from "../ports/store.js";
 import { promoteStaged } from "./chain-promotion.js";
 import { journal } from "./run-runtime.js";
 import { promotedModelLabel } from "./turn-loop.js";
@@ -90,7 +91,6 @@ export const runLoop = async <Ref>(
   const abortMap = seams?.abortMap ?? new Map<string, AbortController>();
 
   let stopRequested = false;
-  let currentAbort: AbortController | undefined;
   let onSigint: (() => void) | undefined;
 
   // When an external stopSignal is provided (supervisor-owned), do NOT register
@@ -110,12 +110,52 @@ export const runLoop = async <Ref>(
         process.exit(130);
       }
       stopRequested = true;
-      currentAbort?.abort();
+      waitController.abort();
+      for (const [, ac] of abortMap) {
+        ac.abort();
+      }
     };
     process.on("SIGINT" as NodeJS.Signals, onSigint);
   }
 
+  // Shared wait controller for non-supervisor path — created once so all workers
+  // share the same signal. SIGINT aborts it to wake all waiting workers.
+  const waitController = new AbortController();
+
+  // Convergence mutex: serialise convergeStep calls so only one runs at a time
+  // across all workers.
+  let convergenceChain: Promise<void> = Promise.resolve();
+  const serializeConvergence = (runId: string): Promise<void> => {
+    const next = convergenceChain.then(() => convergeStep(runId));
+    convergenceChain = next.catch(() => {});
+    return next;
+  };
+
+  const maxWorkers = config.concurrency.maxWorkers;
+  const workers = Array.from({ length: maxWorkers }, () => workerLoop());
+
   try {
+    await Promise.all(workers);
+  } finally {
+    // Cleanup: release the power assertion, close the bridge server.
+    if (!seams?.stopSignal) {
+      process.off("SIGINT" as NodeJS.Signals, onSigint!);
+    }
+    // Abort any in-flight per-run controller (e.g. a run still executing
+    // when stopSignal fires). The supervisor itself fires per-run controllers
+    // via abortMap for the explicit stopRun path.
+    for (const [, ac] of abortMap) {
+      ac.abort();
+    }
+    abortMap.clear();
+    bridge.close();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Worker loop — each worker independently claims, executes, and converges runs.
+  // ---------------------------------------------------------------------------
+
+  async function workerLoop(): Promise<void> {
     while (!stopRequested) {
       // Drain the queue using atomic claim with repo affinity (F2: requeued runs claimed first).
       const excludedRepos = [
@@ -125,155 +165,131 @@ export const runLoop = async <Ref>(
 
       const claimed = store.claimNextQueuedRun(excludedRepos);
       if (!claimed) {
-        // No eligible run — wait for new work.
-      } else {
-        const { runId } = claimed;
-
-        const meta = store.readMeta(runId);
+        // No eligible run — wait for new work (fs.watch + poll fallback).
+        // When stopSignal is provided (supervisor-owned), use it; otherwise
+        // SIGINT aborts via the shared waitController.
+        const waitSignal = seams?.stopSignal ?? waitController.signal;
 
         try {
-          const runAbort = new AbortController();
-          abortMap.set(runId, runAbort);
-          await executeRun(
-            runId,
-            {
-              repo: meta.repo,
-              worktree: meta.worktree,
-              base: meta.base,
-              branch: meta.branch,
-            },
-            ref,
-            clock,
-            runAbort.signal,
-          );
-          abortMap.delete(runId);
+          await waitForWork(waitSignal);
         } catch (err: unknown) {
-          // A crash: clear the active run pointer so it doesn't leak onto the
-          // next queued run (X1). ^C-during-run is not a crash.
-          if (!stopRequested) {
-            store.removeActiveRun(runId);
+          // AbortError from signal.abort() is expected; swallow it.
+          if ((err as Error)?.name !== "AbortError") {
+            throw err;
           }
-          // ^C-during-run is NOT a crash. A SIGINT tears down the opencode server,
-          // which fails the in-flight turn send with a connection error that lands
-          // right here — but the user asked to stop: leave the run RESUMABLE.
-          if (stopRequested) {
-            if (store.readMetaIfExists(runId)?.worktree) {
-              repo.wipCommit(
-                store.readMetaIfExists(runId)!.worktree,
-                `lathe: WIP ${runId} [interrupted]`,
-              );
-            }
-            store.writeMeta({
-              ...store.readMeta(runId),
-              status: "queued" as const,
-              updatedAt: clock.nowIso(),
-            });
-            break;
-          }
-
-          // A real crash: consult the bounded crash-recovery decision.
-          // Requeue under the cap (front of the line), escalate at the cap.
-          const message = err instanceof Error ? err.message : String(err);
-          const crashMeta = store.readMeta(runId);
-          const crashedMeta = {
-            ...crashMeta,
-            status: "blocked" as const,
-            blockedReason: "crashed" as const,
-            blockedQuestion: `Driver-level failure: ${message}. See journal and opencode-serve.log.`,
-            updatedAt: clock.nowIso(),
-          };
-          store.writeMeta(crashedMeta);
-          const crashDecision = decideCrashRecovery(crashedMeta, config.thresholds.maxCrashRetries);
-          if (crashDecision.action === "requeue") {
-            if (crashMeta.worktree) {
-              repo.wipCommit(crashMeta.worktree, `lathe: WIP ${runId} [crashed]`);
-            }
-            store.writeMeta({
-              ...crashedMeta,
-              status: "queued" as const,
-              crashRetries: crashDecision.crashRetries,
-              blockedReason: undefined,
-              blockedQuestion: undefined,
-              updatedAt: clock.nowIso(),
-            });
-            continue;
-          }
-
-          // Cap reached (or none — meta no longer crashed, fall through) — escalate to Max.
-          const crashCount =
-            crashDecision.action === "none"
-              ? (crashedMeta.crashRetries ?? 0)
-              : crashDecision.crashRetries;
-          store.writeMeta({
-            ...crashedMeta,
-            status: "blocked" as const,
-            blockedReason: "crashed" as const,
-            blockedQuestion: `Driver-level failure: ${message}. Crash retry cap hit (${crashCount}). See journal and opencode-serve.log.`,
-            updatedAt: clock.nowIso(),
-          });
-          if (crashMeta.worktree) {
-            repo.wipCommit(crashMeta.worktree, `lathe: WIP ${runId} [crashed]`);
-          }
-          continue;
         }
+        continue;
+      }
 
-        // Read terminal status from meta (executeRun writes it).
-        const terminalMeta = store.readMeta(runId);
-        const status = terminalMeta.status;
+      await processClaimedRun(claimed);
+    }
+  }
 
-        // Handle terminal statuses.
-        if (status === "blocked") {
-          // R10: wedged runs recover immediately.
-          if (terminalMeta.blockedReason === "wedged") {
-            const stall = recoverStalledRun(
-              store,
-              runId,
-              config.thresholds.maxStallRetries,
-              clock,
-              config.thresholds.promoteAtCap,
-            );
-            if (stall.action === "promote") {
-              journal({ store, clock }, runId, 0, {
-                event: "model_promoted",
-                from: `${config.baby.providerId}/${config.baby.modelId}`,
-                to: promotedModelLabel(config),
-              });
-            }
-          }
-          // R6: a blocked run parks and driver moves on.
-          if (terminalMeta.worktree) {
-            repo.wipCommit(terminalMeta.worktree, `lathe: WIP ${runId} [${status}]`);
-          }
-          continue;
+  // ---------------------------------------------------------------------------
+  // processClaimedRun — single-run claim lifecycle extracted from the old while
+  // loop body. Returns when done; the worker loop continues naturally.
+  // ---------------------------------------------------------------------------
+
+  async function processClaimedRun(claimed: QueueEntry): Promise<void> {
+    const { runId } = claimed;
+
+    const meta = store.readMeta(runId);
+
+    try {
+      const runAbort = new AbortController();
+      abortMap.set(runId, runAbort);
+      await executeRun(
+        runId,
+        {
+          repo: meta.repo,
+          worktree: meta.worktree,
+          base: meta.base,
+          branch: meta.branch,
+        },
+        ref,
+        clock,
+        runAbort.signal,
+      );
+      abortMap.delete(runId);
+    } catch (err: unknown) {
+      abortMap.delete(runId);
+      // A crash: clear the active run pointer so it doesn't leak onto the
+      // next queued run (X1). ^C-during-run is not a crash.
+      if (!stopRequested) {
+        store.removeActiveRun(runId);
+      }
+      // ^C-during-run is NOT a crash. A SIGINT tears down the opencode server,
+      // which fails the in-flight turn send with a connection error that lands
+      // right here — but the user asked to stop: leave the run RESUMABLE.
+      if (stopRequested) {
+        if (store.readMetaIfExists(runId)?.worktree) {
+          repo.wipCommit(
+            store.readMetaIfExists(runId)!.worktree,
+            `lathe: WIP ${runId} [interrupted]`,
+          );
         }
+        store.writeMeta({
+          ...store.readMeta(runId),
+          status: "queued" as const,
+          updatedAt: clock.nowIso(),
+        });
+        return;
+      }
 
-        if (status === "failed") {
-          if (terminalMeta.worktree) {
-            repo.wipCommit(terminalMeta.worktree, `lathe: WIP ${runId} [${status}]`);
-          }
-          continue;
+      // A real crash: consult the bounded crash-recovery decision.
+      // Requeue under the cap (front of the line), escalate at the cap.
+      const message = err instanceof Error ? err.message : String(err);
+      const crashMeta = store.readMeta(runId);
+      const crashedMeta = {
+        ...crashMeta,
+        status: "blocked" as const,
+        blockedReason: "crashed" as const,
+        blockedQuestion: `Driver-level failure: ${message}. See journal and opencode-serve.log.`,
+        updatedAt: clock.nowIso(),
+      };
+      store.writeMeta(crashedMeta);
+      const crashDecision = decideCrashRecovery(crashedMeta, config.thresholds.maxCrashRetries);
+      if (crashDecision.action === "requeue") {
+        if (crashMeta.worktree) {
+          repo.wipCommit(crashMeta.worktree, `lathe: WIP ${runId} [crashed]`);
         }
+        store.writeMeta({
+          ...crashedMeta,
+          status: "queued" as const,
+          crashRetries: crashDecision.crashRetries,
+          blockedReason: undefined,
+          blockedQuestion: undefined,
+          updatedAt: clock.nowIso(),
+        });
+        return;
+      }
 
-        if (status === "stopped") {
-          if (terminalMeta.worktree) {
-            repo.wipCommit(terminalMeta.worktree, `lathe: WIP ${runId} [${status}]`);
-          }
-          continue;
-        }
+      // Cap reached (or none — meta no longer crashed, fall through) — escalate to Max.
+      const crashCount =
+        crashDecision.action === "none"
+          ? (crashedMeta.crashRetries ?? 0)
+          : crashDecision.crashRetries;
+      store.writeMeta({
+        ...crashedMeta,
+        status: "blocked" as const,
+        blockedReason: "crashed" as const,
+        blockedQuestion: `Driver-level failure: ${message}. Crash retry cap hit (${crashCount}). See journal and opencode-serve.log.`,
+        updatedAt: clock.nowIso(),
+      });
+      if (crashMeta.worktree) {
+        repo.wipCommit(crashMeta.worktree, `lathe: WIP ${runId} [crashed]`);
+      }
+      return;
+    }
 
-        if (status === "ready_for_review" || status === "accepted") {
-          // Run completed — continue to convergence.
-        } else {
-          // Unexpected status — treat as park.
-          if (terminalMeta.worktree) {
-            repo.wipCommit(terminalMeta.worktree, `lathe: WIP ${runId} [${status}]`);
-          }
-          continue;
-        }
+    // Read terminal status from meta (executeRun writes it).
+    const terminalMeta = store.readMeta(runId);
+    const status = terminalMeta.status;
 
-        // Post-run steps: convergence, chain promotion, stall recovery.
-        await convergeStep(runId);
-        promoteStaged(store, repo);
+    // Handle terminal statuses.
+    if (status === "blocked") {
+      // R10: wedged runs recover immediately.
+      if (terminalMeta.blockedReason === "wedged") {
         const stall = recoverStalledRun(
           store,
           runId,
@@ -288,49 +304,58 @@ export const runLoop = async <Ref>(
             to: promotedModelLabel(config),
           });
         }
-
-        // Clear the bridge context so the next run starts fresh.
-        bridge.clearActive(ref, runId);
-        continue;
       }
-
-      // Queue empty — wait for new work (fs.watch + poll fallback).
-      // When stopSignal is provided (supervisor-owned), use it; otherwise
-      // SIGINT aborts via the mutable currentAbort.
-      let waitSignal: AbortSignal;
-      if (seams?.stopSignal) {
-        waitSignal = seams.stopSignal;
-      } else {
-        currentAbort = new AbortController();
-        waitSignal = currentAbort.signal;
+      // R6: a blocked run parks and driver moves on.
+      if (terminalMeta.worktree) {
+        repo.wipCommit(terminalMeta.worktree, `lathe: WIP ${runId} [${status}]`);
       }
-
-      try {
-        await waitForWork(waitSignal);
-      } catch (err: unknown) {
-        // AbortError from signal.abort() is expected; swallow it.
-        if ((err as Error)?.name !== "AbortError") {
-          throw err;
-        }
-      }
-
-      if (stopRequested) {
-        break;
-      }
+      return;
     }
-  } finally {
-    // Cleanup: release the power assertion, close the bridge server.
-    if (!seams?.stopSignal) {
-      process.off("SIGINT" as NodeJS.Signals, onSigint!);
+
+    if (status === "failed") {
+      if (terminalMeta.worktree) {
+        repo.wipCommit(terminalMeta.worktree, `lathe: WIP ${runId} [${status}]`);
+      }
+      return;
     }
-    // Abort any in-flight per-run controller (e.g. a run still executing
-    // when stopSignal fires). The supervisor itself fires per-run controllers
-    // via abortMap for the explicit stopRun path.
-    for (const [, ac] of abortMap) {
-      ac.abort();
+
+    if (status === "stopped") {
+      if (terminalMeta.worktree) {
+        repo.wipCommit(terminalMeta.worktree, `lathe: WIP ${runId} [${status}]`);
+      }
+      return;
     }
-    abortMap.clear();
-    bridge.close();
+
+    if (status === "ready_for_review" || status === "accepted") {
+      // Run completed — continue to convergence.
+    } else {
+      // Unexpected status — treat as park.
+      if (terminalMeta.worktree) {
+        repo.wipCommit(terminalMeta.worktree, `lathe: WIP ${runId} [${status}]`);
+      }
+      return;
+    }
+
+    // Post-run steps: convergence, chain promotion, stall recovery.
+    await serializeConvergence(runId);
+    promoteStaged(store, repo);
+    const stall = recoverStalledRun(
+      store,
+      runId,
+      config.thresholds.maxStallRetries,
+      clock,
+      config.thresholds.promoteAtCap,
+    );
+    if (stall.action === "promote") {
+      journal({ store, clock }, runId, 0, {
+        event: "model_promoted",
+        from: `${config.baby.providerId}/${config.baby.modelId}`,
+        to: promotedModelLabel(config),
+      });
+    }
+
+    // Clear the bridge context so the next run starts fresh.
+    bridge.clearActive(ref, runId);
   }
 };
 

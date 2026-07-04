@@ -30,7 +30,7 @@ const parseJson = (s: string): Obj => JSON.parse(s) as Obj;
 
 const resolveRunId = (db: DatabaseSync, runId: string | undefined): string | null => {
   if (runId) return runId;
-  const row = db.prepare("SELECT run FROM active_run WHERE key = '1'").get() as
+  const row = db.prepare("SELECT run FROM active_run ORDER BY run_id LIMIT 1").get() as
     | { run: string }
     | undefined;
   if (!row) return null;
@@ -381,10 +381,10 @@ const dbQueue = (env: CliEnv, db: DatabaseSync, _args: string[], jsonMode: boole
 };
 
 const dbActive = (env: CliEnv, db: DatabaseSync, _args: string[], jsonMode: boolean): number => {
-  const runRow = db.prepare("SELECT run FROM active_run WHERE key = '1'").get() as
+  const runRow = db.prepare("SELECT run FROM active_run ORDER BY run_id LIMIT 1").get() as
     | { run: string }
     | undefined;
-  const convRow = db.prepare("SELECT convergence FROM active_convergence WHERE key = '1'").get() as
+  const convRow = db.prepare("SELECT convergence FROM active_convergence ORDER BY run_id LIMIT 1").get() as
     | { convergence: string }
     | undefined;
 

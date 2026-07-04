@@ -13,14 +13,7 @@
 // - PRAGMA user_version for schema versioning.
 // - Queue: unified into runs table — status = 'queued' IS the queue.
 
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
@@ -153,10 +146,10 @@ export class SqliteStoreAdapter implements Store {
     const version = row?.user_version ?? 0;
     if (version === 0) {
       createSchema(db);
-      db.exec("PRAGMA user_version = 2;");
+      db.exec("PRAGMA user_version = 3;");
     } else if (version === 1) {
       migrateV1toV2(db);
-      db.exec("PRAGMA user_version = 2;");
+      db.exec("PRAGMA user_version = 3;");
     }
 
     return new SqliteStoreAdapter(db, paths, repo, clock);
@@ -359,58 +352,52 @@ export class SqliteStoreAdapter implements Store {
   // (already handled by appendConvergence / readConvergence above)
 
   // ---------------------------------------------------------------------------
-  // Active run pointer
+  // Active run pointer — multi-row keyed by runId
 
-  readActiveRun(): ActiveRun | undefined {
-    const row = this.db.prepare("SELECT run FROM active_run WHERE key = '1'").get() as
-      | { run: string }
-      | undefined;
-    if (!row) {
-      return undefined;
-    }
-    return ActiveRunSchema.parse(jsonParse(row.run));
+  listActiveRuns(): ActiveRun[] {
+    const rows = this.db.prepare("SELECT run FROM active_run").all() as { run: string }[];
+    return rows.map((r) => ActiveRunSchema.parse(jsonParse(r.run)));
   }
 
-  writeActiveRun(run: ActiveRun): void {
+  addActiveRun(run: ActiveRun): void {
     this.db
-      .prepare("INSERT OR REPLACE INTO active_run (key, run) VALUES ('1', ?)")
-      .run(jsonStringify(run));
+      .prepare("INSERT OR REPLACE INTO active_run (run_id, run) VALUES (?, ?)")
+      .run(run.runId, jsonStringify(run));
+    this.syncActiveRunFile();
+  }
+
+  removeActiveRun(runId: string): void {
+    this.db.prepare("DELETE FROM active_run WHERE run_id = ?").run(runId);
+    this.syncActiveRunFile();
+  }
+
+  private syncActiveRunFile(): void {
     // Dual-write: the gate plugin runs inside Baby's opencode subprocess and
     // reads active-run.json synchronously from disk. SQLite is authoritative,
     // but the plugin has no daemon access — this file is the bridge.
-    writeTextAtomic(join(this.paths.root, "active-run.json"), jsonStringify(run));
-  }
-
-  clearActiveRun(): void {
-    this.db.prepare("DELETE FROM active_run WHERE key = '1'").run();
-    try {
-      unlinkSync(join(this.paths.root, "active-run.json"));
-    } catch {
-      /* already gone */
-    }
+    // Must always regenerate the full array after each mutation; never unlink.
+    const runs = this.listActiveRuns();
+    writeTextAtomic(join(this.paths.root, "active-run.json"), jsonStringify(runs));
   }
 
   // ---------------------------------------------------------------------------
-  // Active convergence pointer
+  // Active convergence pointer — multi-row keyed by runId
 
-  readActiveConvergence(): ActiveConvergence | undefined {
-    const row = this.db
-      .prepare("SELECT convergence FROM active_convergence WHERE key = '1'")
-      .get() as { convergence: string } | undefined;
-    if (!row) {
-      return undefined;
-    }
-    return ActiveConvergenceSchema.parse(jsonParse(row.convergence));
+  listActiveConvergences(): ActiveConvergence[] {
+    const rows = this.db.prepare("SELECT convergence FROM active_convergence").all() as {
+      convergence: string;
+    }[];
+    return rows.map((r) => ActiveConvergenceSchema.parse(jsonParse(r.convergence)));
   }
 
-  writeActiveConvergence(convergence: ActiveConvergence): void {
+  addActiveConvergence(convergence: ActiveConvergence): void {
     this.db
-      .prepare("INSERT OR REPLACE INTO active_convergence (key, convergence) VALUES ('1', ?)")
-      .run(jsonStringify(convergence));
+      .prepare("INSERT OR REPLACE INTO active_convergence (run_id, convergence) VALUES (?, ?)")
+      .run(convergence.runId, jsonStringify(convergence));
   }
 
-  clearActiveConvergence(): void {
-    this.db.prepare("DELETE FROM active_convergence WHERE key = '1'").run();
+  removeActiveConvergence(runId: string): void {
+    this.db.prepare("DELETE FROM active_convergence WHERE run_id = ?").run(runId);
   }
 
   // ---------------------------------------------------------------------------
@@ -776,12 +763,12 @@ function createSchema(db: DatabaseSync): void {
     );
 
     CREATE TABLE IF NOT EXISTS active_run(
-      key TEXT PRIMARY KEY DEFAULT '1',
+      run_id TEXT PRIMARY KEY,
       run TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS active_convergence(
-      key TEXT PRIMARY KEY DEFAULT '1',
+      run_id TEXT PRIMARY KEY,
       convergence TEXT NOT NULL
     );
 

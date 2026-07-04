@@ -219,7 +219,7 @@ export const makeExecuteRun =
       startedAt: priorMeta?.startedAt ?? clock.nowIso(),
       updatedAt: clock.nowIso(),
     });
-    store.writeActiveRun({
+    store.addActiveRun({
       runId,
       runDir: dirname(worktree),
       worktree,
@@ -375,5 +375,5 @@ const finalizeRun = (
     });
   }
 
-  store.clearActiveRun();
+  store.removeActiveRun(runId);
 };

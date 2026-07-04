@@ -279,9 +279,7 @@ export const evaluateTurn = (facts: z.infer<typeof TurnFacts>): Dec => {
         return { kind: "promote_rejection" };
       }
       // Otherwise terminal failure
-      const noteSuffix = promoted
-        ? "; after promotion to the strong model"
-        : "";
+      const noteSuffix = promoted ? "; after promotion to the strong model" : "";
       return {
         kind: "terminal",
         status: "failed",

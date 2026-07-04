@@ -270,7 +270,7 @@ const startTailOpenCode = (
   let running = true;
 
   const speakerFor = (runId: string, sessionId: string): "baby" | "daddy" | "super" | undefined => {
-    const active = store.readActiveRun();
+    const active = store.listActiveRuns().sort((a, b) => (b.startedAt > a.startedAt ? 1 : -1))[0];
     if (active?.runId === runId && sessionId === active.babySessionId) {
       return "baby";
     }
@@ -374,8 +374,10 @@ const startTailOpenCode = (
 
   const syncSubscriptions = (): void => {
     const activeIds = new Set<string>();
-    const activeRunId = store.readActiveRun()?.runId;
-    const activeConvergenceId = store.readActiveConvergence()?.runId;
+    const activeRuns = store.listActiveRuns().sort((a, b) => (b.startedAt > a.startedAt ? 1 : -1));
+    const activeRunId = activeRuns[0]?.runId;
+    const activeConvergences = store.listActiveConvergences();
+    const activeConvergenceId = activeConvergences[0]?.runId;
     for (const runId of [activeRunId, activeConvergenceId]) {
       if (!runId) {
         continue;
@@ -463,6 +465,13 @@ export const createSupervisor = (
   const clock: Clock = systemClock;
   const repo: Repo = buildRepo();
   const store: Store = SqliteStoreAdapter.create(paths, repo, clock);
+
+  // Derive a single "compatibility" active run from multi-row state:
+  // newest startedAt descending, or undefined if no active runs.
+  const firstActiveRun = () => {
+    const runs = store.listActiveRuns().sort((a, b) => (b.startedAt > a.startedAt ? 1 : -1));
+    return runs[0];
+  };
 
   // --- Lifecycle seams ---
 
@@ -734,7 +743,7 @@ export const createSupervisor = (
     },
 
     getStatus(): StatusDto {
-      const active = store.readActiveRun();
+      const active = firstActiveRun();
       const activeRun = active
         ? {
             runId: active.runId,
@@ -819,7 +828,7 @@ export const createSupervisor = (
     },
 
     getActiveTailSnapshot(): TailSnapshotDto | null {
-      const runId = store.readActiveRun()?.runId ?? store.readActiveConvergence()?.runId;
+      const runId = firstActiveRun()?.runId ?? store.listActiveConvergences()[0]?.runId;
       if (!runId) {
         return null;
       }

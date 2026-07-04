@@ -33,7 +33,7 @@ export const rotateSession = async (
 
   const meta = ports.store.readMeta(runId);
   ports.store.writeMeta({ ...meta, babySessionId: newSessionId, updatedAt: ports.clock.nowIso() });
-  ports.store.writeActiveRun({
+  ports.store.addActiveRun({
     runId,
     runDir: dirname(worktree),
     worktree,

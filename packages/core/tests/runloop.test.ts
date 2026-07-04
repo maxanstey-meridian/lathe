@@ -1,4 +1,4 @@
-import { equal, strictEqual, ok } from "node:assert";
+import { deepEqual, equal, strictEqual, ok } from "node:assert";
 import { mkdtemp as mkdtempP, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -841,6 +841,77 @@ test("runLoop crash branch: thrown executeRun escalates crashed run at cap", () 
     equal(meta.blockedReason, "crashed");
     equal(meta.crashRetries, 2);
     equal(wipCommitCalls, 1);
+    await cleanTemp(tmp);
+  })();
+});
+
+test("runLoop crash path clears active run pointer on executeRun throw", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "runloop-crash-cleanup-"));
+    const clock = fixedClock();
+    const runId = "20260101-000000-crash-cleanup";
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+    // Queue the run so runLoop will call executeRun on it
+    store.writeMeta(
+      makeMeta({
+        runId,
+        status: "queued" as const,
+        worktree: join(tmp, "runs", runId, "worktree"),
+      }),
+    );
+
+    // Also seed an active run — the crash path should clear this
+    store.addActiveRun({
+      runId,
+      runDir: join(tmp, "runs", runId),
+      worktree: join(tmp, "runs", runId, "worktree"),
+      babySessionId: "test-session",
+      startedAt: clock.nowIso(),
+    });
+
+    // Verify the active run was added
+    equal(store.listActiveRuns().length, 1);
+    equal(store.listActiveRuns()[0].runId, runId);
+
+    // stopSignal is passed but NOT aborted — this keeps stopRequested=false
+    // so the crash path's removeActiveRun executes. waitForWork aborts it
+    // after a tick to exit the loop.
+    const stopController = new AbortController();
+    const waitForWork = async (_signal: AbortSignal) => {
+      // Abort the signal synchronously to break the loop (runLoop checks
+      // stopRequested after waitForWork returns). This fires after executeRun
+      // has already crashed and removeActiveRun was called.
+      stopController.abort();
+    };
+
+    let executeRunCalls = 0;
+    const executeRun: ExecuteRunCallback = async () => {
+      executeRunCalls++;
+      throw new Error("crash boom");
+    };
+
+    await runLoop(
+      Config.parse({}),
+      store,
+      fakeRepo(),
+      { holdPowerAssertion: async () => {} },
+      clock,
+      {
+        bind: () => Promise.resolve({ current: undefined }),
+        clearActive: () => undefined,
+        close: () => undefined,
+      },
+      executeRun,
+      async () => {},
+      waitForWork,
+      { stopSignal: stopController.signal },
+    );
+
+    // Every crash in the loop path calls removeActiveRun (stopRequested was never true at crash time),
+    // so the active run should be cleared by the time the loop exits.
+    ok(executeRunCalls > 0);
+    deepEqual(store.listActiveRuns(), []);
     await cleanTemp(tmp);
   })();
 });

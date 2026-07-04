@@ -1498,10 +1498,18 @@ test("turnLoop: mechanical-floor rejection at cap with promoteAtCap=true → pro
     // First turn: report-rejected at cap → promote_rejection → rotation.
     // Second turn: after rotation on promoted model, submit a report to terminate.
     const modelsUsed: string[] = [];
-    const executor = scriptedExecutor(channel, [
-      { intents: [{ kind: "report-rejected", problems: ["structural: incomplete ledger"] }], bumpRejection: 3 },
-      { intents: [{ kind: "report-accepted", status: "ready_for_review", summary: "done" }] },
-    ], ["baby-1"], modelsUsed);
+    const executor = scriptedExecutor(
+      channel,
+      [
+        {
+          intents: [{ kind: "report-rejected", problems: ["structural: incomplete ledger"] }],
+          bumpRejection: 3,
+        },
+        { intents: [{ kind: "report-accepted", status: "ready_for_review", summary: "done" }] },
+      ],
+      ["baby-1"],
+      modelsUsed,
+    );
     const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
 
     const result = await turnLoop(
@@ -1552,7 +1560,10 @@ test("turnLoop: report rejected at cap after promotion → terminal failed", () 
     // The bridge already counted reportRejectionCount up to the cap (3) and
     // the run is already promoted → evaluateTurn returns terminal failed.
     const executor = scriptedExecutor(channel, [
-      { intents: [{ kind: "report-rejected", problems: ["structural: incomplete ledger"] }], bumpRejection: 3 },
+      {
+        intents: [{ kind: "report-rejected", problems: ["structural: incomplete ledger"] }],
+        bumpRejection: 3,
+      },
     ]);
     const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
 

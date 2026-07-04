@@ -120,6 +120,12 @@ const extractSegments = (text: string): JsonSegment[] => {
       continue;
     }
 
+    if (end - start <= MIN_LENGTH) {
+      segments.push({ kind: "text", text: text.slice(start, end) });
+      index = end;
+      continue;
+    }
+
     const payload = payloadFromJson(text.slice(start, end));
     if (payload !== null) {
       const payloadIndex = payloads.length;

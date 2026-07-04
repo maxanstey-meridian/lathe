@@ -149,6 +149,11 @@ export const runLoop = async <Ref>(
             );
             abortMap.delete(runId);
           } catch (err: unknown) {
+            // A crash: clear the active run pointer so it doesn't leak onto the
+            // next queued run (X1). ^C-during-run is not a crash.
+            if (!stopRequested) {
+              store.removeActiveRun(runId);
+            }
             // ^C-during-run is NOT a crash. A SIGINT tears down the opencode server,
             // which fails the in-flight turn send with a connection error that lands
             // right here — but the user asked to stop: leave the run RESUMABLE.

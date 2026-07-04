@@ -77,8 +77,8 @@ test("prefixed Daddy sync JSON becomes JSON", () => {
 });
 
 test("multiple JSON payloads are extracted independently", () => {
-  const first = JSON.stringify({ status: "ok", answer: "yes", padding: "x".repeat(20) });
-  const second = JSON.stringify({ status: "next", answer: "no", padding: "y".repeat(20) });
+  const first = JSON.stringify({ status: "ok", answer: "yes", padding: "x".repeat(60) });
+  const second = JSON.stringify({ status: "next", answer: "no", padding: "y".repeat(60) });
   const result = classifyLine(`prefix ${first} middle ${second} suffix`);
 
   assert.equal(result.kind, "json");
@@ -93,6 +93,11 @@ test("multiple JSON payloads are extracted independently", () => {
     assert.ok(result.payloads[0]?.formatted.includes('"status": "ok"'));
     assert.ok(result.payloads[1]?.formatted.includes('"status": "next"'));
   }
+});
+
+test("short bracket token in long line stays text", () => {
+  const line = "this is a deliberately long line before an index token [0] and then trailing text past eighty chars";
+  assert.equal(classifyLine(line).kind, "text");
 });
 
 test("null is text even if long enough", () => {

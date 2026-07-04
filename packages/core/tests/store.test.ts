@@ -1,4 +1,5 @@
-import { equal, strictEqual, ok, match, rejects } from "node:assert";
+import { deepEqual, equal, strictEqual, ok, match, rejects } from "node:assert";
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -393,13 +394,41 @@ test("store: convergence round-trip", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Active run
+// Active run — multi-row
 
-test("store: active run lifecycle", async () => {
+test("store: active run multi-row add/remove/list", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-active-"));
   const clock = fixedClock();
   const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-  equal(store.readActiveRun(), undefined);
+  deepEqual(store.listActiveRuns(), []);
+  const run1 = {
+    runId: "20260101-000000-test",
+    runDir: join(tmp, "runs/20260101-000000-test"),
+    worktree: join(tmp, "worktree"),
+    babySessionId: "sess1",
+    startedAt: clock.nowIso(),
+  };
+  store.addActiveRun(run1);
+  let runs = store.listActiveRuns();
+  equal(runs.length, 1);
+  equal(runs[0].runId, run1.runId);
+  const run2 = { ...run1, runId: "20260101-000000-test2", babySessionId: "sess2" };
+  store.addActiveRun(run2);
+  runs = store.listActiveRuns();
+  equal(runs.length, 2);
+  store.removeActiveRun("20260101-000000-test");
+  runs = store.listActiveRuns();
+  equal(runs.length, 1);
+  equal(runs[0].runId, run2.runId);
+  store.removeActiveRun("20260101-000000-test2");
+  deepEqual(store.listActiveRuns(), []);
+  await cleanTemp(tmp);
+});
+
+test("store: active run upsert (rotation replaces babySessionId)", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-active-upsert-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
   const run = {
     runId: "20260101-000000-test",
     runDir: join(tmp, "runs/20260101-000000-test"),
@@ -407,30 +436,63 @@ test("store: active run lifecycle", async () => {
     babySessionId: "sess1",
     startedAt: clock.nowIso(),
   };
-  store.writeActiveRun(run);
-  const read = store.readActiveRun();
-  ok(read);
-  equal(read!.runId, run.runId);
-  store.clearActiveRun();
-  equal(store.readActiveRun(), undefined);
+  store.addActiveRun(run);
+  const runRotated = { ...run, babySessionId: "sess2", startedAt: clock.nowIso() };
+  store.addActiveRun(runRotated);
+  const runs = store.listActiveRuns();
+  equal(runs.length, 1);
+  equal(runs[0].babySessionId, "sess2");
+  equal(runs[0].startedAt, runRotated.startedAt);
   await cleanTemp(tmp);
 });
 
-test("store: active convergence lifecycle", async () => {
+test("store: active run json file is array", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-active-json-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const run1 = {
+    runId: "20260101-000000-test",
+    runDir: join(tmp, "runs/20260101-000000-test"),
+    worktree: join(tmp, "worktree"),
+    babySessionId: "sess1",
+    startedAt: clock.nowIso(),
+  };
+  const run2 = { ...run1, runId: "20260101-000000-test2", babySessionId: "sess2" };
+  store.addActiveRun(run1);
+  store.addActiveRun(run2);
+  const content = readFileSync(join(tmp, "active-run.json"), "utf-8");
+  const parsed = JSON.parse(content);
+  ok(Array.isArray(parsed));
+  equal(parsed.length, 2);
+  equal(parsed[0].runId, run1.runId);
+  equal(parsed[1].runId, run2.runId);
+  store.removeActiveRun("20260101-000000-test");
+  const content2 = readFileSync(join(tmp, "active-run.json"), "utf-8");
+  const parsed2 = JSON.parse(content2);
+  equal(parsed2.length, 1);
+  store.removeActiveRun("20260101-000000-test2");
+  const content3 = readFileSync(join(tmp, "active-run.json"), "utf-8");
+  const parsed3 = JSON.parse(content3);
+  ok(Array.isArray(parsed3));
+  equal(parsed3.length, 0);
+  await cleanTemp(tmp);
+});
+
+test("store: active convergence multi-row add/remove/list", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-active-convergence-"));
   const clock = fixedClock();
   const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-  equal(store.readActiveConvergence(), undefined);
+  deepEqual(store.listActiveConvergences(), []);
   const convergence = {
     runId: "20260101-000000-test",
     startedAt: clock.nowIso(),
   };
-  store.writeActiveConvergence(convergence);
-  const read = store.readActiveConvergence();
-  ok(read);
-  equal(read!.runId, convergence.runId);
-  store.clearActiveConvergence();
-  equal(store.readActiveConvergence(), undefined);
+  store.addActiveConvergence(convergence);
+  let list = store.listActiveConvergences();
+  equal(list.length, 1);
+  equal(list[0].runId, convergence.runId);
+  store.removeActiveConvergence("20260101-000000-test");
+  deepEqual(store.listActiveConvergences(), []);
   await cleanTemp(tmp);
 });
 
@@ -1002,12 +1064,12 @@ const runContractTests = async (
     await cleanTemp(tmp);
   }
 
-  // Active run lifecycle
+  // Active run lifecycle — multi-row
   {
     const tmp = await mkdtemp(join(tmpdir(), `${label}-active-`));
     const clock = fixedClock();
     const store = createStore(tmp, fakeRepo(), clock);
-    equal(store.readActiveRun(), undefined);
+    deepEqual(store.listActiveRuns(), []);
     const run = {
       runId: "20260101-000000-test",
       runDir: join(tmp, "runs/20260101-000000-test"),
@@ -1015,31 +1077,31 @@ const runContractTests = async (
       babySessionId: "sess1",
       startedAt: clock.nowIso(),
     };
-    store.writeActiveRun(run);
-    const read = store.readActiveRun();
-    ok(read);
-    equal(read!.runId, run.runId);
-    store.clearActiveRun();
-    equal(store.readActiveRun(), undefined);
+    store.addActiveRun(run);
+    const list = store.listActiveRuns();
+    ok(list.length > 0);
+    equal(list[0].runId, run.runId);
+    store.removeActiveRun("20260101-000000-test");
+    deepEqual(store.listActiveRuns(), []);
     await cleanTemp(tmp);
   }
 
-  // Active convergence lifecycle
+  // Active convergence lifecycle — multi-row
   {
     const tmp = await mkdtemp(join(tmpdir(), `${label}-active-convergence-`));
     const clock = fixedClock();
     const store = createStore(tmp, fakeRepo(), clock);
-    equal(store.readActiveConvergence(), undefined);
+    deepEqual(store.listActiveConvergences(), []);
     const convergence = {
       runId: "20260101-000000-test",
       startedAt: clock.nowIso(),
     };
-    store.writeActiveConvergence(convergence);
-    const read = store.readActiveConvergence();
-    ok(read);
-    equal(read!.runId, convergence.runId);
-    store.clearActiveConvergence();
-    equal(store.readActiveConvergence(), undefined);
+    store.addActiveConvergence(convergence);
+    const list = store.listActiveConvergences();
+    ok(list.length > 0);
+    equal(list[0].runId, convergence.runId);
+    store.removeActiveConvergence("20260101-000000-test");
+    deepEqual(store.listActiveConvergences(), []);
     await cleanTemp(tmp);
   }
 

@@ -36,33 +36,35 @@ const GatePlugin = async (_input: unknown) => {
   // In-memory latch (G3 tail): a hard-caught question/subagent attempt must
   // reach Daddy before the next mutation, even mid-turn before the driver sees
   // the denial in the journal. Cleared when the driver records a newer accepted
-  // decision in gate-state.json.
-  let memoryLatch: { reason: string; at: number } | undefined
+  // decision in gate-state.json. Keyed by sessionID so per-instance state is
+  // isolated when the plugin runs in-process across sessions.
+  const memoryLatches = new Map<string, { reason: string; at: number }>()
 
   // Volume reminder tally (§10): tool calls since the last accepted decision.
   // Reset when the driver records a newer accepted decision.
-  let toolCallsSinceDecision = 0
-  let volumeCountedAgainst: string | undefined
+  const toolCallCounters = new Map<string, number>()
+  const volumeCountedAgainst = new Map<string, string | undefined>()
 
-  const memoryLatchReason = (lastAcceptedDecisionAt: string | undefined): string | undefined => {
-    if (!memoryLatch) return undefined
-    if (lastAcceptedDecisionAt && Date.parse(lastAcceptedDecisionAt) > memoryLatch.at) {
-      memoryLatch = undefined
+  const memoryLatchReason = (sessionID: string, lastAcceptedDecisionAt: string | undefined): string | undefined => {
+    const latch = memoryLatches.get(sessionID)
+    if (!latch) return undefined
+    if (lastAcceptedDecisionAt && Date.parse(lastAcceptedDecisionAt) > latch.at) {
+      memoryLatches.delete(sessionID)
       return undefined
     }
-    return memoryLatch.reason
+    return latch.reason
   }
 
   const guard = (tool: string, sessionID: string, args: unknown): void => {
-    const run = activeRun()
+    const run = activeRun(sessionID)
     if (!run || run.babySessionId !== sessionID) return
 
     if (isQuestionTool(tool)) {
-      memoryLatch ??= { reason: "an interactive question was blocked — carry it into ask_planner", at: Date.now() }
+      memoryLatches.set(sessionID, { reason: "an interactive question was blocked — carry it into ask_planner", at: Date.now() })
       throw new Error(QUESTION_MESSAGE)
     }
     if (isSubagentTool(tool)) {
-      memoryLatch ??= { reason: "an exploration subagent was blocked — route the discovery question to ask_planner", at: Date.now() }
+      memoryLatches.set(sessionID, { reason: "an exploration subagent was blocked — route the discovery question to ask_planner", at: Date.now() })
       throw new Error(SUBAGENT_MESSAGE)
     }
     if (isBridgeTool(tool)) return // G2: the key is never locked behind its own gate
@@ -75,7 +77,7 @@ const GatePlugin = async (_input: unknown) => {
 
     if (!isMutation(tool, args, state.mutationCommandPatterns)) return // G1: reads are never blocked
 
-    const reason = mutationDenyReason(tool, args, state, run.worktree, memoryLatchReason(state.lastAcceptedDecisionAt))
+    const reason = mutationDenyReason(tool, args, state, run.worktree, memoryLatchReason(sessionID, state.lastAcceptedDecisionAt))
     if (reason) throw new Error(denyMessage(reason))
   }
 
@@ -90,18 +92,20 @@ const GatePlugin = async (_input: unknown) => {
     // defensively — a reminder must never break a tool that already succeeded.
     "tool.execute.after": async (toolInput: ToolAfterInput, output: { output: string }) => {
       try {
-        const run = activeRun()
+        const run = activeRun(toolInput.sessionID)
         if (!run || run.babySessionId !== toolInput.sessionID) return
         if (isBridgeTool(toolInput.tool)) return
         const state = gateState(run)
         if (!state) return
 
         // Reset the volume tally when a newer accepted decision lands.
-        if (state.lastAcceptedDecisionAt !== volumeCountedAgainst) {
-          volumeCountedAgainst = state.lastAcceptedDecisionAt
-          toolCallsSinceDecision = 0
+        const countedAgainst = volumeCountedAgainst.get(toolInput.sessionID)
+        if (state.lastAcceptedDecisionAt !== countedAgainst) {
+          volumeCountedAgainst.set(toolInput.sessionID, state.lastAcceptedDecisionAt)
+          toolCallCounters.set(toolInput.sessionID, 0)
         }
-        toolCallsSinceDecision += 1
+        toolCallCounters.set(toolInput.sessionID, (toolCallCounters.get(toolInput.sessionID) ?? 0) + 1)
+        const toolCallsSinceDecision = toolCallCounters.get(toolInput.sessionID) ?? 0
 
         const mutation = isMutation(toolInput.tool, toolInput.args, state.mutationCommandPatterns)
 
@@ -126,10 +130,10 @@ const GatePlugin = async (_input: unknown) => {
     // Headless rule: every ask gets an answer. Deny when gated, allow otherwise;
     // an unanswered ask hangs the turn until timeout.
     "permission.ask": async (permissionInput: PermissionInput, output: { status?: string }) => {
-      const run = activeRun()
+      const run = activeRun(permissionInput.sessionID)
       if (!run) return
       if (permissionInput.type === "question") {
-        memoryLatch ??= { reason: "an interactive question was blocked — carry it into ask_planner", at: Date.now() }
+        memoryLatches.set(permissionInput.sessionID, { reason: "an interactive question was blocked — carry it into ask_planner", at: Date.now() })
         output.status = "deny"
         return
       }

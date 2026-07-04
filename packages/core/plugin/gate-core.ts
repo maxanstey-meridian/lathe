@@ -9,6 +9,7 @@
 import { readFileSync, existsSync } from "fs"
 import { execSync } from "child_process"
 import { join } from "path"
+import { normalize } from "node:path/posix"
 import { homedir } from "os"
 
 export type ActiveRun = {
@@ -16,6 +17,7 @@ export type ActiveRun = {
   runDir: string
   worktree: string
   babySessionId: string
+  startedAt: string
 }
 
 export type GatePhaseValue =
@@ -44,7 +46,7 @@ export type GateStateFile = {
   mutationCommandPatterns: string[]
 }
 
-const STATE_ROOT = join(homedir(), ".meridian", "v3")
+const stateRoot = () => join(homedir(), ".meridian", "v3")
 
 const readJson = <T>(path: string): T | undefined => {
   try {
@@ -54,8 +56,10 @@ const readJson = <T>(path: string): T | undefined => {
   }
 }
 
-export const activeRun = (): ActiveRun | undefined =>
-  readJson<ActiveRun>(join(STATE_ROOT, "active-run.json"))
+export const activeRun = (sessionID: string): ActiveRun | undefined => {
+  const runs = readJson<ActiveRun[]>(join(stateRoot(), "active-run.json")) ?? []
+  return runs.find((run) => run.babySessionId === sessionID)
+}
 
 export const gateState = (run: ActiveRun): GateStateFile | undefined => {
   return readJson<GateStateFile>(join(run.runDir, "gate-state.json"))
@@ -94,7 +98,7 @@ export const commandFromArgs = (args: unknown): string => {
 }
 
 // R4: Baby never mutates git state; the driver owns commits and branches.
-const FORBIDDEN_GIT = /\bgit\b[^|;&]*\b(commit|push|reset|checkout|rebase|stash|clean|merge|cherry-pick|worktree)\b/
+const FORBIDDEN_GIT = /\bgit\b[^|;&]*\b(commit|push|reset|checkout|rebase|stash|clean|merge|cherry-pick|worktree|switch|restore|add|branch|tag)\b/
 
 export const isForbiddenGitCommand = (command: string): boolean => FORBIDDEN_GIT.test(command)
 
@@ -153,12 +157,20 @@ export const editTargetOutOfSurface = (
   const raw = typeof record.filePath === "string" ? record.filePath : typeof record.path === "string" ? record.path : undefined
   if (!raw) return undefined
   const prefix = worktree.endsWith("/") ? worktree : `${worktree}/`
-  const relative = raw.startsWith(prefix) ? raw.slice(prefix.length) : raw
-  // An absolute path outside the worktree is invisible to the run's diff —
-  // denying here is the ONLY net for it (a wrong-target write into the source
-  // repo). Never fail open on it. This guard stays even though the file-surface
-  // gate is gone.
-  if (relative.startsWith("/")) return raw
+  // POSIX-normalize the ENTIRE path first (pure string op — handles doubled slashes,
+  // collapsed `..`, etc.), then check containment. This is the ONLY net for
+  // escape-to-real-disk. Never fail open on it.
+  const normalized = normalize(raw)
+  if (normalized.startsWith("/")) {
+    // Absolute path: deny unless it starts with the worktree prefix.
+    if (!normalized.startsWith(prefix)) return raw
+    // Inside worktree — allowed.
+    return undefined
+  }
+  // Relative path: deny if it climbs above the working directory.
+  if (normalized === ".." || normalized.startsWith("../")) {
+    return raw
+  }
   // File-surface gate removed: in-worktree edits are no longer restricted to
   // expectedGlobs. The executor may touch any file the work needs; surface drift is
   // caught after the fact in Daddy's final review, not blocked here.
@@ -293,9 +305,9 @@ export const volumeNoticeReason = (
 
 export const denyMessage = (reason: string): string => {
   if (reason.startsWith("reconciliation required:")) {
-    return `LATHE GATE BLOCKED: ${reason}. The first mutation after a no-checkpoint resume is blocked. Do not inspect, compare, reconstruct, or prove the run state. Your next tool call must be ask_planner with questionType "reconciliation"; Baby is only triggering Daddy-owned reconciliation. The driver will supply durable state and git evidence. Continue only on proceed or proceed_with_constraints.`
+    return `LATHE GATE BLOCKED: ${reason}. Your edit was NOT applied — no file was changed. The first mutation after a no-checkpoint resume is blocked. Do not inspect, compare, reconstruct, or prove the run state. Your next tool call must be ask_planner with questionType "reconciliation"; Baby is only triggering Daddy-owned reconciliation. The driver will supply durable state and git evidence. Continue only on proceed or proceed_with_constraints.`
   }
-  return `LATHE GATE BLOCKED: ${reason}. Your next tool call must be ask_planner — and it must state exactly what you were about to change (file and intended edit), WHY, and where the work stands overall. The planner can correct your direction even while approving, but only if you show it the real intent, not a summary that flatters it. Continue only on proceed or proceed_with_constraints. Reads stay available for gathering evidence.`
+  return `LATHE GATE BLOCKED: ${reason}. Your edit was NOT applied — no file was changed. Your next tool call must be ask_planner — and it must state exactly what you were about to change (file and intended edit), WHY, and where the work stands overall. The planner can correct your direction even while approving, but only if you show it the real intent, not a summary that flatters it. Continue only on proceed or proceed_with_constraints. Reads stay available for gathering evidence.`
 }
 
 export const QUESTION_MESSAGE = `LATHE GATE BLOCKED: interactive questions are disabled — Max is not present during a run. Route it: implementation/architecture/procedure/scope questions go to ask_planner; decisions only Max can make go into submit_report with status "blocked" and the exact question.`

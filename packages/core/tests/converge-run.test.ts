@@ -176,11 +176,11 @@ const makeFakePorts = (
         nitsStore.set(runId, md);
         onWriteNits?.(runId, md);
       },
-      readActiveConvergence: () => activeConvergence,
-      writeActiveConvergence: (convergence: ActiveConvergence) => {
+      listActiveConvergences: () => (activeConvergence ? [activeConvergence] : []),
+      addActiveConvergence: (convergence: ActiveConvergence) => {
         activeConvergence = convergence;
       },
-      clearActiveConvergence: () => {
+      removeActiveConvergence: () => {
         activeConvergence = undefined;
       },
       readReport: () => "",
@@ -1227,9 +1227,9 @@ test("convergeRun: stop with meta already ready_for_review — no unnecessary wr
       appendJournal: () => {},
       writeNits: () => "",
       readReport: () => "",
-      readActiveConvergence: () => undefined,
-      writeActiveConvergence: () => {},
-      clearActiveConvergence: () => {},
+      listActiveConvergences: () => [],
+      addActiveConvergence: () => {},
+      removeActiveConvergence: () => {},
     } as unknown as Store,
     repo: {
       reviewableDiffAgainst: () => "diff",
@@ -1602,9 +1602,9 @@ test("convergeRun: records reviewerSessionId from the real adapter and preserves
       appendJournal: () => {},
       writeNits: () => "",
       readReport: () => "",
-      readActiveConvergence: () => undefined,
-      writeActiveConvergence: () => {},
-      clearActiveConvergence: () => {},
+      listActiveConvergences: () => [],
+      addActiveConvergence: () => {},
+      removeActiveConvergence: () => {},
     } as unknown as Store,
     repo: {
       amendCommit: () => "sha",

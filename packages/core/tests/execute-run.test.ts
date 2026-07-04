@@ -308,7 +308,7 @@ test("makeExecuteRun: fresh run → init state → terminal status in meta", () 
     const journal = store.readJournal(RUN_ID);
     ok(journal.some((e) => e.event === "prompt_sent" && e.promptName === "Q1"));
     ok(journal.some((e) => e.event === "run_started"));
-    equal(store.readActiveRun(), undefined);
+    equal(store.listActiveRuns().length, 0);
     await cleanTemp(tmp);
   })();
 });

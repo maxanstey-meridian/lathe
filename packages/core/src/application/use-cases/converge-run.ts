@@ -137,7 +137,7 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
   const { store, repo, reviewer, verify, clock, config } = deps;
 
   return async (runId: string): Promise<void> => {
-    store.writeActiveConvergence({ runId, startedAt: clock.nowIso() });
+    store.addActiveConvergence({ runId, startedAt: clock.nowIso() });
     try {
       let meta = store.readMeta(runId);
 
@@ -523,7 +523,7 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
         }
       }
     } finally {
-      store.clearActiveConvergence();
+      store.removeActiveConvergence(runId);
     }
   };
 };

@@ -96,15 +96,15 @@ export type Store = {
   appendConvergence(runId: string, entry: ConvergenceLogEntry): void;
   readConvergence(runId: string): ConvergenceLogEntry[];
 
-  // Active run pointer
-  readActiveRun(): ActiveRun | undefined;
-  writeActiveRun(run: ActiveRun): void;
-  clearActiveRun(): void;
+  // Active run pointer — multi-row keyed by runId
+  listActiveRuns(): ActiveRun[];
+  addActiveRun(run: ActiveRun): void;
+  removeActiveRun(runId: string): void;
 
-  // Active convergence pointer
-  readActiveConvergence(): ActiveConvergence | undefined;
-  writeActiveConvergence(convergence: ActiveConvergence): void;
-  clearActiveConvergence(): void;
+  // Active convergence pointer — multi-row keyed by runId
+  listActiveConvergences(): ActiveConvergence[];
+  addActiveConvergence(convergence: ActiveConvergence): void;
+  removeActiveConvergence(runId: string): void;
 
   // Campaign
   readCampaign(campaignId: string): Campaign | undefined;

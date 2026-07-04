@@ -1,9 +1,11 @@
 import { deepEqual, equal, ok } from "node:assert";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { DatabaseSync } from "node:sqlite";
+import { cmdDb } from "../src/db.js";
 import { createEventBus, type Supervisor } from "@lathe/server";
 import { Config as ConfigSchema, makePaths } from "@lathe/core";
 import { createDaemonClient } from "../src/client.js";
@@ -765,4 +767,144 @@ test("startDaemon: threads configured host into the held lock and shuts down on 
 
   deepEqual(order, ["server.close", "supervisor.stop", "releaseLock", "exit(0)"]);
   ok(exited, "process.exit was called");
+});
+
+// ---------------------------------------------------------------------------
+// lathe db v3 active-state reader regression (multi-row schema)
+// ---------------------------------------------------------------------------
+
+test("db-v3: resolveRunId query (ORDER BY run_id LIMIT 1) works against v3 schema", () => {
+  const dir = mkdtempSync(join(tmpdir(), "lathe-db-v3-"));
+  try {
+    const db = new DatabaseSync(join(dir, "lathe.db"));
+    db.exec("PRAGMA journal_mode=WAL;");
+
+    // V3 schema: active_run uses run_id TEXT PRIMARY KEY, not key
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS runs(
+        run_id TEXT PRIMARY KEY,
+        meta TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS active_run(
+        run_id TEXT PRIMARY KEY,
+        run TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS active_convergence(
+        run_id TEXT PRIMARY KEY,
+        convergence TEXT NOT NULL
+      );
+    `);
+
+    // Insert an active run (V3 format)
+    const activeRun = JSON.stringify({ runId: "20260101-000000-z", worktree: "/tmp/z", babySessionId: "sess-z" });
+    db.prepare("INSERT OR REPLACE INTO active_run (run_id, run) VALUES (?, ?)").run("20260101-000000-z", activeRun);
+
+    // Insert an older active run (deterministic ORDER BY run_id picks 'z')
+    const activeRunB = JSON.stringify({ runId: "20260101-000000-a", worktree: "/tmp/a", babySessionId: "sess-a" });
+    db.prepare("INSERT OR REPLACE INTO active_run (run_id, run) VALUES (?, ?)").run("20260101-000000-a", activeRunB);
+
+    // This is the exact query used by resolveRunId — must work against v3 schema
+    const row = db.prepare("SELECT run FROM active_run ORDER BY run_id LIMIT 1").get() as
+      | { run: string }
+      | undefined;
+    ok(row, "should return a row from active_run with v3 schema");
+    const parsed = JSON.parse(row!.run);
+    equal(parsed.runId, "20260101-000000-a", "ORDER BY run_id LIMIT 1 picks first run_id");
+
+    // Test empty case — no rows
+    db.prepare("DELETE FROM active_run").run();
+    const emptyRow = db.prepare("SELECT run FROM active_run ORDER BY run_id LIMIT 1").get() as
+      | { run: string }
+      | undefined;
+    equal(emptyRow, undefined, "no rows returns undefined");
+
+    db.close();
+
+    // Same pattern for active_convergence
+    const convDb = new DatabaseSync(join(dir, "lathe.db"));
+    convDb.exec("PRAGMA journal_mode=WAL;");
+    convDb.exec(`
+      CREATE TABLE IF NOT EXISTS active_convergence(
+        run_id TEXT PRIMARY KEY,
+        convergence TEXT NOT NULL
+      );
+    `);
+
+    const activeConv = JSON.stringify({ runId: "20260101-000000-x" });
+    convDb.prepare("INSERT OR REPLACE INTO active_convergence (run_id, convergence) VALUES (?, ?)").run("20260101-000000-x", activeConv);
+
+    // This is the exact query used by dbActive — must work against v3 schema
+    const convRow = convDb.prepare("SELECT convergence FROM active_convergence ORDER BY run_id LIMIT 1").get() as
+      | { convergence: string }
+      | undefined;
+    ok(convRow, "should return a row from active_convergence with v3 schema");
+    const convParsed = JSON.parse(convRow!.convergence);
+    equal(convParsed.runId, "20260101-000000-x");
+
+    convDb.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// lathe db active — end-to-end command path (v3 schema)
+// ---------------------------------------------------------------------------
+
+test("lathe db active: reads v3 multi-row state and picks deterministic default run", () => {
+  const dir = mkdtempSync(join(tmpdir(), "lathe-db-active-"));
+  const homeBack = process.env.HOME;
+  process.env.HOME = dir;
+  try {
+    // Write config.json so loadConfig points dbFile into our temp dir
+    const configPath = join(dir, ".meridian", "v3", "config.json");
+    mkdirSync(join(dir, ".meridian", "v3"), { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ stateRoot: dir }));
+
+    // Create v3 schema with test data
+    const db = new DatabaseSync(join(dir, "lathe.db"));
+    db.exec("PRAGMA journal_mode=WAL;");
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS active_run(
+        run_id TEXT PRIMARY KEY,
+        run TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS active_convergence(
+        run_id TEXT PRIMARY KEY,
+        convergence TEXT NOT NULL
+      );
+    `);
+
+    // Two active runs — ORDER BY run_id LIMIT 1 should pick lexically first
+    const runA = JSON.stringify({ runId: "20260101-000000-a", worktree: "/tmp/a", babySessionId: "sess-a" });
+    const runZ = JSON.stringify({ runId: "20260101-000000-z", worktree: "/tmp/z", babySessionId: "sess-z" });
+    db.prepare("INSERT OR REPLACE INTO active_run (run_id, run) VALUES (?, ?)").run("20260101-000000-a", runA);
+    db.prepare("INSERT OR REPLACE INTO active_run (run_id, run) VALUES (?, ?)").run("20260101-000000-z", runZ);
+
+    // One active convergence
+    const conv = JSON.stringify({ runId: "20260101-000000-a" });
+    db.prepare("INSERT OR REPLACE INTO active_convergence (run_id, convergence) VALUES (?, ?)").run("20260101-000000-a", conv);
+    db.close();
+
+    const logs: string[] = [];
+    const errs: string[] = [];
+    const env: CliEnv = {
+      client: stubClient(() => jsonResponse(200, {})),
+      isDaemonUp: () => Promise.resolve(false),
+      log: (line) => logs.push(line),
+      err: (line) => errs.push(line),
+    };
+
+    const code = cmdDb(env, ["active"]);
+    equal(code, 0);
+
+    // Should show the deterministically-selected run (20260101-000000-a)
+    ok(logs.some((l) => l.includes("20260101-000000-a")), `should show first run_id, logs: ${logs.join("|")}`);
+    ok(logs.some((l) => l.includes("sess-a")), `should show session, logs: ${logs.join("|")}`);
+    ok(logs.some((l) => l.includes("converging")), `should show convergence, logs: ${logs.join("|")}`);
+    equal(errs.length, 0, `no errors expected, got: ${errs.join("|")}`);
+  } finally {
+    process.env.HOME = homeBack;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

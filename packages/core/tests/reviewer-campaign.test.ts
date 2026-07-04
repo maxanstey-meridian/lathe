@@ -32,7 +32,7 @@ const makeMockExecutor = (
       return id;
     },
     sendMessage: async () => ({
-      info: { role: "assistant" as const, sessionId: "test", model: "test" as const },
+      info: { id: "m", sessionID: "test", role: "assistant", modelID: "test" },
       parts: [
         {
           type: "text" as const,
@@ -47,6 +47,7 @@ const makeMockExecutor = (
         await deleteSessionCb(sessionId);
       }
     },
+    abortSession: async () => {},
   };
 
   return { executor, sessionsCreated, sessionsDeleted };
@@ -71,13 +72,14 @@ const makeInput = (worktree: string, campaignId = "campaign-a"): SuperReviewInpu
       verification: [],
       constraints: [],
       pass: 1,
+      promoted: false,
+      autofix_commands: [],
       regression_outcomes: [],
     },
     body: "",
     raw: "",
   },
   worktree,
-  diff: "diff",
   reportText: "",
   skillText: "rubric",
   pass: 1,
@@ -99,9 +101,9 @@ test("reviewer: same worktree reuses session scoped to it", async () => {
   await reviewer.superReview(makeInput("/wt/run-a"));
 
   equal(sessionsCreated.length, 1, "session should be created only once for a worktree");
-  equal(sessionsCreated[0].title, "lathe-superdaddy");
+  equal(sessionsCreated[0]!.title, "lathe-superdaddy");
   equal(
-    sessionsCreated[0].directory,
+    sessionsCreated[0]!.directory,
     "/wt/run-a",
     "session cwd is the run's worktree, not paths.root",
   );
@@ -119,7 +121,7 @@ test("reviewer: new worktree resets session", async () => {
   await reviewer.superReview(makeInput("/wt/run-b"));
 
   equal(sessionsCreated.length, 2, "new session created when the worktree changes");
-  equal(sessionsCreated[1].directory, "/wt/run-b", "new session scoped to the new worktree");
+  equal(sessionsCreated[1]!.directory, "/wt/run-b", "new session scoped to the new worktree");
   ok(sessionsDeleted.length >= 1, "prior worktree's session was deleted");
 });
 

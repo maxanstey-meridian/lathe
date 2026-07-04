@@ -58,6 +58,7 @@ describe("journal-render — isDriverEvent", () => {
       event: "tool_call",
       tool: "meridian-bridge_ask_planner",
       status: "completed",
+      gateDenied: false,
     };
     equal(isDriverEvent(event), false);
   });

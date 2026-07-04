@@ -11,7 +11,7 @@ const ACCEPT_JSON =
   '{"verdict":"accept","findings":[],"convergence":{"recommend_stop":true,"profile":{"p0":0,"p1":0,"p2":0,"p3":0},"rationale":"ok"},"notes":"","human_decision_needed":null}';
 
 const textResponse = (text: string): TurnResponse => ({
-  info: { id: "m", sessionID: "s", role: "assistant", model: "test" as unknown as string },
+  info: { id: "m", sessionID: "s", role: "assistant", modelID: "test" },
   parts: [{ type: "text", text }],
 });
 
@@ -30,6 +30,7 @@ const makeExecutor = (
     },
     listMessages: async () => [],
     deleteSession: async () => {},
+    abortSession: async () => {},
   };
   return { executor, sends: () => sends };
 };
@@ -47,13 +48,14 @@ const input = (): SuperReviewInput => ({
       verification: [],
       constraints: [],
       pass: 1,
+      promoted: false,
+      autofix_commands: [],
       regression_outcomes: [],
     },
     body: "",
     raw: "",
   },
   worktree: "/wt/run-a",
-  diff: "diff",
   reportText: "",
   skillText: "rubric",
   pass: 1,

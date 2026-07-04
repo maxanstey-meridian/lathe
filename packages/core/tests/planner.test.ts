@@ -28,8 +28,13 @@ const minPacket = (): Packet => ({
     compare_commit: "main",
     outcomes: [{ id: "test-outcome", description: "a test outcome" }],
     expected_surface: ["src/**"],
+    suspicious_surface: [],
     verification: [{ command: "pnpm test" }],
     constraints: [],
+    pass: 1,
+    promoted: false,
+    autofix_commands: [],
+    regression_outcomes: [],
   },
   body: "",
   raw: "---\nrepo: test/repo\n---\ntest body",
@@ -42,6 +47,7 @@ const minLedger = (): OutcomeLedger => ({
       id: "test-outcome",
       description: "a test outcome",
       status: "not_started",
+      evidence: [],
       updatedAt: "2026-06-18T00:00:00.000Z",
     },
   ],
@@ -58,6 +64,7 @@ const minReport = (): SubmitReport => ({
   verificationClaims: [],
   escalations: [],
   remainingUncertainty: [],
+  regressionGuard: { tests: [] },
 });
 
 const modelConfig: ModelConfig = { providerId: "openai", modelId: "gpt-4", agent: "daddy" };
@@ -158,7 +165,7 @@ describe("createPlanner.syncMaxDecisions", () => {
     const planner = createPlanner(mockExecutor, modelConfig, 30000);
     await planner.handshake("seed", "test-dir");
     await assert.rejects(
-      planner.syncMaxDecisions?.([
+      planner.syncMaxDecisions!([
         {
           timestamp: "2026-06-29T19:30:53.925Z",
           question: "May I add a test dependency?",

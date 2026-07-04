@@ -19,6 +19,7 @@ import { makePaths } from "../src/config/paths.js";
 import type { Config } from "../src/config/schemas.js";
 import type { TurnResponse } from "../src/domain/agent-response.js";
 import type { Campaign } from "../src/domain/campaign.js";
+import type { VerificationCommand } from "../src/domain/packet.js";
 import { parsePacketShape } from "../src/domain/packet.js";
 import type { ActiveConvergence, RunMeta } from "../src/domain/run.js";
 import { createReviewer } from "../src/infrastructure/opencode/reviewer.js";
@@ -74,18 +75,24 @@ verification:
 Repair the blocker.
 `;
 
-const makeMeta = (overrides: Partial<RunMeta> = {}): RunMeta => ({
-  runId: RUN_ID,
-  status: "ready_for_review",
-  attempt: 1,
-  repo: "/tmp/test-repo",
-  base: "main",
-  branch: "meridian/20260101-000000-converge",
-  worktree: "/tmp/test-worktree",
-  summary: "converge-run fixture",
-  updatedAt: "2026-01-01T00:00:00.000Z",
-  ...overrides,
-});
+const makeMeta = (overrides: Record<string, unknown> = {}) =>
+  ({
+    runId: RUN_ID,
+    status: "ready_for_review",
+    attempt: 1,
+    repo: "/tmp/test-repo",
+    base: "main",
+    branch: "meridian/20260101-000000-converge",
+    worktree: "/tmp/test-worktree",
+    summary: "converge-run fixture",
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    reviewerUnreachable: 0,
+    promoted: false,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  }) as RunMeta;
 
 let TS_N = 0;
 const fixedClock = (): Clock => ({
@@ -296,8 +303,8 @@ test("convergeRun: stop — amend commit, campaign converged, meta un-parked", a
   ok(campaignWritten, "campaign should be written");
   equal(campaignWritten?.status, "converged");
   equal(campaignWritten?.passes.length, 1);
-  equal(campaignWritten?.passes[0].runId, RUN_ID);
-  equal(campaignWritten?.passes[0].pass, 1);
+  equal(campaignWritten?.passes[0]!.runId, RUN_ID);
+  equal(campaignWritten?.passes[0]!.pass, 1);
 
   // Meta should be un-parked from blocked → ready_for_review
   const meta = ports.getMeta();
@@ -421,11 +428,11 @@ test("convergeRun: author — admit follow-up, campaign open, priorOutcomes dedu
   ok(campaignWritten, "campaign should be written");
   equal(campaignWritten?.status, "open");
   equal(campaignWritten?.passes.length, 1);
-  equal(campaignWritten?.passes[0].verdict, "request_changes");
+  equal(campaignWritten?.passes[0]!.verdict, "request_changes");
 
   // Should admit ONE follow-up — super-daddy's AUTHORED intent + engine-stamped lineage.
   equal(admittedQueue.length, 1);
-  const [followUpId, followUpContent] = admittedQueue[0];
+  const [followUpId, followUpContent] = admittedQueue[0]!;
   ok(followUpId.startsWith("20260101-"));
   ok(followUpId.endsWith("-converge-fix2"));
 
@@ -435,7 +442,7 @@ test("convergeRun: author — admit follow-up, campaign open, priorOutcomes dedu
     const fm = parsed.packet.frontmatter;
     // Authored intent survives verbatim — NOT copied from the parent packet.
     equal(fm.summary, "fix the failing typecheck");
-    equal(fm.outcomes[0].id, "fix-a");
+    equal(fm.outcomes[0]!.id, "fix-a");
     deepEqual(fm.expected_surface, ["src/a.ts"]);
     // Lineage is stamped by the engine, not authored. With no parent/campaign_id
     // in the packet, the campaign id derives from the run id itself.
@@ -451,7 +458,7 @@ test("convergeRun: author — admit follow-up, campaign open, priorOutcomes dedu
   // Nits should NOT be written on author path
   // (the fake store doesn't track nits writes separately, so we verify
   //  by checking the reviewer findings have grounded blockers)
-  equal(campaignWritten?.passes[0].groundedBlockers, 1); // only P0 is grounded
+  equal(campaignWritten?.passes[0]!.groundedBlockers, 1); // only P0 is grounded
 
   // No meta status change on author — stays ready_for_review
   equal(ports.getMeta().status, "ready_for_review");
@@ -784,8 +791,8 @@ test("convergeRun: same runId new attempt is reviewed again", async () => {
   ok(campaign, "campaign should be updated");
   equal(campaign?.status, "converged");
   equal(campaign?.passes.length, 1, "new attempt supersedes the stale pass for this run id");
-  equal(campaign?.passes[0].attempt, 2);
-  equal(campaign?.passes[0].verdict, "accept");
+  equal(campaign?.passes[0]!.attempt, 2);
+  equal(campaign?.passes[0]!.verdict, "accept");
 });
 
 // ---------------------------------------------------------------------------
@@ -898,7 +905,7 @@ test("convergeRun: unreachable below budget → counter bumped, no pass, stays r
   await convergeRun({
     store: ports.store,
     repo: ports.repo,
-    reviewer: unreachableReviewer as Reviewer,
+    reviewer: unreachableReviewer as unknown as Reviewer,
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
@@ -940,7 +947,7 @@ test("convergeRun: unreachable at budget → parks blocked, resets counter, no p
   await convergeRun({
     store: ports.store,
     repo: ports.repo,
-    reviewer: unreachableReviewer as Reviewer,
+    reviewer: unreachableReviewer as unknown as Reviewer,
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
@@ -1308,8 +1315,8 @@ test("convergeRun: pass from packet.frontmatter.pass, not meta.attempt", async (
   // Campaign should record pass=1, not attempt=5
   const campaign = ports.getCampaign();
   ok(campaign, "campaign should be written");
-  equal(campaign?.passes[0].pass, 1);
-  equal(campaign?.passes[0].attempt, 5);
+  equal(campaign?.passes[0]!.pass, 1);
+  equal(campaign?.passes[0]!.attempt, 5);
 });
 
 // ---------------------------------------------------------------------------
@@ -1395,7 +1402,12 @@ test("convergeRun: autofix is called with expected_surface, not repo-wide", asyn
   const originalVerify = ports.verify;
   ports.verify = {
     ...originalVerify,
-    runAutoFix: async (commands, expectedSurface, _worktree, _timeoutMs) => {
+    runAutoFix: async (
+      commands: VerificationCommand[],
+      expectedSurface: string[],
+      _worktree: string,
+      _timeoutMs: number,
+    ) => {
       autofixCalls.push({ commands, surface: expectedSurface });
     },
   } as any;
@@ -1414,7 +1426,7 @@ test("convergeRun: autofix is called with expected_surface, not repo-wide", asyn
 
   // Autofix should have been called exactly once.
   equal(autofixCalls.length, 1);
-  const call = autofixCalls[0];
+  const call = autofixCalls[0]!;
 
   // The surface should be exactly what's in the packet.
   deepEqual(call.surface, ["src/index.ts"]);
@@ -1480,7 +1492,12 @@ body
 
   ports.verify = {
     ...ports.verify,
-    runAutoFix: async (commands, expectedSurface, _worktree, _timeoutMs) => {
+    runAutoFix: async (
+      commands: VerificationCommand[],
+      expectedSurface: string[],
+      _worktree: string,
+      _timeoutMs: number,
+    ) => {
       autofixRunCalled = true;
       autofixCalls.push({ commands, surface: expectedSurface });
     },
@@ -1500,11 +1517,11 @@ body
 
   ok(autofixRunCalled, "runAutoFix should have been called");
   equal(autofixCalls.length, 1);
-  const call = autofixCalls[0];
+  const call = autofixCalls[0]!;
 
   // Commands from packet frontmatter.
   equal(call.commands.length, 1);
-  equal(call.commands[0].command, "oxlint --fix");
+  equal(call.commands[0]!.command, "oxlint --fix");
 
   // Surface from packet frontmatter.
   deepEqual(call.surface, ["src/index.ts", "src/utils/*.ts"]);
@@ -1532,7 +1549,12 @@ test("convergeRun: empty autofix_commands → runAutoFix called with empty comma
 
   ports.verify = {
     ...ports.verify,
-    runAutoFix: async (commands, _expectedSurface, _worktree, _timeoutMs) => {
+    runAutoFix: async (
+      commands: VerificationCommand[],
+      _expectedSurface: string[],
+      _worktree: string,
+      _timeoutMs: number,
+    ) => {
       autofixRunCalled = true;
       capturedCommands = commands;
     },
@@ -1573,11 +1595,12 @@ test("convergeRun: records reviewerSessionId from the real adapter and preserves
   const fakeExecutor: Executor = {
     createSession: async () => SUPER_SESSION,
     sendMessage: async (): Promise<TurnResponse> => ({
-      info: { id: "m", sessionID: SUPER_SESSION, role: "assistant", model: "test" },
+      info: { id: "m", sessionID: SUPER_SESSION, role: "assistant", modelID: "test" },
       parts: [{ type: "text", text: ACCEPT_JSON }],
     }),
     listMessages: async () => [],
     deleteSession: async () => {},
+    abortSession: async () => {},
   };
   const reviewer = createReviewer(fakeExecutor, sdModel, 5000, 1);
 

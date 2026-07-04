@@ -27,7 +27,7 @@ const fakeRepo = (opts?: {
   branchExists?: boolean;
   headBranchThrows?: boolean;
   repoValid?: boolean;
-}): Repo => {
+}): Repo & { headBranchCallCount: number } => {
   let headBranchCallCount = 0;
   return {
     get headBranchCallCount() {
@@ -40,7 +40,7 @@ const fakeRepo = (opts?: {
     amendCommit: () => "",
     worktreeIsDirty: () => false,
     diffStat: () => "",
-    readDiffStats: () => ({ added: 0, removed: 0 }),
+    readDiffStats: () => ({}),
     reviewableDiff: () => "",
     reviewableDiffAgainst: () => "",
     fetchBranchFromClone: () => {
@@ -58,6 +58,13 @@ const fakeRepo = (opts?: {
     },
     branchExists: (_w: string, _b: string) => opts?.branchExists ?? true,
     repoValid: () => opts?.repoValid ?? true,
+    reconciliationGitState: () => ({
+      head: "",
+      status: [],
+      diffHash: "",
+      untracked: [],
+      changedFiles: [],
+    }),
     mergeAccept: () => {
       throw new Error("unimplemented");
     },
@@ -96,11 +103,12 @@ body
 };
 
 const makeValidConvergenceEntry = (
-  overrides?: Partial<ConvergenceLogEntry>,
+  overrides?: Partial<Extract<ConvergenceLogEntry, { kind: "reviewed" }>>,
 ): ConvergenceLogEntry => {
   const at = fixedClock().nowIso();
   return {
     at,
+    kind: "reviewed",
     runId: "20260101-000000-test",
     campaignId: "test-campaign",
     pass: 1,
@@ -144,6 +152,11 @@ test("store: meta round-trip", async () => {
     base: "main",
     branch: "meridian/20260101-000000-meta",
     worktree: join(tmp, "worktree"),
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    reviewerUnreachable: 0,
+    promoted: false,
     updatedAt: clock.nowIso(),
   };
   store.writeMeta(meta);
@@ -174,6 +187,11 @@ test("store: listRunIds returns sorted ids", async () => {
     base: "main",
     branch: "b",
     worktree: tmp,
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    reviewerUnreachable: 0,
+    promoted: false,
     updatedAt: clock.nowIso(),
   };
   const meta2 = {
@@ -184,6 +202,11 @@ test("store: listRunIds returns sorted ids", async () => {
     base: "main",
     branch: "b",
     worktree: tmp,
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    reviewerUnreachable: 0,
+    promoted: false,
     updatedAt: clock.nowIso(),
   };
   store.writeMeta(meta1);
@@ -206,8 +229,8 @@ test("store: initialLedger creates from packet outcomes", async () => {
   const ledger = store.initialLedger(packet);
   equal(ledger.runId, "20260101-000000-test");
   strictEqual(ledger.outcomes.length, 1);
-  equal(ledger.outcomes[0].id, "test-outcome");
-  equal(ledger.outcomes[0].status, "not_started");
+  equal(ledger.outcomes[0]!.id, "test-outcome");
+  equal(ledger.outcomes[0]!.status, "not_started");
   await cleanTemp(tmp);
 });
 
@@ -231,8 +254,8 @@ test("store: ledger round-trip", async () => {
   store.writeLedger(ledger);
   const read = store.readLedger(ledger.runId);
   equal(read.runId, ledger.runId);
-  equal(read.outcomes[0].status, "done");
-  equal(read.outcomes[0].evidence[0], "evidence.txt");
+  equal(read.outcomes[0]!.status, "done");
+  equal(read.outcomes[0]!.evidence[0], "evidence.txt");
   await cleanTemp(tmp);
 });
 
@@ -268,6 +291,7 @@ test("store: decisions append and read", async () => {
     question: "q1",
     status: "proceed",
     answer: "a1",
+    evidence: [],
     constraints: [],
   };
   const d2 = {
@@ -277,14 +301,15 @@ test("store: decisions append and read", async () => {
     question: "q2",
     status: "proceed",
     answer: "a2",
+    evidence: [],
     constraints: [],
   };
   store.appendDecision("20260101-000000-test", d1);
   store.appendDecision("20260101-000000-test", d2);
   const decisions = store.readDecisions("20260101-000000-test");
   strictEqual(decisions.length, 2);
-  equal(decisions[0].question, "q1");
-  equal(decisions[1].question, "q2");
+  equal(decisions[0]!.question, "q1");
+  equal(decisions[1]!.question, "q2");
   strictEqual(store.readDecisions("nonexistent-run").length, 0);
   await cleanTemp(tmp);
 });
@@ -302,6 +327,9 @@ test("store: checkpoints", async () => {
     reason: "checkpoint",
     summary: "s1",
     outcomes: [{ id: "o1", status: "done" as const, evidence: [] }],
+    filesChanged: [],
+    filesInspected: [],
+    uncertainties: [],
     writtenAt: clock.nowIso(),
   };
   const c2 = {
@@ -309,6 +337,9 @@ test("store: checkpoints", async () => {
     reason: "checkpoint",
     summary: "s2",
     outcomes: [{ id: "o1", status: "done" as const, evidence: [] }],
+    filesChanged: [],
+    filesInspected: [],
+    uncertainties: [],
     writtenAt: clock.nowIso(),
   };
   store.writeCheckpoint("20260101-000000-test", c1);
@@ -361,6 +392,7 @@ test("store: report read/write", async () => {
     verificationClaims: [],
     escalations: [],
     remainingUncertainty: [],
+    regressionGuard: { tests: [] },
   };
   store.writeReport("20260101-000000-test", report, "# Report\n\ndone");
   equal(store.readReport("20260101-000000-test"), "# Report\n\ndone");
@@ -387,8 +419,12 @@ test("store: convergence round-trip", async () => {
   store.appendConvergence(entry.runId, entry);
   const entries = store.readConvergence(entry.runId);
   strictEqual(entries.length, 1);
-  equal(entries[0].runId, entry.runId);
-  equal(entries[0].decision.action, "stop");
+  const first = entries[0]!;
+  equal(first.runId, entry.runId);
+  equal(first.kind, "reviewed");
+  if (first.kind === "reviewed") {
+    equal(first.decision.action, "stop");
+  }
   strictEqual(store.readConvergence("nonexistent").length, 0);
   await cleanTemp(tmp);
 });
@@ -411,7 +447,7 @@ test("store: active run multi-row add/remove/list", async () => {
   store.addActiveRun(run1);
   let runs = store.listActiveRuns();
   equal(runs.length, 1);
-  equal(runs[0].runId, run1.runId);
+  equal(runs[0]!.runId, run1.runId);
   const run2 = { ...run1, runId: "20260101-000000-test2", babySessionId: "sess2" };
   store.addActiveRun(run2);
   runs = store.listActiveRuns();
@@ -419,7 +455,7 @@ test("store: active run multi-row add/remove/list", async () => {
   store.removeActiveRun("20260101-000000-test");
   runs = store.listActiveRuns();
   equal(runs.length, 1);
-  equal(runs[0].runId, run2.runId);
+  equal(runs[0]!.runId, run2.runId);
   store.removeActiveRun("20260101-000000-test2");
   deepEqual(store.listActiveRuns(), []);
   await cleanTemp(tmp);
@@ -441,8 +477,8 @@ test("store: active run upsert (rotation replaces babySessionId)", async () => {
   store.addActiveRun(runRotated);
   const runs = store.listActiveRuns();
   equal(runs.length, 1);
-  equal(runs[0].babySessionId, "sess2");
-  equal(runs[0].startedAt, runRotated.startedAt);
+  equal(runs[0]!.babySessionId, "sess2");
+  equal(runs[0]!.startedAt, runRotated.startedAt);
   await cleanTemp(tmp);
 });
 
@@ -464,8 +500,8 @@ test("store: active run json file is array", async () => {
   const parsed = JSON.parse(content);
   ok(Array.isArray(parsed));
   equal(parsed.length, 2);
-  equal(parsed[0].runId, run1.runId);
-  equal(parsed[1].runId, run2.runId);
+  equal(parsed[0]!.runId, run1.runId);
+  equal(parsed[1]!.runId, run2.runId);
   store.removeActiveRun("20260101-000000-test");
   const content2 = readFileSync(join(tmp, "active-run.json"), "utf-8");
   const parsed2 = JSON.parse(content2);
@@ -490,7 +526,7 @@ test("store: active convergence multi-row add/remove/list", async () => {
   store.addActiveConvergence(convergence);
   let list = store.listActiveConvergences();
   equal(list.length, 1);
-  equal(list[0].runId, convergence.runId);
+  equal(list[0]!.runId, convergence.runId);
   store.removeActiveConvergence("20260101-000000-test");
   deepEqual(store.listActiveConvergences(), []);
   await cleanTemp(tmp);
@@ -566,8 +602,8 @@ verification:
   store.admitQueue("20260101-000000-a", packet1);
   const entries = store.listQueue();
   strictEqual(entries.length, 2);
-  equal(entries[0].runId, "20260101-000000-a");
-  equal(entries[1].runId, "20260101-000000-b");
+  equal(entries[0]!.runId, "20260101-000000-a");
+  equal(entries[1]!.runId, "20260101-000000-b");
   await cleanTemp(tmp);
 });
 
@@ -585,6 +621,11 @@ test("store: listQueue returns all queued runs in lexical order", async () => {
     base: "main",
     branch: "b",
     worktree: join(tmp, "w"),
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    reviewerUnreachable: 0,
+    promoted: false,
     updatedAt: clock.nowIso(),
   };
   store.writeMeta(meta);
@@ -607,9 +648,9 @@ verification:
   const entries = store.listQueue();
   strictEqual(entries.length, 2);
   // Lexical order: 'f' < 'r' (both attempt=1, so run_id sorts lexically)
-  equal(entries[0].runId, "20260101-000000-fresh");
-  ok(entries[0].admittedAt);
-  equal(entries[1].runId, runId);
+  equal(entries[0]!.runId, "20260101-000000-fresh");
+  ok(entries[0]!.admittedAt);
+  equal(entries[1]!.runId, runId);
   await cleanTemp(tmp);
 });
 
@@ -640,10 +681,10 @@ test("store: listQueue returns requeued runs (attempt>1) before fresh runs", asy
   const entries = store.listQueue();
   strictEqual(entries.length, 3);
   // Requeued (attempt=2) comes first despite run_id ordering
-  equal(entries[0].runId, "20260101-000000-requeued");
+  equal(entries[0]!.runId, "20260101-000000-requeued");
   // Fresh runs sorted lexically after
-  equal(entries[1].runId, "20260101-000000-fresh-a");
-  equal(entries[2].runId, "20260101-000000-fresh-b");
+  equal(entries[1]!.runId, "20260101-000000-fresh-a");
+  equal(entries[2]!.runId, "20260101-000000-fresh-b");
   await cleanTemp(tmp);
 });
 
@@ -755,6 +796,11 @@ test("store: claimNextQueuedRun retries when first candidate loses CAS race", as
     base: "main",
     branch: "b",
     worktree: join(tmp, "run-b", "worktree"),
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    reviewerUnreachable: 0,
+    promoted: false,
     updatedAt: clock.nowIso(),
   };
   mkdirSync(join(tmp, "run-b", "worktree"), { recursive: true });
@@ -842,7 +888,7 @@ verification:
   store.admitQueue("20260101-000000-test", packet);
   strictEqual(repo.headBranchCallCount, 0, "headBranch should not be called when base is explicit");
   const admittedRaw = store.readQueuePacket("20260101-000000-test");
-  match(admittedRaw, /base: stable-branch/);
+  match(admittedRaw!, /base: stable-branch/);
   await cleanTemp(tmp);
 });
 
@@ -867,7 +913,7 @@ verification:
   store.admitQueue("20260101-000000-test", packet);
   strictEqual(repo.headBranchCallCount, 1, "headBranch should be called when base is absent");
   const admittedRaw = store.readQueuePacket("20260101-000000-test");
-  match(admittedRaw, /base: develop/);
+  match(admittedRaw!, /base: develop/);
   await cleanTemp(tmp);
 });
 
@@ -1013,9 +1059,9 @@ verification:
   equal(store.readStaged("20260101-000000-child"), packet);
   const staged = store.listStaged();
   strictEqual(staged.length, 1);
-  equal(staged[0].runId, "20260101-000000-child");
-  equal(staged[0].parentRunId, "20260101-000000-parent");
-  equal(staged[0].repo, "/tmp/test-repo");
+  equal(staged[0]!.runId, "20260101-000000-child");
+  equal(staged[0]!.parentRunId, "20260101-000000-parent");
+  equal(staged[0]!.repo, "/tmp/test-repo");
   store.removeStaged("20260101-000000-child");
   strictEqual(store.readStaged("20260101-000000-child"), undefined);
   strictEqual(store.listStaged().length, 0);
@@ -1038,7 +1084,7 @@ test("store: journal append and read", async () => {
   store.appendJournal("20260101-000000-test", event);
   const events = store.readJournal("20260101-000000-test");
   strictEqual(events.length, 1);
-  equal(events[0].event, "run_started");
+  equal(events[0]!.event, "run_started");
   strictEqual(store.readJournal("nonexistent").length, 0);
   await cleanTemp(tmp);
 });
@@ -1064,6 +1110,11 @@ const runContractTests = async (
       base: "main",
       branch: "meridian/20260101-000000-meta",
       worktree: join(tmp, "worktree"),
+      stallRetries: 0,
+      crashRetries: 0,
+      reorientRetries: 0,
+      reviewerUnreachable: 0,
+      promoted: false,
       updatedAt: clock.nowIso(),
     };
     store.writeMeta(meta);
@@ -1103,8 +1154,8 @@ const runContractTests = async (
     store.writeLedger(ledger);
     const read = store.readLedger(ledger.runId);
     equal(read.runId, ledger.runId);
-    equal(read.outcomes[0].status, "done");
-    equal(read.outcomes[0].evidence[0], "evidence.txt");
+    equal(read.outcomes[0]!.status, "done");
+    equal(read.outcomes[0]!.evidence[0], "evidence.txt");
     await cleanTemp(tmp);
   }
 
@@ -1136,12 +1187,13 @@ const runContractTests = async (
       question: "q1",
       status: "proceed",
       answer: "a1",
+      evidence: [],
       constraints: [],
     };
     store.appendDecision("20260101-000000-test", d1);
     const decisions = store.readDecisions("20260101-000000-test");
     strictEqual(decisions.length, 1);
-    equal(decisions[0].question, "q1");
+    equal(decisions[0]!.question, "q1");
     await cleanTemp(tmp);
   }
 
@@ -1156,6 +1208,9 @@ const runContractTests = async (
       reason: "checkpoint",
       summary: "s1",
       outcomes: [{ id: "o1", status: "done" as const, evidence: [] }],
+      filesChanged: [],
+      filesInspected: [],
+      uncertainties: [],
       writtenAt: clock.nowIso(),
     };
     const c2 = {
@@ -1163,6 +1218,9 @@ const runContractTests = async (
       reason: "checkpoint",
       summary: "s2",
       outcomes: [{ id: "o1", status: "done" as const, evidence: [] }],
+      filesChanged: [],
+      filesInspected: [],
+      uncertainties: [],
       writtenAt: clock.nowIso(),
     };
     store.writeCheckpoint("20260101-000000-test", c1);
@@ -1211,6 +1269,7 @@ const runContractTests = async (
       verificationClaims: [],
       escalations: [],
       remainingUncertainty: [],
+      regressionGuard: { tests: [] },
     };
     store.writeReport("20260101-000000-test", report, "# Report\n\ndone");
     equal(store.readReport("20260101-000000-test"), "# Report\n\ndone");
@@ -1236,8 +1295,12 @@ const runContractTests = async (
     store.appendConvergence(entry.runId, entry);
     const entries = store.readConvergence(entry.runId);
     strictEqual(entries.length, 1);
-    equal(entries[0].runId, entry.runId);
-    equal(entries[0].decision.action, "stop");
+    const first = entries[0]!;
+    equal(first.runId, entry.runId);
+    equal(first.kind, "reviewed");
+    if (first.kind === "reviewed") {
+      equal(first.decision.action, "stop");
+    }
     await cleanTemp(tmp);
   }
 
@@ -1257,7 +1320,7 @@ const runContractTests = async (
     store.addActiveRun(run);
     const list = store.listActiveRuns();
     ok(list.length > 0);
-    equal(list[0].runId, run.runId);
+    equal(list[0]!.runId, run.runId);
     store.removeActiveRun("20260101-000000-test");
     deepEqual(store.listActiveRuns(), []);
     await cleanTemp(tmp);
@@ -1276,7 +1339,7 @@ const runContractTests = async (
     store.addActiveConvergence(convergence);
     const list = store.listActiveConvergences();
     ok(list.length > 0);
-    equal(list[0].runId, convergence.runId);
+    equal(list[0]!.runId, convergence.runId);
     store.removeActiveConvergence("20260101-000000-test");
     deepEqual(store.listActiveConvergences(), []);
     await cleanTemp(tmp);
@@ -1342,6 +1405,11 @@ verification:
       base: "main",
       branch: "b",
       worktree: join(tmp, "w"),
+      stallRetries: 0,
+      crashRetries: 0,
+      reorientRetries: 0,
+      reviewerUnreachable: 0,
+      promoted: false,
       updatedAt: clock.nowIso(),
     };
     const aMeta = {
@@ -1352,6 +1420,11 @@ verification:
       base: "main",
       branch: "b",
       worktree: join(tmp, "w"),
+      stallRetries: 0,
+      crashRetries: 0,
+      reorientRetries: 0,
+      reviewerUnreachable: 0,
+      promoted: false,
       updatedAt: clock.nowIso(),
     };
     const bMeta = {
@@ -1362,6 +1435,11 @@ verification:
       base: "main",
       branch: "b",
       worktree: join(tmp, "w"),
+      stallRetries: 0,
+      crashRetries: 0,
+      reorientRetries: 0,
+      reviewerUnreachable: 0,
+      promoted: false,
       updatedAt: clock.nowIso(),
     };
     store.writeMeta(zMeta);
@@ -1372,10 +1450,10 @@ verification:
     const entries = store.listQueue();
     strictEqual(entries.length, 4);
     // All queued runs in lexical order: a, b, fresh, z
-    equal(entries[0].runId, "20260101-000000-a");
-    equal(entries[1].runId, "20260101-000000-b");
-    equal(entries[2].runId, "20260101-000000-fresh");
-    equal(entries[3].runId, "20260101-000000-z");
+    equal(entries[0]!.runId, "20260101-000000-a");
+    equal(entries[1]!.runId, "20260101-000000-b");
+    equal(entries[2]!.runId, "20260101-000000-fresh");
+    equal(entries[3]!.runId, "20260101-000000-z");
     await cleanTemp(tmp);
   }
 
@@ -1401,7 +1479,7 @@ verification:
     store.admitQueue("20260101-000000-test", packet);
     const entries = store.listQueue();
     strictEqual(entries.length, 1);
-    equal(entries[0].runId, "20260101-000000-test");
+    equal(entries[0]!.runId, "20260101-000000-test");
     await cleanTemp(tmp);
   }
 
@@ -1460,9 +1538,9 @@ verification:
     equal(store.readStaged("20260101-000000-child"), packet);
     const staged = store.listStaged();
     strictEqual(staged.length, 1);
-    equal(staged[0].runId, "20260101-000000-child");
-    equal(staged[0].parentRunId, "20260101-000000-parent");
-    equal(staged[0].repo, "/tmp/test-repo");
+    equal(staged[0]!.runId, "20260101-000000-child");
+    equal(staged[0]!.parentRunId, "20260101-000000-parent");
+    equal(staged[0]!.repo, "/tmp/test-repo");
     store.removeStaged("20260101-000000-child");
     strictEqual(store.readStaged("20260101-000000-child"), undefined);
     strictEqual(store.listStaged().length, 0);
@@ -1483,7 +1561,7 @@ verification:
     store.appendJournal("20260101-000000-test", event);
     const events = store.readJournal("20260101-000000-test");
     strictEqual(events.length, 1);
-    equal(events[0].event, "run_started");
+    equal(events[0]!.event, "run_started");
     strictEqual(store.readJournal("nonexistent").length, 0);
     await cleanTemp(tmp);
   }
@@ -1508,6 +1586,9 @@ verification:
       reason: "checkpoint",
       summary: "s1",
       outcomes: [{ id: "o1", status: "done" as const, evidence: [] }],
+      filesChanged: [],
+      filesInspected: [],
+      uncertainties: [],
       writtenAt: clock.nowIso(),
     });
     store.appendDecision("20260101-000000-test", {
@@ -1517,6 +1598,7 @@ verification:
       question: "q1",
       status: "proceed",
       answer: "a1",
+      evidence: [],
       constraints: [],
     });
     store.replaceObligations("20260101-000000-test", ["fix x"]);
@@ -1564,8 +1646,8 @@ test("store: sqlite — WAL snapshot isolation", async () => {
   // Reader should NOT see the uncommitted row (WAL snapshot isolation)
   const beforeCommit = connB.prepare("SELECT id, value FROM items ORDER BY id").all();
   strictEqual(beforeCommit.length, 1);
-  equal(beforeCommit[0].id, "1");
-  equal(beforeCommit[0].value, "initial");
+  equal(beforeCommit[0]!.id, "1");
+  equal(beforeCommit[0]!.value, "initial");
 
   // Commit the write
   connA.exec("COMMIT");
@@ -1573,9 +1655,9 @@ test("store: sqlite — WAL snapshot isolation", async () => {
   // Reader should now see both rows
   const afterCommit = connB.prepare("SELECT id, value FROM items ORDER BY id").all();
   strictEqual(afterCommit.length, 2);
-  equal(afterCommit[0].id, "1");
-  equal(afterCommit[1].id, "2");
-  equal(afterCommit[1].value, "uncommitted");
+  equal(afterCommit[0]!.id, "1");
+  equal(afterCommit[1]!.id, "2");
+  equal(afterCommit[1]!.value, "uncommitted");
 
   connA.close();
   connB.close();
@@ -1595,13 +1677,13 @@ test("store: sqlite — readJournalSince ordering across runIds", async () => {
   // Append events to two different runs
   const eventA1 = {
     at: "2026-01-01T00:00:01.000Z",
-    event: "run_started",
+    event: "run_started" as const,
     runId: "run-a",
     attempt: 1,
   };
   const eventB1 = {
     at: "2026-01-01T00:00:02.000Z",
-    event: "turn_ended",
+    event: "turn_ended" as const,
     runId: "run-b",
     messageId: "m1",
     tokens: { input: 100, output: 50, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
@@ -1610,7 +1692,7 @@ test("store: sqlite — readJournalSince ordering across runIds", async () => {
   };
   const eventA2 = {
     at: "2026-01-01T00:00:03.000Z",
-    event: "turn_ended",
+    event: "turn_ended" as const,
     runId: "run-a",
     messageId: "m2",
     tokens: { input: 200, output: 100, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
@@ -1625,21 +1707,21 @@ test("store: sqlite — readJournalSince ordering across runIds", async () => {
   // readJournalSince(0) returns all events in seq order
   const all = store.readJournalSince(0);
   strictEqual(all.length, 3);
-  equal(all[0].seq, 1);
-  equal(all[0].runId, "run-a");
-  equal(all[0].event.event, "run_started");
-  equal(all[1].seq, 2);
-  equal(all[1].runId, "run-b");
-  equal(all[1].event.event, "turn_ended");
-  equal(all[2].seq, 3);
-  equal(all[2].runId, "run-a");
-  equal(all[2].event.event, "turn_ended");
+  equal(all[0]!.seq, 1);
+  equal(all[0]!.runId, "run-a");
+  equal(all[0]!.event.event, "run_started");
+  equal(all[1]!.seq, 2);
+  equal(all[1]!.runId, "run-b");
+  equal(all[1]!.event.event, "turn_ended");
+  equal(all[2]!.seq, 3);
+  equal(all[2]!.runId, "run-a");
+  equal(all[2]!.event.event, "turn_ended");
 
   // readJournalSince(1) returns events after seq 1 (resumption)
   const resumed = store.readJournalSince(1);
   strictEqual(resumed.length, 2);
-  equal(resumed[0].seq, 2);
-  equal(resumed[1].seq, 3);
+  equal(resumed[0]!.seq, 2);
+  equal(resumed[1]!.seq, 3);
 
   // readJournalSince(3) returns empty
   strictEqual(store.readJournalSince(3).length, 0);

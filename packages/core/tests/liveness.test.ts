@@ -241,7 +241,7 @@ test("decideCrashRecovery: maxCrashRetries 0 → escalate immediately", () => {
 test("decideCrashRecovery: handles missing crashRetries (undefined)", () => {
   assert.deepEqual(
     decideCrashRecovery(
-      { status: "blocked", blockedReason: "crashed", crashRetries: undefined },
+      { status: "blocked", blockedReason: "crashed", crashRetries: undefined as unknown as number },
       2,
     ),
     { action: "requeue", crashRetries: 1 },

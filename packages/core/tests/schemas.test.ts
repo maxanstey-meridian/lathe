@@ -201,6 +201,7 @@ test("journal: JournalEvent parses tool_call with defaults", () => {
     at: "2026-01-01T00:00:00Z",
   };
   const result = JournalEvent.parse(valid);
+  assert(result.event === "tool_call");
   assert.strictEqual(result.gateDenied, false);
 });
 
@@ -212,6 +213,7 @@ test("journal: JournalEvent parses parked with BlockedReason", () => {
     at: "2026-01-01T00:00:00Z",
   };
   const result = JournalEvent.parse(valid);
+  assert(result.event === "parked");
   assert.strictEqual(result.reason, "human_decision");
 });
 
@@ -222,7 +224,8 @@ test("journal: JournalEvent parses outcomes_updated with OutcomeStatus", () => {
     at: "2026-01-01T00:00:00Z",
   };
   const result = JournalEvent.parse(valid);
-  assert.strictEqual(result.outcomes[0].status, "done");
+  assert(result.event === "outcomes_updated");
+  assert.strictEqual(result.outcomes[0]!.status, "done");
 });
 
 test("journal: JournalEvent parses final_review with FinalReviewVerdict", () => {
@@ -233,6 +236,7 @@ test("journal: JournalEvent parses final_review with FinalReviewVerdict", () => 
     at: "2026-01-01T00:00:00Z",
   };
   const result = JournalEvent.parse(valid);
+  assert(result.event === "final_review");
   assert.strictEqual(result.verdict, "accept");
 });
 

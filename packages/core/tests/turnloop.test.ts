@@ -218,7 +218,10 @@ const seedRun = (
     worktree: "/tmp/worktree",
     babySessionId: "baby-0",
     stallRetries: 0,
+    crashRetries: 0,
     reorientRetries: 0,
+    reviewerUnreachable: 0,
+    promoted: false,
     updatedAt: "2026-01-01T00:00:00.000Z",
   });
   store.writeLedger(store.initialLedger(packet));
@@ -607,6 +610,7 @@ test("turnLoop: 3 final-review rejections → model_promoted → accept on promo
       },
       listMessages: async () => [],
       deleteSession: async () => {},
+      abortSession: async () => {},
     };
     const ports = makePorts(store, fakeRepo(), executor, planner);
 
@@ -663,6 +667,7 @@ test("turnLoop: promoted model also rejected → run fails (no double promotion)
       },
       listMessages: async () => [],
       deleteSession: async () => {},
+      abortSession: async () => {},
     };
     const ports = makePorts(store, fakeRepo(), executor, planner);
 
@@ -899,6 +904,7 @@ test("turnLoop: Baby submits mid-turn → bridge sets turnComplete, turn resolve
       },
       listMessages: async () => [],
       deleteSession: async () => {},
+      abortSession: async () => {},
     };
     const ports = makePorts(store, fakeRepo(), submitExecutor, fakePlanner());
 
@@ -1378,6 +1384,7 @@ test("turnLoop: provider context overflow rotates instead of parking as dead ses
       },
       listMessages: async () => [],
       deleteSession: async () => {},
+      abortSession: async () => {},
     };
     const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
 
@@ -1776,6 +1783,7 @@ test("turnLoop: two consecutive sendMessage failures → parks wedged", () => {
       },
       listMessages: async () => [],
       deleteSession: async () => {},
+      abortSession: async () => {},
     };
     const ports = makePorts(store, fakeRepo(), throwingExecutor, fakePlanner());
 
@@ -1790,7 +1798,9 @@ test("turnLoop: two consecutive sendMessage failures → parks wedged", () => {
     );
 
     equal(result.outcome.status, "blocked");
-    equal(result.outcome.reason, "wedged");
+    if (result.outcome.status === "blocked") {
+      equal(result.outcome.reason, "wedged");
+    }
     // First failure → rotate (turn 1→2). Second failure on rotated session → wedged (turn 2).
     const journal = store.readJournal(RUN_ID);
     equal(journal.filter((e) => e.event === "prompt_sent").length, 2);
@@ -1864,7 +1874,7 @@ test("turnLoop: consult reorient → session replaced, Q9 reseed, then terminal"
     // The second prompt sent should be Q9 (reorient seed).
     const prompts = journal.filter((e) => e.event === "prompt_sent");
     equal(prompts.length, 2);
-    equal(prompts[1].promptName, "Q9");
+    equal(prompts[1]!.promptName, "Q9");
     equal(store.readMeta(RUN_ID).babySessionId, "baby-r1");
     await cleanTemp(tmp);
   })();
@@ -1942,7 +1952,7 @@ test("turnLoop: consult promote_run → promotes model, rotates session, then co
     ok(journal.some((e) => e.event === "rotation"));
     const prompts = journal.filter((e) => e.event === "prompt_sent");
     equal(prompts.length, 2);
-    equal(prompts[1].promptName, "Qp-promote");
+    equal(prompts[1]!.promptName, "Qp-promote");
     const decisions = store.readDecisions(RUN_ID);
     ok(decisions.some((d) => d.status === "promote_run"));
     await cleanTemp(tmp);
@@ -1985,6 +1995,7 @@ test("turnLoop: context budget reached → demand_teardown Q5, then terminal", (
       },
       listMessages: async () => [],
       deleteSession: async () => {},
+      abortSession: async () => {},
     };
     const config = Config.parse({ thresholds: { rotationFraction: 0.01 } }); // Very low budget (~12000)
     const ports = makePorts(store, fakeRepo(), teardownExecutor, fakePlanner(), config);
@@ -2007,7 +2018,7 @@ test("turnLoop: context budget reached → demand_teardown Q5, then terminal", (
     ok(hasTeardown > 0, "should have teardown_demanded rotation phase");
     const prompts = journal.filter((e) => e.event === "prompt_sent");
     equal(prompts.length, 2);
-    equal(prompts[1].promptName, "Q5");
+    equal(prompts[1]!.promptName, "Q5");
     await cleanTemp(tmp);
   })();
 });
@@ -2047,6 +2058,7 @@ test("turnLoop: rotationPending with no checkpoint → re_demand_teardown Q5, la
       },
       listMessages: async () => [],
       deleteSession: async () => {},
+      abortSession: async () => {},
     };
     const config = Config.parse({
       thresholds: { rotationFraction: 0.01, ladderRotateAt: 3, ladderParkAt: 5 },
@@ -2074,9 +2086,9 @@ test("turnLoop: rotationPending with no checkpoint → re_demand_teardown Q5, la
     ok(ladderSteps.length >= 1, "ladder should have climbed at least 1 step (re_demand_teardown)");
     const prompts = journal.filter((e) => e.event === "prompt_sent");
     equal(prompts.length, 3);
-    equal(prompts[0].promptName, "Q1");
-    equal(prompts[1].promptName, "Q5");
-    equal(prompts[2].promptName, "Q5");
+    equal(prompts[0]!.promptName, "Q1");
+    equal(prompts[1]!.promptName, "Q5");
+    equal(prompts[2]!.promptName, "Q5");
     await cleanTemp(tmp);
   })();
 });

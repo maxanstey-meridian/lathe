@@ -68,7 +68,7 @@ test("parse: missing frontmatter returns error", () => {
   assert.strictEqual(result.ok, false);
   assert(!result.ok);
   assert.strictEqual(result.problems.length, 1);
-  assert(result.problems[0].includes("no YAML frontmatter opening delimiter"));
+  assert(result.problems[0]!.includes("no YAML frontmatter opening delimiter"));
 });
 
 test("parse: invalid YAML in frontmatter returns error", () => {
@@ -82,7 +82,7 @@ body
   const result = parsePacketShape(raw, "20260618-030000-test");
   assert.strictEqual(result.ok, false);
   assert(!result.ok);
-  assert(result.problems[0].includes("not valid YAML"));
+  assert(result.problems[0]!.includes("not valid YAML"));
 });
 
 test("parse: schema failure on missing required fields", () => {

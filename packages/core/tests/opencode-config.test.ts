@@ -4,75 +4,73 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { test } from "node:test";
 import { makePaths } from "../src/config/paths.js";
-import type { Config } from "../src/config/schemas.js";
+import { Config } from "../src/config/schemas.js";
 import { writeOpencodeConfig, pluginPath } from "../src/infrastructure/opencode/config.js";
 import { createOpencodeClient } from "../src/infrastructure/opencode/executor.js";
 
-const makeTestConfig = (overrides: Partial<Config> = {}): Config => ({
-  stateRoot: "/tmp/lathe-test-state",
-  opencode: {
-    binary: "opencode",
-    port: 4196,
-    bridgePort: 4197,
-    expectedVersion: "1.17",
-    ...overrides.opencode,
-  },
-  daddy: {
-    providerId: "zai-coding-plan",
-    modelId: "glm-5.1",
-    agent: "daddy",
-    timeoutMs: 300_000,
-    turnSteps: 8,
-    ...overrides.daddy,
-  },
-  baby: {
-    providerId: "omlx",
-    modelId: "Qwen3.6-35B-A3B-UD-MLX-4bit",
-    baseUrl: "http://localhost:8000/v1",
-    apiKey: "test-key",
-    agent: "baby",
-    contextWindow: 98_304,
-    timeoutMs: 1_800_000,
-    turnSteps: 12,
-    thinkingBudget: 6_000,
-    ...overrides.baby,
-  },
-  superdaddy: {
-    providerId: "openai",
-    modelId: "gpt-5.5-pro",
-    agent: "superdaddy",
-    timeoutMs: 1_800_000,
-    baseUrl: "https://chatgpt.com/backend-api/codex",
-    headerTimeoutMs: 3_600_000,
-    turnSteps: 40,
-    skillPath: "~/.config/opencode/skills/meridian/SKILL.md",
-    diffCapBytes: 131_072,
-    ...overrides.superdaddy,
-  },
-  thresholds: {
-    rotationFraction: 0.65,
-    ladderParkAt: 10,
-    ladderRotateAt: 4,
-    checkpointNudgeMs: 1_200_000,
-    checkpointToolCalls: 50,
-    checkpointFiles: 6,
-    checkpointLoc: 80,
-    reportRejectionParkAt: 3,
-    checkpointBounceLimit: 1,
-    verificationTimeoutMs: 600_000,
-    maxPasses: 3,
-    maxStallRetries: 2,
-    maxReorientRetries: 2,
-    maxRunMs: 21_600_000,
-    ...overrides.thresholds,
-  },
-  mutationCommandPatterns: [
-    "\\b(pnpm|npm|yarn)\\b.*\\bgenerate\\b",
-    "task contracts",
-    "dotnet-rivet",
-  ],
-  idleTimeoutMs: 120_000,
-});
+const makeTestConfig = (): Config =>
+  Config.parse({
+    stateRoot: "/tmp/lathe-test-state",
+    opencode: {
+      binary: "opencode",
+      port: 4196,
+      bridgePort: 4197,
+      expectedVersion: "1.17",
+    },
+    daddy: {
+      providerId: "zai-coding-plan",
+      modelId: "glm-5.1",
+      agent: "daddy",
+      timeoutMs: 300_000,
+    },
+    baby: {
+      providerId: "omlx",
+      modelId: "Qwen3.6-35B-A3B-UD-MLX-4bit",
+      baseUrl: "http://localhost:8000/v1",
+      apiKey: "test-key",
+      agent: "baby",
+      contextWindow: 98_304,
+      timeoutMs: 1_800_000,
+      turnSteps: 12,
+      thinkingBudget: 6_000,
+    },
+    superdaddy: {
+      providerId: "openai",
+      modelId: "gpt-5.5-pro",
+      agent: "superdaddy",
+      timeoutMs: 1_800_000,
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      headerTimeoutMs: 3_600_000,
+      turnSteps: 40,
+      skillPath: "~/.config/opencode/skills/meridian/SKILL.md",
+      packetSkillPath: "~/.config/opencode/skills/packet/SKILL.md",
+      diffCapBytes: 131_072,
+      transportRetries: 2,
+    },
+    thresholds: {
+      rotationFraction: 0.65,
+      ladderParkAt: 10,
+      ladderRotateAt: 4,
+      checkpointNudgeMs: 1_200_000,
+      checkpointToolCalls: 50,
+      checkpointFiles: 6,
+      checkpointLoc: 80,
+      reportRejectionParkAt: 3,
+      checkpointBounceLimit: 1,
+      verificationTimeoutMs: 600_000,
+      maxPasses: 3,
+      maxStallRetries: 2,
+      maxReorientRetries: 2,
+      maxRunMs: 21_600_000,
+      contextTokensFloor: 128,
+    },
+    mutationCommandPatterns: [
+      "\\b(pnpm|npm|yarn)\\b.*\\bgenerate\\b",
+      "task contracts",
+      "dotnet-rivet",
+    ],
+    idleTimeoutMs: 120_000,
+  });
 
 const bridgeTools = [
   "meridian_bridge_ask_planner",
@@ -302,7 +300,7 @@ test("idle timeout: stalled response rejects before total deadline", async () =>
   const TOTAL_MS = 30_000;
   const PORT = 14199;
 
-  let server: ReturnType<typeof import("node:http").createServer>;
+  let server: ReturnType<typeof import("node:http").createServer> | undefined;
   try {
     const { createServer } = await import("node:http");
     server = createServer((req, res) => {
@@ -322,18 +320,14 @@ test("idle timeout: stalled response rejects before total deadline", async () =>
         res.flushHeaders(); // flush headers without sending body data
       }
     });
-    await new Promise<void>((resolve) => server.listen(PORT, resolve));
-    server.unref();
+    await new Promise<void>((resolve) => server!.listen(PORT, resolve));
+    server!.unref();
 
-    const config: Config = {
+    const config = Config.parse({
       idleTimeoutMs: IDLE_MS,
       opencode: { port: PORT },
-      daddy: {},
-      baby: {},
-      superdaddy: {},
-      thresholds: {},
       mutationCommandPatterns: [],
-    };
+    });
     const client = createOpencodeClient(config);
 
     const t0 = Date.now();
@@ -368,7 +362,7 @@ test("idle timeout: stalled response rejects before total deadline", async () =>
 test("idle timeout: disabled (false) does not reject", async () => {
   const PORT = 14200;
 
-  let server: ReturnType<typeof import("node:http").createServer>;
+  let server: ReturnType<typeof import("node:http").createServer> | undefined;
   try {
     const { createServer } = await import("node:http");
     server = createServer((req, res) => {
@@ -392,18 +386,14 @@ test("idle timeout: disabled (false) does not reject", async () => {
         res.end();
       }
     });
-    await new Promise<void>((resolve) => server.listen(PORT, resolve));
-    server.unref();
+    await new Promise<void>((resolve) => server!.listen(PORT, resolve));
+    server!.unref();
 
-    const config: Config = {
+    const config = Config.parse({
       idleTimeoutMs: false,
       opencode: { port: PORT },
-      daddy: {},
-      baby: {},
-      superdaddy: {},
-      thresholds: {},
       mutationCommandPatterns: [],
-    };
+    });
     const client = createOpencodeClient(config);
 
     const result = await client.sendMessage(
@@ -425,7 +415,7 @@ test("opencode executor: abortSession calls the server-side abort endpoint", asy
   const PORT = 14201;
   const seen: Array<{ method?: string; url?: string }> = [];
 
-  let server: ReturnType<typeof import("node:http").createServer>;
+  let server: ReturnType<typeof import("node:http").createServer> | undefined;
   try {
     const { createServer } = await import("node:http");
     server = createServer((req, res) => {
@@ -434,18 +424,14 @@ test("opencode executor: abortSession calls the server-side abort endpoint", asy
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true }));
     });
-    await new Promise<void>((resolve) => server.listen(PORT, resolve));
-    server.unref();
+    await new Promise<void>((resolve) => server!.listen(PORT, resolve));
+    server!.unref();
 
-    const config: Config = {
+    const config = Config.parse({
       idleTimeoutMs: false,
       opencode: { port: PORT },
-      daddy: {},
-      baby: {},
-      superdaddy: {},
-      thresholds: {},
       mutationCommandPatterns: [],
-    };
+    });
     const client = createOpencodeClient(config);
 
     await client.abortSession("session-123");

@@ -8,6 +8,7 @@ import type { Repo } from "../src/application/ports/repo.js";
 import { promoteStaged } from "../src/application/use-cases/chain-promotion.js";
 import { makePaths } from "../src/config/paths.js";
 import { Campaign, CampaignStatus } from "../src/domain/campaign.js";
+import type { RunMeta } from "../src/domain/run.js";
 import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 
 // ---------------------------------------------------------------------------
@@ -36,6 +37,15 @@ const fakeRepo = (opts?: {
   worktreeIsDirty: () => false,
   diffStat: () => "",
   readDiffStats: () => ({}),
+  reviewableDiff: () => "",
+  reviewableDiffAgainst: () => "",
+  reconciliationGitState: () => ({
+    head: "abc",
+    status: [] as string[],
+    diffHash: "",
+    untracked: [],
+    changedFiles: [],
+  }),
   fetchBranchFromClone: () => {
     if (opts) {
       opts.fetchBranchFromCloneCalled = true;
@@ -56,7 +66,7 @@ const fakeRepo = (opts?: {
   },
 });
 
-const makeMeta = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+const makeMeta = (overrides: Partial<RunMeta> = {}): RunMeta => ({
   runId: "20260101-000000-test",
   status: "queued",
   attempt: 1,
@@ -64,6 +74,11 @@ const makeMeta = (overrides: Record<string, unknown> = {}): Record<string, unkno
   base: "main",
   branch: "meridian/test",
   worktree: "/tmp/worktree",
+  stallRetries: 0,
+  crashRetries: 0,
+  reorientRetries: 0,
+  reviewerUnreachable: 0,
+  promoted: false,
   updatedAt: "2026-01-01T00:00:00.000Z",
   ...overrides,
 });
@@ -175,7 +190,7 @@ test("promoteStaged: no parent → promote-now", () => {
 
     const queue = store.listQueue();
     equal(queue.length, 1);
-    equal(queue[0].runId, "20260101-000000-child");
+    equal(queue[0]!.runId, "20260101-000000-child");
     strictEqual(store.readStaged("20260101-000000-child"), undefined);
     await cleanTemp(tmp);
   })();
@@ -216,7 +231,7 @@ body
 
     const queue = store.listQueue();
     equal(queue.length, 1);
-    equal(queue[0].runId, "20260101-000000-child");
+    equal(queue[0]!.runId, "20260101-000000-child");
     strictEqual(store.readStaged("20260101-000000-child"), undefined);
     ok(fetchOpts.fetchBranchFromCloneCalled, "fetchBranchFromClone should be called");
     // Base off the tip branch — its work lives only in the clone until accept.
@@ -266,7 +281,7 @@ body
 
     const queue = store.listQueue();
     equal(queue.length, 1);
-    equal(queue[0].runId, "20260101-000000-child");
+    equal(queue[0]!.runId, "20260101-000000-child");
     strictEqual(store.readStaged("20260101-000000-child"), undefined);
     // The work is already in the canonical repo on `acceptedInto` — never fetch
     // the destroyed sandbox branch.

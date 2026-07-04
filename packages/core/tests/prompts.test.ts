@@ -38,8 +38,13 @@ const minPacket = (): Packet => ({
     compare_commit: "main",
     outcomes: [{ id: "test-outcome", description: "a test outcome" }],
     expected_surface: ["src/**"],
+    suspicious_surface: [],
     verification: [{ command: "pnpm test" }],
     constraints: [],
+    pass: 1,
+    promoted: false,
+    autofix_commands: [],
+    regression_outcomes: [],
   },
   body: "",
   raw: "---\nrepo: test/repo\n---\ntest body",
@@ -97,6 +102,7 @@ const minReport = (): SubmitReport => ({
   verificationClaims: [],
   escalations: [],
   remainingUncertainty: [],
+  regressionGuard: { tests: [] },
 });
 
 const minSkillText = `# Lathe Skill
@@ -150,12 +156,15 @@ describe("prompts — Q-table renderers", () => {
 
   describe("q2RotationSeed", () => {
     it("includes checkpoint, diff, and status line", () => {
-      const ledger = {
+      const ledger: OutcomeLedger = {
         ...minLedger(),
         outcomes: [
           {
-            ...minLedger().outcomes[0],
+            id: "test-outcome",
+            description: "a test outcome",
             status: "in_progress" as const,
+            evidence: [],
+            updatedAt: "2026-06-18T00:00:00.000Z",
             state: "mid-impl",
             nextAction: "next step",
           },
@@ -407,10 +416,12 @@ describe("prompts — Q-table renderers", () => {
     it("contains the MUST_EXECUTE mandate", () => {
       const input: SuperReviewInput = {
         packet: minPacket(),
+        worktree: "/wt/run-a",
         reportText: "(no report)",
         skillText: minSkillText,
         pass: 1,
         maxPasses: 3,
+        campaignId: "campaign-a",
       };
       const prompt = renderSuperReview(input);
       match(prompt, /YOU MUST EXECUTE — read-only review is not enough/);
@@ -420,10 +431,12 @@ describe("prompts — Q-table renderers", () => {
     it("contains the <<<RUBRIC ... RUBRIC block", () => {
       const input: SuperReviewInput = {
         packet: minPacket(),
+        worktree: "/wt/run-a",
         reportText: "(no report)",
         skillText: minSkillText,
         pass: 1,
         maxPasses: 3,
+        campaignId: "campaign-a",
       };
       const prompt = renderSuperReview(input);
       match(prompt, /<<<RUBRIC/);
@@ -433,10 +446,12 @@ describe("prompts — Q-table renderers", () => {
     it("contains the recommend_stop MUST be false rule", () => {
       const input: SuperReviewInput = {
         packet: minPacket(),
+        worktree: "/wt/run-a",
         reportText: "(no report)",
         skillText: minSkillText,
         pass: 1,
         maxPasses: 3,
+        campaignId: "campaign-a",
       };
       const prompt = renderSuperReview(input);
       match(prompt, /recommend_stop MUST be false if ANY verification command exited non-zero/);

@@ -32,7 +32,7 @@ const makeStore = (meta?: ReturnType<typeof makeMeta>): Store => {
   return {
     readMeta: () => meta ?? makeMeta(),
     readMetaIfExists: () => meta,
-    writeMeta: (m) => {
+    writeMeta: (m: ReturnType<typeof makeMeta>) => {
       lastMeta = m;
     },
     listRunIds: () => [],
@@ -113,12 +113,12 @@ const makeRepo = (opts?: {
     readDiffStats: () => ({}),
     reviewableDiff: () => "",
     reviewableDiffAgainst: () => "",
-    fetchBranchFromClone: (repo, clone, branch) => {
+    fetchBranchFromClone: (repo: string, clone: string, branch: string) => {
       state.fetchBranchFromCloneCalled = true;
       state.mergeAcceptRepo = repo;
       state.mergeAcceptBranch = branch;
     },
-    removeSandbox: (sandboxPath, runsDir) => {
+    removeSandbox: (sandboxPath: string, runsDir: string) => {
       state.removeSandboxCalled = true;
       state.removeSandboxPath = sandboxPath;
       state.removeSandboxRunsDir = runsDir;
@@ -131,7 +131,7 @@ const makeRepo = (opts?: {
     },
     branchExists: () => true,
     repoValid: () => true,
-    mergeAccept: (repo, sourceBranch) => {
+    mergeAccept: (repo: string, sourceBranch: string) => {
       state.mergeAcceptCalled = true;
       state.mergeAcceptRepo = repo;
       state.mergeAcceptBranch = sourceBranch;

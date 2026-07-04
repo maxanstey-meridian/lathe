@@ -46,6 +46,13 @@ const fakeRepo = (_opts?: {
   headBranch: () => "main",
   branchExists: () => true,
   repoValid: () => true,
+  reconciliationGitState: () => ({
+    head: "abc",
+    status: [] as string[],
+    diffHash: "",
+    untracked: [],
+    changedFiles: [],
+  }),
   mergeAccept: () => {
     throw new Error("unimplemented");
   },
@@ -71,6 +78,13 @@ const gitRepo = (): Repo => ({
   headBranch,
   branchExists,
   repoValid,
+  reconciliationGitState: () => ({
+    head: "abc",
+    status: [] as string[],
+    diffHash: "",
+    untracked: [],
+    changedFiles: [],
+  }),
   mergeAccept: () => {
     throw new Error("unimplemented");
   },
@@ -182,7 +196,7 @@ test("admitPacket: valid packet → admitted to queue, not archived", () => {
     // Should be in queue
     const queue = store.listQueue();
     strictEqual(queue.length, 1);
-    equal(queue[0].runId, "20260101-000000-valid");
+    equal(queue[0]!.runId, "20260101-000000-valid");
     // Should NOT be archived
     strictEqual(store.readRejected("20260101-000000-valid"), undefined);
     await cleanTemp(tmp);
@@ -346,7 +360,7 @@ test("admitPacket: both valid and invalid packets are never deleted", () => {
     // Valid should be in queue
     const queue = store.listQueue();
     strictEqual(queue.length, 1);
-    equal(queue[0].runId, "20260101-000000-valid");
+    equal(queue[0]!.runId, "20260101-000000-valid");
 
     // Invalid should be in rejected
     ok(store.readRejected("20260101-000000-invalid"));

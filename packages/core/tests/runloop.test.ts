@@ -42,6 +42,13 @@ const fakeRepo = (): Repo => ({
   readDiffStats: () => ({}),
   reviewableDiff: () => "",
   reviewableDiffAgainst: () => "",
+  reconciliationGitState: () => ({
+    head: "abc",
+    status: [] as string[],
+    diffHash: "",
+    untracked: [],
+    changedFiles: [],
+  }),
   fetchBranchFromClone: () => {
     throw new Error("unimplemented");
   },
@@ -64,6 +71,11 @@ const makeMeta = (overrides: Partial<RunMeta>): RunMeta => ({
   base: "main",
   branch: "meridian/test",
   worktree: "/tmp/worktree",
+  stallRetries: 0,
+  crashRetries: 0,
+  reorientRetries: 0,
+  reviewerUnreachable: 0,
+  promoted: false,
   updatedAt: "2026-01-01T00:00:00.000Z",
   ...overrides,
 });
@@ -675,7 +687,9 @@ test("runLoop crash branch: decideCrashRecovery requeue under cap → queued", (
     );
 
     equal(decision.action, "requeue");
-    equal(decision.crashRetries, 1);
+    if (decision.action === "requeue") {
+      equal(decision.crashRetries, 1);
+    }
 
     const read = store.readMeta("20260101-000000-c");
     equal(read.status, "blocked"); // run-loop would change this to queued
@@ -693,7 +707,9 @@ test("runLoop crash branch: decideCrashRecovery escalate at cap", () => {
     );
 
     equal(decision.action, "escalate");
-    equal(decision.crashRetries, 2);
+    if (decision.action === "escalate") {
+      equal(decision.crashRetries, 2);
+    }
   })();
 });
 
@@ -728,6 +744,13 @@ test("runLoop crash branch: thrown executeRun requeues crashed run under cap", (
       readDiffStats: () => ({}),
       reviewableDiff: () => "",
       reviewableDiffAgainst: () => "",
+      reconciliationGitState: () => ({
+        head: "abc",
+        status: [] as string[],
+        diffHash: "",
+        untracked: [],
+        changedFiles: [],
+      }),
       fetchBranchFromClone: () => undefined,
       removeSandbox: () => undefined,
       headBranch: () => "main",
@@ -798,6 +821,13 @@ test("runLoop crash branch: thrown executeRun escalates crashed run at cap", () 
       readDiffStats: () => ({}),
       reviewableDiff: () => "",
       reviewableDiffAgainst: () => "",
+      reconciliationGitState: () => ({
+        head: "abc",
+        status: [] as string[],
+        diffHash: "",
+        untracked: [],
+        changedFiles: [],
+      }),
       fetchBranchFromClone: () => undefined,
       removeSandbox: () => undefined,
       headBranch: () => "main",

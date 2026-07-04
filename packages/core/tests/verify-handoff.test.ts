@@ -15,6 +15,7 @@ import { buildHandoffInject } from "../src/application/use-cases/run-runtime.js"
 import { makePaths } from "../src/config/paths.js";
 import { HandoffArtifact as HandoffArtifactSchema } from "../src/domain/handoff.js";
 import type { Packet } from "../src/domain/packet.js";
+import type { RunRef } from "../src/infrastructure/bridge.js";
 import {
   handleWriteHandoff,
   handleVerifyHandoff,
@@ -43,6 +44,13 @@ const fakeRepo = (): Repo => ({
   readDiffStats: () => ({}),
   reviewableDiff: () => "",
   reviewableDiffAgainst: () => "",
+  reconciliationGitState: () => ({
+    head: "abc",
+    status: [] as string[],
+    diffHash: "",
+    untracked: [],
+    changedFiles: [],
+  }),
   fetchBranchFromClone: () => {
     throw new Error("unimplemented");
   },
@@ -85,6 +93,9 @@ body
     verification: [{ command: "echo ok" }],
     constraints: [],
     pass: 1,
+    promoted: false,
+    autofix_commands: [],
+    regression_outcomes: [],
     ...overrides,
   };
   return { runId: "20260101-000000-test", frontmatter: fm as any, body: "body\n", raw };
@@ -151,22 +162,31 @@ const makeRef = (overrides?: {
     turn: 1,
     executor: {
       createSession: async () => "session",
-      sendMessage: async () => ({ info: { tokens: {} }, parts: [{ type: "text", text: "ok" }] }),
+      sendMessage: async () => ({
+        info: { id: "m", sessionID: "s", tokens: {} },
+        parts: [{ type: "text", text: "ok" }],
+      }),
       listMessages: async () => [],
       deleteSession: async () => {},
-    },
+      abortSession: async () => {},
+    } as unknown as Executor,
     verifyModel: { providerId: "test", modelId: "test", agent: "test" },
   };
-  const ref = { current: ctx };
+  const ref = { current: ctx } as unknown as RunRef;
   store.writeMeta({
     runId: packet.runId,
     status: "running",
     attempt: 1,
     repo: "/tmp/test-repo",
     base: "main",
-    branch: "meridian/test",
+    branch: `meridian/${packet.runId}`,
     worktree: tmp,
-    updatedAt: clock.nowIso(),
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    reviewerUnreachable: 0,
+    promoted: false,
+    updatedAt: "2026-01-01T00:00:00.000Z",
   });
   store.writeLedger(store.initialLedger(packet));
   store.writeGateState(packet.runId, {
@@ -184,7 +204,7 @@ const makeRef = (overrides?: {
 const makeHandoffArtifact = (
   overrides?: Partial<{
     runId: string;
-    completedSteps: { description: string; files?: string[] }[];
+    completedSteps: { description: string; files: string[] }[];
     remainingWork: string[];
     decisionsMade: string[];
     resumeFrom: string;
@@ -212,11 +232,11 @@ test("write_handoff: persists HandoffArtifact to run state dir", async () => {
     resumeFrom: "src/bar.ts:42",
   });
   equal(result.isError, false);
-  const body = JSON.parse(result.content[0].text);
+  const body = JSON.parse(result.content[0]!.text);
   equal(body.written, true);
 
   // Check the file exists and contains valid HandoffArtifact.
-  const runId = ref.current.packet.runId;
+  const runId = ref.current!.packet.runId;
   const paths = makePaths(tmp);
   const handoffPath = join(paths.runDir(runId), "handoff.json");
   ok(existsSync(handoffPath), "handoff.json should exist at run state path");
@@ -225,8 +245,8 @@ test("write_handoff: persists HandoffArtifact to run state dir", async () => {
   const parsed = HandoffArtifactSchema.safeParse(JSON.parse(raw));
   ok(parsed.success, "handoff.json should validate against HandoffArtifact schema");
   strictEqual(parsed.data.completedSteps.length, 1);
-  strictEqual(parsed.data.completedSteps[0].description, "added foo");
-  strictEqual(parsed.data.completedSteps[0].files[0], "src/foo.ts");
+  strictEqual(parsed.data.completedSteps[0]!.description, "added foo");
+  strictEqual(parsed.data.completedSteps[0]!.files[0], "src/foo.ts");
   strictEqual(parsed.data.remainingWork[0], "fix bar");
   strictEqual(parsed.data.decisionsMade[0], "use const");
   strictEqual(parsed.data.resumeFrom, "src/bar.ts:42");
@@ -237,7 +257,7 @@ test("write_handoff: persists HandoffArtifact to run state dir", async () => {
 
 test("write_handoff: overwrites on repeat calls", async () => {
   const { ref, tmp } = makeRef();
-  const runId = ref.current.packet.runId;
+  const runId = ref.current!.packet.runId;
   const paths = makePaths(tmp);
 
   // First write.
@@ -252,7 +272,7 @@ test("write_handoff: overwrites on repeat calls", async () => {
   let raw = await readFile(handoffPath, "utf-8");
   let parsed = HandoffArtifactSchema.safeParse(JSON.parse(raw));
   ok(parsed.success);
-  strictEqual(parsed.data.completedSteps[0].description, "first batch");
+  strictEqual(parsed.data.completedSteps[0]!.description, "first batch");
   deepStrictEqual(parsed.data.remainingWork, ["a", "b"]);
 
   // Second write — should overwrite.
@@ -266,8 +286,8 @@ test("write_handoff: overwrites on repeat calls", async () => {
   raw = await readFile(handoffPath, "utf-8");
   parsed = HandoffArtifactSchema.safeParse(JSON.parse(raw));
   ok(parsed.success);
-  strictEqual(parsed.data.completedSteps[0].description, "second batch");
-  strictEqual(parsed.data.completedSteps[0].files[0], "src/bar.ts");
+  strictEqual(parsed.data.completedSteps[0]!.description, "second batch");
+  strictEqual(parsed.data.completedSteps[0]!.files[0], "src/bar.ts");
   deepStrictEqual(parsed.data.remainingWork, ["c"]);
   strictEqual(parsed.data.decisionsMade[0], "decided x");
   strictEqual(parsed.data.resumeFrom, "step 3");
@@ -283,7 +303,7 @@ test("write_handoff: overwrites on repeat calls", async () => {
 
 test("handoff inject: prepends system message when handoff.json exists", async () => {
   const { ref, tmp } = makeRef();
-  const runId = ref.current.packet.runId;
+  const runId = ref.current!.packet.runId;
   const paths = makePaths(tmp);
   const runDir = paths.runDir(runId);
   const handoffPath = join(runDir, "handoff.json");
@@ -326,7 +346,7 @@ test("verification gate: write_handoff blocked when awaitingVerification is true
     resumeFrom: "now",
   });
   equal(result.isError, true);
-  const body = JSON.parse(result.content[0].text);
+  const body = JSON.parse(result.content[0]!.text);
   match(body.error, /Handoff verification required/);
 });
 
@@ -342,7 +362,7 @@ test("verification gate: write_handoff blocked when awaitingVerification is true
 
 test("verify_handoff: returns verdict and clears awaitingVerification", async () => {
   const { ref, tmp } = makeRef();
-  const runId = ref.current.packet.runId;
+  const runId = ref.current!.packet.runId;
   const paths = makePaths(tmp);
   const runDir = paths.runDir(runId);
   const handoffPath = join(runDir, "handoff.json");
@@ -367,7 +387,7 @@ test("verify_handoff: returns verdict and clears awaitingVerification", async ()
   })();
 
   // Set awaitingVerification to true.
-  ref.current.awaitingVerification = true;
+  ref.current!.awaitingVerification = true;
 
   // Mock executor that returns a valid verdict.
   const verdictJson = JSON.stringify({
@@ -379,24 +399,28 @@ test("verify_handoff: returns verdict and clears awaitingVerification", async ()
   let capturedPrompt = "";
   const mockExecutor: Executor = {
     createSession: async () => "verify-session",
-    sendMessage: async (_sessionId, text, _model, _timeout) => {
+    sendMessage: async (_sessionId: string, text: string) => {
       capturedPrompt = text;
-      return { info: { tokens: {} }, parts: [{ type: "text" as const, text: verdictJson }] };
+      return {
+        info: { id: "m", sessionID: "s", tokens: {} },
+        parts: [{ type: "text" as const, text: verdictJson }],
+      };
     },
     listMessages: async () => [],
     deleteSession: async () => {},
-  };
-  ref.current.executor = mockExecutor;
+    abortSession: async () => {},
+  } as unknown as Executor;
+  ref.current!.executor = mockExecutor;
 
   const result = await handleVerifyHandoff(ref, { claimedCompletions: ["added handoff.ts"] });
   equal(result.isError, false);
-  const body = JSON.parse(result.content[0].text);
+  const body = JSON.parse(result.content[0]!.text);
   equal(body.ok, true);
   strictEqual(body.trusted.length, 1);
-  strictEqual(body.trusted[0].description, "added handoff.ts");
+  strictEqual(body.trusted[0]!.description, "added handoff.ts");
 
   // Gate should be cleared.
-  strictEqual(ref.current.awaitingVerification, false);
+  strictEqual(ref.current!.awaitingVerification, false);
 
   // Verify the prompt was built correctly.
   ok(capturedPrompt.includes("## Claimed completions"));
@@ -420,7 +444,7 @@ test("write_handoff: proceeds normally when awaitingVerification is false", asyn
     resumeFrom: "now",
   });
   equal(result.isError, false);
-  const body = JSON.parse(result.content[0].text);
+  const body = JSON.parse(result.content[0]!.text);
   equal(body.written, true);
 });
 
@@ -433,7 +457,7 @@ test("write_handoff: proceeds normally when awaitingVerification is false", asyn
 
 test("verify_handoff: prompt includes all claimed steps, file samples, and questions", async () => {
   const { ref, tmp } = makeRef();
-  const runId = ref.current.packet.runId;
+  const runId = ref.current!.packet.runId;
   const paths = makePaths(tmp);
   const runDir = paths.runDir(runId);
   const handoffPath = join(runDir, "handoff.json");
@@ -461,9 +485,9 @@ test("verify_handoff: prompt includes all claimed steps, file samples, and quest
 
   const verdictJson = JSON.stringify({ ok: true, trusted: [], issues: [], resumeHint: "done" });
   let capturedPrompt = "";
-  ref.current.executor = {
+  ref.current!.executor = {
     createSession: async () => "s",
-    sendMessage: async (_s, text: string) => {
+    sendMessage: async (_s: string, text: string) => {
       capturedPrompt = text;
       return { info: { tokens: {} }, parts: [{ type: "text", text: verdictJson }] };
     },
@@ -495,7 +519,7 @@ test("verify_handoff: prompt includes all claimed steps, file samples, and quest
 // daddy-verify. After the fix, the full file content is included.
 test("verify_handoff: file samples include full content (no 4000-char cap)", async () => {
   const { ref, tmp } = makeRef();
-  const runId = ref.current.packet.runId;
+  const runId = ref.current!.packet.runId;
   const paths = makePaths(tmp);
   const runDir = paths.runDir(runId);
   const handoffPath = join(runDir, "handoff.json");
@@ -517,7 +541,7 @@ test("verify_handoff: file samples include full content (no 4000-char cap)", asy
 
   const verdictJson = JSON.stringify({ ok: true, trusted: [], issues: [], resumeHint: "done" });
   let capturedPrompt = "";
-  ref.current.executor = {
+  ref.current!.executor = {
     createSession: async () => "s",
     sendMessage: async (_s: string, text: string) => {
       capturedPrompt = text;
@@ -550,7 +574,7 @@ test("verify_handoff: file samples include full content (no 4000-char cap)", asy
 
 test("verify_handoff: valid verdict JSON passed through correctly", async () => {
   const { ref, tmp } = makeRef();
-  const runId = ref.current.packet.runId;
+  const runId = ref.current!.packet.runId;
   const paths = makePaths(tmp);
   const handoffPath = join(paths.runDir(runId), "handoff.json");
 
@@ -566,7 +590,7 @@ test("verify_handoff: valid verdict JSON passed through correctly", async () => 
     resumeHint: "fix the type error in baz before continuing",
   });
 
-  ref.current.executor = {
+  ref.current!.executor = {
     createSession: async () => "s",
     sendMessage: async () => ({
       info: { tokens: {} },
@@ -578,14 +602,14 @@ test("verify_handoff: valid verdict JSON passed through correctly", async () => 
 
   const result = await handleVerifyHandoff(ref, { claimedCompletions: ["step 1"] });
   equal(result.isError, false);
-  const body = JSON.parse(result.content[0].text);
+  const body = JSON.parse(result.content[0]!.text);
 
   equal(body.ok, false);
   strictEqual(body.trusted.length, 1);
-  strictEqual(body.trusted[0].description, "partial step");
+  strictEqual(body.trusted[0]!.description, "partial step");
   strictEqual(body.issues.length, 2);
-  strictEqual(body.issues[0].file, "src/bar.ts");
-  strictEqual(body.issues[0].problem, "missing export");
+  strictEqual(body.issues[0]!.file, "src/bar.ts");
+  strictEqual(body.issues[0]!.problem, "missing export");
   strictEqual(body.resumeHint, "fix the type error in baz before continuing");
 });
 
@@ -595,14 +619,14 @@ test("verify_handoff: valid verdict JSON passed through correctly", async () => 
 
 test("verify_handoff: unparseable daddy response returns fallback verdict", async () => {
   const { ref, tmp } = makeRef();
-  const runId = ref.current.packet.runId;
+  const runId = ref.current!.packet.runId;
   const paths = makePaths(tmp);
   const handoffPath = join(paths.runDir(runId), "handoff.json");
 
   await writeFile(handoffPath, JSON.stringify(makeHandoffArtifact(), null, 2));
 
   // Daddy returns garbage — no JSON at all.
-  ref.current.executor = {
+  ref.current!.executor = {
     createSession: async () => "s",
     sendMessage: async () => ({
       info: { tokens: {} },
@@ -616,25 +640,25 @@ test("verify_handoff: unparseable daddy response returns fallback verdict", asyn
 
   const result = await handleVerifyHandoff(ref, { claimedCompletions: ["step 1"] });
   equal(result.isError, false);
-  const body = JSON.parse(result.content[0].text);
+  const body = JSON.parse(result.content[0]!.text);
 
   equal(body.ok, false);
   strictEqual(body.trusted.length, 0);
   strictEqual(body.issues.length, 1);
-  strictEqual(body.issues[0].file, "daddy-response");
-  strictEqual(body.issues[0].problem, "could not parse verdict JSON");
+  strictEqual(body.issues[0]!.file, "daddy-response");
+  strictEqual(body.issues[0]!.problem, "could not parse verdict JSON");
   strictEqual(body.resumeHint, "ask_planner to investigate");
 });
 
 test("verify_handoff: executor exception returns error verdict", async () => {
   const { ref, tmp } = makeRef();
-  const runId = ref.current.packet.runId;
+  const runId = ref.current!.packet.runId;
   const paths = makePaths(tmp);
   const handoffPath = join(paths.runDir(runId), "handoff.json");
 
   await writeFile(handoffPath, JSON.stringify(makeHandoffArtifact(), null, 2));
 
-  ref.current.executor = {
+  ref.current!.executor = {
     createSession: async () => "s",
     sendMessage: async () => {
       throw new Error("provider timeout");
@@ -645,12 +669,12 @@ test("verify_handoff: executor exception returns error verdict", async () => {
 
   const result = await handleVerifyHandoff(ref, { claimedCompletions: ["step 1"] });
   equal(result.isError, false);
-  const body = JSON.parse(result.content[0].text);
+  const body = JSON.parse(result.content[0]!.text);
 
   equal(body.ok, false);
   strictEqual(body.issues.length, 1);
-  strictEqual(body.issues[0].file, "daddy-verify");
-  ok(body.issues[0].problem.includes("verify call failed"));
+  strictEqual(body.issues[0]!.file, "daddy-verify");
+  ok(body.issues[0]!.problem.includes("verify call failed"));
 });
 
 // ===========================================================================
@@ -696,29 +720,35 @@ test("buildVerifyPrompt: omits empty sections", () => {
 
 test("runVerify: creates session, sends prompt, returns parsed verdict", async () => {
   const executor: Executor = {
-    createSession: async (title) => {
+    createSession: async (title: string) => {
       strictEqual(title, "lathe-verify");
       return "session-123";
     },
-    sendMessage: async (sessionId, text, model, timeout) => {
+    sendMessage: async (
+      sessionId: string,
+      _text: string,
+      model: { providerId: string },
+      timeout: number,
+    ) => {
       strictEqual(sessionId, "session-123");
       strictEqual(model.providerId, "test");
       strictEqual(timeout, 300000);
       return {
-        info: { tokens: {} },
+        info: { id: "m", sessionID: "session-123", tokens: {} },
         parts: [
           {
-            type: "text",
+            type: "text" as const,
             text: JSON.stringify({ ok: true, trusted: [], issues: [], resumeHint: "go" }),
           },
         ],
       };
     },
     listMessages: async () => [],
-    deleteSession: async (sessionId) => {
+    deleteSession: async (sessionId: string) => {
       strictEqual(sessionId, "session-123");
     },
-  };
+    abortSession: async () => {},
+  } as unknown as Executor;
 
   const verdict = await runVerify(
     executor,
@@ -739,10 +769,11 @@ test("runVerify: executor failure returns error verdict", async () => {
     createSession: async () => {
       throw new Error("network");
     },
-    sendMessage: async () => ({ info: { tokens: {} }, parts: [] }),
+    sendMessage: async () => ({ info: { id: "m", sessionID: "s", tokens: {} }, parts: [] }),
     listMessages: async () => [],
     deleteSession: async () => {},
-  };
+    abortSession: async () => {},
+  } as unknown as Executor;
 
   const verdict = await runVerify(
     executor,
@@ -755,8 +786,8 @@ test("runVerify: executor failure returns error verdict", async () => {
   );
 
   equal(verdict.ok, false);
-  strictEqual(verdict.issues[0].file, "daddy-verify");
-  ok(verdict.issues[0].problem.includes("verify call failed"));
+  strictEqual(verdict.issues[0]!.file, "daddy-verify");
+  ok(verdict.issues[0]!.problem.includes("verify call failed"));
 });
 
 // ===========================================================================
@@ -767,7 +798,7 @@ test("verify_handoff: returns turnCompleteError when turnComplete is true", asyn
   const { ref } = makeRef({ turnComplete: true });
   const result = await handleVerifyHandoff(ref, { claimedCompletions: ["step 1"] });
   equal(result.isError, true);
-  const body = JSON.parse(result.content[0].text);
+  const body = JSON.parse(result.content[0]!.text);
   match(body.error, /End your turn now/);
 });
 
@@ -780,7 +811,7 @@ test("write_handoff: returns turnCompleteError when turnComplete is true", async
     resumeFrom: "now",
   });
   equal(result.isError, true);
-  const body = JSON.parse(result.content[0].text);
+  const body = JSON.parse(result.content[0]!.text);
   match(body.error, /End your turn now/);
 });
 
@@ -793,7 +824,7 @@ test("verify_handoff: returns error when handoff.json does not exist", async () 
   // Don't write handoff.json — leave it absent.
   const result = await handleVerifyHandoff(ref, { claimedCompletions: ["step 1"] });
   equal(result.isError, true);
-  const body = JSON.parse(result.content[0].text);
+  const body = JSON.parse(result.content[0]!.text);
   match(body.error, /no handoff.json found/);
 });
 
@@ -803,7 +834,7 @@ test("verify_handoff: returns error when handoff.json does not exist", async () 
 
 test("write_handoff: returns error when no active run", async () => {
   const result = await handleWriteHandoff(
-    { current: null },
+    { current: undefined },
     {
       completedSteps: [{ description: "step" }],
       remainingWork: [],
@@ -812,13 +843,16 @@ test("write_handoff: returns error when no active run", async () => {
     },
   );
   equal(result.isError, true);
-  const body = JSON.parse(result.content[0].text);
+  const body = JSON.parse(result.content[0]!.text);
   strictEqual(body.error, "no active run");
 });
 
 test("verify_handoff: returns error when no active run", async () => {
-  const result = await handleVerifyHandoff({ current: null }, { claimedCompletions: ["step 1"] });
+  const result = await handleVerifyHandoff(
+    { current: undefined },
+    { claimedCompletions: ["step 1"] },
+  );
   equal(result.isError, true);
-  const body = JSON.parse(result.content[0].text);
+  const body = JSON.parse(result.content[0]!.text);
   strictEqual(body.error, "no active run");
 });

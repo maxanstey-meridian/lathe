@@ -62,6 +62,13 @@ const fakeRepo = (): Repo => ({
   readDiffStats: () => ({}),
   reviewableDiff: () => "diff",
   reviewableDiffAgainst: () => "diff",
+  reconciliationGitState: () => ({
+    head: "abc",
+    status: [] as string[],
+    diffHash: "",
+    untracked: [],
+    changedFiles: [],
+  }),
   fetchBranchFromClone: () => {},
   removeSandbox: () => {},
   headBranch: () => "main",
@@ -96,6 +103,7 @@ const emptyChannel = (): RunChannel => ({
   reportRejectionCount: 0,
   checkpointBounceCount: 0,
   turn: 0,
+  turnComplete: false,
   awaitingVerification: false,
 });
 
@@ -175,7 +183,10 @@ test("rotateSession: replaces the session, updates meta, latches first-edit (wit
       worktree: "/tmp/wt",
       babySessionId: "baby-0",
       stallRetries: 0,
+      crashRetries: 0,
       reorientRetries: 0,
+      reviewerUnreachable: 0,
+      promoted: false,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     store.writeGateState(
@@ -223,7 +234,10 @@ test("rotateSession: no checkpoint stacks reconciliation (O6)", () => {
       worktree: "/tmp/wt",
       babySessionId: "baby-0",
       stallRetries: 0,
+      crashRetries: 0,
       reorientRetries: 0,
+      reviewerUnreachable: 0,
+      promoted: false,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     store.writeGateState(
@@ -393,7 +407,10 @@ test("makeExecuteRun: resume → reuses prior Daddy session ID, refreshes gate",
       babySessionId: "baby-old",
       daddySessionId: "daddy-prior",
       stallRetries: 0,
+      crashRetries: 0,
       reorientRetries: 2,
+      reviewerUnreachable: 0,
+      promoted: false,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     // Prior gate state.
@@ -516,7 +533,10 @@ test("makeExecuteRun: resume replaces stale Daddy session before reconciliation"
       babySessionId: "baby-old",
       daddySessionId: "daddy-stale",
       stallRetries: 0,
+      crashRetries: 0,
       reorientRetries: 0,
+      reviewerUnreachable: 0,
+      promoted: false,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     store.writeGateState(
@@ -647,7 +667,10 @@ test("makeExecuteRun: resume without checkpoint but prior accepted reconciliatio
       babySessionId: "baby-old",
       daddySessionId: "daddy-prior",
       stallRetries: 0,
+      crashRetries: 0,
       reorientRetries: 0,
+      reviewerUnreachable: 0,
+      promoted: false,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     // Simulate the real gate state after reconciliation was accepted:
@@ -719,7 +742,9 @@ test("makeExecuteRun: resume without checkpoint but prior accepted reconciliatio
       },
       listMessages: async () => [],
       deleteSession: async () => {},
+      abortSession: async () => {},
     };
+
     const ports = makePorts(store, fakeRepo(), capturingExecutor, capturingPlanner);
     const bridge: BridgeBinding<unknown> = { beginRun: () => channel, endRun: () => {} };
 
@@ -766,7 +791,10 @@ test("makeExecuteRun: invalid queue packet → meta failed, no throw", () => {
       branch: `meridian/${RUN_ID}`,
       worktree: join(tmp, "wt"),
       stallRetries: 0,
+      crashRetries: 0,
       reorientRetries: 0,
+      reviewerUnreachable: 0,
+      promoted: false,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
 
@@ -811,6 +839,7 @@ test("makeExecuteRun: run with prior meta but no baby session → fresh", () => 
       crashRetries: 0,
       reorientRetries: 0,
       reviewerUnreachable: 0,
+      promoted: false,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
 
@@ -868,6 +897,9 @@ test("makeExecuteRun: fresh start clears stale checkpoint/decision/review state"
       reason: "checkpoint",
       summary: "stale checkpoint",
       outcomes: [{ id: "test-outcome", status: "done" as const, evidence: [] }],
+      filesChanged: [],
+      filesInspected: [],
+      uncertainties: [],
       writtenAt: clock.nowIso(),
     };
     store.writeCheckpoint(RUN_ID, c1);
@@ -882,6 +914,7 @@ test("makeExecuteRun: fresh start clears stale checkpoint/decision/review state"
       status: "proceed",
       answer: "a1",
       constraints: [],
+      evidence: [],
     });
     strictEqual(store.readDecisions(RUN_ID).length, 1, "decisions seeded");
 
@@ -924,6 +957,7 @@ new body
       crashRetries: 0,
       reorientRetries: 0,
       reviewerUnreachable: 0,
+      promoted: false,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
 
@@ -984,6 +1018,9 @@ test("makeExecuteRun: fresh start clears stale checkpoint so unchanged-packet re
       reason: "checkpoint",
       summary: "stale",
       outcomes: [{ id: "test-outcome", status: "not_started", evidence: [] }],
+      filesChanged: [],
+      filesInspected: [],
+      uncertainties: [],
       writtenAt: clock.nowIso(),
     });
 
@@ -1021,6 +1058,7 @@ new body
       crashRetries: 0,
       reorientRetries: 0,
       reviewerUnreachable: 0,
+      promoted: false,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
 

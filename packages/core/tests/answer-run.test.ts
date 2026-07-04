@@ -7,6 +7,7 @@ import type { Clock } from "../src/application/ports/clock.js";
 import type { Repo } from "../src/application/ports/repo.js";
 import { answerRun } from "../src/application/use-cases/answer-run.js";
 import { makePaths } from "../src/config/paths.js";
+import type { RunMeta } from "../src/domain/run.js";
 import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 
 // ---------------------------------------------------------------------------
@@ -31,6 +32,13 @@ const fakeRepo = (opts?: {
   readDiffStats: () => opts?.readDiffStatsValue ?? { "src/index.ts": { added: 5, removed: 1 } },
   reviewableDiff: () => "",
   reviewableDiffAgainst: () => "",
+  reconciliationGitState: () => ({
+    head: "abc",
+    status: [] as string[],
+    diffHash: "",
+    untracked: [],
+    changedFiles: [],
+  }),
   fetchBranchFromClone: () => {
     throw new Error("unimplemented");
   },
@@ -53,7 +61,7 @@ const cleanTemp = async (dir: string) => {
   }
 };
 
-const makeBlockedMeta = (runId: string, clock: Clock) => ({
+const makeBlockedMeta = (runId: string, clock: Clock): RunMeta => ({
   runId,
   status: "blocked" as const,
   attempt: 1,
@@ -62,6 +70,10 @@ const makeBlockedMeta = (runId: string, clock: Clock) => ({
   branch: "meridian/20260101-000000-test",
   worktree: join(tmpdir(), "worktree"),
   stallRetries: 3,
+  crashRetries: 0,
+  reorientRetries: 0,
+  reviewerUnreachable: 0,
+  promoted: false,
   updatedAt: clock.nowIso(),
   blockedReason: "stop_condition",
   blockedQuestion: "How should I structure the new module?",
@@ -84,7 +96,7 @@ test("answer-run: refuses when run is not blocked", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "answer-run-notblocked-"));
   const clock = fixedClock();
   const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-  const meta = {
+  const meta: RunMeta = {
     runId: "20260101-000000-running",
     status: "running" as const,
     attempt: 1,
@@ -92,6 +104,11 @@ test("answer-run: refuses when run is not blocked", async () => {
     base: "main",
     branch: "meridian/20260101-000000-running",
     worktree: join(tmpdir(), "wt"),
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    reviewerUnreachable: 0,
+    promoted: false,
     updatedAt: clock.nowIso(),
   };
   store.writeMeta(meta);
@@ -147,12 +164,12 @@ test("answer-run: succeeds for blocked run", async () => {
   // Decision appended
   const decisions = store.readDecisions("20260101-000000-test");
   strictEqual(decisions.length, 1);
-  equal(decisions[0].source, "max");
-  equal(decisions[0].questionType, "stop_condition");
-  equal(decisions[0].status, "proceed");
-  equal(decisions[0].answer, "Use a module-per-feature layout");
-  equal(decisions[0].question, "How should I structure the new module?");
-  strictEqual(decisions[0].evidence.length, 0);
+  equal(decisions[0]!.source, "max");
+  equal(decisions[0]!.questionType, "stop_condition");
+  equal(decisions[0]!.status, "proceed");
+  equal(decisions[0]!.answer, "Use a module-per-feature layout");
+  equal(decisions[0]!.question, "How should I structure the new module?");
+  strictEqual(decisions[0]!.evidence.length, 0);
 
   // Gate cleared
   const gate = store.readGateState("20260101-000000-test");
@@ -189,7 +206,7 @@ test("answer-run: uses meta.blockedQuestion when present, placeholder when absen
   answerRun(store, fakeRepo(), "20260101-000000-noq", "go ahead", join(tmpdir(), "wt"), clock);
 
   const decisions = store.readDecisions("20260101-000000-noq");
-  equal(decisions[0].question, "(parked without a recorded question)");
+  equal(decisions[0]!.question, "(parked without a recorded question)");
 
   await cleanTemp(tmp);
 });
@@ -200,7 +217,7 @@ test("answer-run: succeeds for failed run (retry)", async () => {
   const repo = fakeRepo();
   const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
-  const meta = {
+  const meta: RunMeta = {
     runId: "20260101-000000-failed",
     status: "failed" as const,
     attempt: 1,
@@ -210,6 +227,9 @@ test("answer-run: succeeds for failed run (retry)", async () => {
     worktree: join(tmpdir(), "wt"),
     crashRetries: 3,
     stallRetries: 2,
+    reorientRetries: 0,
+    reviewerUnreachable: 0,
+    promoted: false,
     updatedAt: clock.nowIso(),
   };
   store.writeMeta(meta);
@@ -227,8 +247,8 @@ test("answer-run: succeeds for failed run (retry)", async () => {
   // Decision appended with retry context
   const decisions = store.readDecisions("20260101-000000-failed");
   strictEqual(decisions.length, 1);
-  equal(decisions[0].answer, "Tests are fixed. Please continue.");
-  equal(decisions[0].question, "(run failed — retry requested)");
+  equal(decisions[0]!.answer, "Tests are fixed. Please continue.");
+  equal(decisions[0]!.question, "(run failed — retry requested)");
 
   // Meta updated: queued, counters reset
   const updatedMeta = store.readMeta("20260101-000000-failed");
@@ -260,7 +280,10 @@ test("answer-run: returns checkpoint number when checkpoint exists", async () =>
     number: 3,
     reason: "rotation",
     summary: "halfway",
-    outcomes: [{ id: "dummy", status: "in_progress" as const }],
+    outcomes: [{ id: "dummy", status: "in_progress" as const, evidence: [] }],
+    filesChanged: [],
+    filesInspected: [],
+    uncertainties: [],
     writtenAt: clock.nowIso(),
   });
 

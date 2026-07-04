@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { upsertPass } from "../src/domain/campaign.js";
+import type { CampaignPass, CampaignStatus } from "../src/domain/campaign.js";
 import {
   parseStaged,
   convergedTip,
@@ -14,17 +15,26 @@ import {
   stampFollowupLineage,
   assembleCommitMessage,
   renderNits,
+  type SuperReview,
+  type Finding,
 } from "../src/domain/convergence.js";
 import { describeFrontmatterProblem, parsePacketShape } from "../src/domain/packet.js";
+import type { FinalReviewVerdict } from "../src/domain/review.js";
 import {
   parseFinalReview,
   parsePlannerResponse,
   tryParseFinalReview,
 } from "../src/domain/review.js";
+import type { RunMeta } from "../src/domain/run.js";
 
 // --- helpers ---
 
-const finding = (id, severity = "P0", kind = "command_fail", extra = {}) => ({
+const finding = (
+  id: string,
+  severity: Finding["severity"] = "P0",
+  kind: Finding["grounding"]["kind"] = "command_fail",
+  extra: Partial<Finding> = {},
+): Finding => ({
   id,
   severity,
   title: `${id} description`,
@@ -33,10 +43,15 @@ const finding = (id, severity = "P0", kind = "command_fail", extra = {}) => ({
   ...extra,
 });
 
-const review = (verdict, findings, human = null) => ({
+const review = (
+  verdict: FinalReviewVerdict,
+  findings: Finding[],
+  human: string | null = null,
+): SuperReview => ({
   verdict,
   findings,
   convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
+  commit_message: null,
   notes: "",
   human_decision_needed: human,
 });
@@ -352,6 +367,7 @@ const LINEAGE = {
   parentRunId: "20260614-100000-feature",
   pass: 2,
   priorOutcomes: [{ id: "feature", description: "the feature" }],
+  promoted: false,
 };
 
 test("stampFollowupLineage: stamps lineage over authored intent; the packet admits", () => {
@@ -367,7 +383,7 @@ test("stampFollowupLineage: stamps lineage over authored intent; the packet admi
   const fm = parsed.packet.frontmatter;
   // Authored intent is preserved verbatim — NOT a copy of any parent packet.
   assert.equal(fm.summary, "fix the typecheck");
-  assert.equal(fm.outcomes[0].id, "fix-typecheck");
+  assert.equal(fm.outcomes[0]!.id, "fix-typecheck");
   assert.deepEqual(fm.expected_surface, ["src/a.ts"]);
   assert.ok(fm.constraints.includes("smallest change"));
   assert.ok(parsed.packet.body.includes("Repair it."));
@@ -377,7 +393,7 @@ test("stampFollowupLineage: stamps lineage over authored intent; the packet admi
   assert.equal(fm.campaign_id, "feature");
   assert.equal(fm.parent_run_id, "20260614-100000-feature");
   assert.equal(fm.pass, 2);
-  assert.equal(fm.regression_outcomes[0].id, "feature");
+  assert.equal(fm.regression_outcomes[0]!.id, "feature");
 });
 
 test("stampFollowupLineage: lineage WINS over infra the author wrongly wrote", () => {
@@ -515,7 +531,14 @@ test("upsertPass: creates on first pass, appends, and replaces a re-recorded run
   const c1 = upsertPass(
     undefined,
     init,
-    { runId: "r1", pass: 1, verdict: "request_changes", groundedBlockers: 2, atIso: "t1" },
+    {
+      runId: "r1",
+      pass: 1,
+      attempt: 1,
+      verdict: "request_changes",
+      groundedBlockers: 2,
+      atIso: "t1",
+    },
     "open",
   );
   assert.equal(c1.passes.length, 1);
@@ -525,7 +548,7 @@ test("upsertPass: creates on first pass, appends, and replaces a re-recorded run
   const c2 = upsertPass(
     c1,
     init,
-    { runId: "r2", pass: 2, verdict: "accept", groundedBlockers: 0, atIso: "t2" },
+    { runId: "r2", pass: 2, attempt: 1, verdict: "accept", groundedBlockers: 0, atIso: "t2" },
     "converged",
   );
   assert.equal(c2.passes.length, 2);
@@ -535,11 +558,11 @@ test("upsertPass: creates on first pass, appends, and replaces a re-recorded run
   const c3 = upsertPass(
     c2,
     init,
-    { runId: "r2", pass: 2, verdict: "accept", groundedBlockers: 0, atIso: "t3" },
+    { runId: "r2", pass: 2, attempt: 1, verdict: "accept", groundedBlockers: 0, atIso: "t3" },
     "converged",
   );
   assert.equal(c3.passes.length, 2);
-  assert.equal(c3.passes[1].atIso, "t3");
+  assert.equal(c3.passes[1]!.atIso, "t3");
 });
 
 // --- renderNits ---
@@ -627,7 +650,7 @@ test("parseStaged: missing frontmatter and missing outcomes both fail closed", (
 
 // --- convergedTip ---
 
-const campaign = (status, passes) => ({
+const campaign = (status: CampaignStatus, passes: CampaignPass[]) => ({
   campaignId: "20260618-010000-head",
   originalRunId: "20260618-010000-head",
   originalIntent: "x",
@@ -636,9 +659,10 @@ const campaign = (status, passes) => ({
   passes,
   updatedAt: "2026-06-18T00:00:00.000Z",
 });
-const pass = (runId, verdict, n = 1) => ({
+const pass = (runId: string, verdict: FinalReviewVerdict, n = 1): CampaignPass => ({
   runId,
   pass: n,
+  attempt: 1,
   verdict,
   groundedBlockers: 0,
   atIso: "2026-06-18T00:00:00.000Z",
@@ -695,7 +719,7 @@ test("decidePromotion: converged but no accepted pass → hold (incoherent)", ()
 
 // --- childBaseFromTip ---
 
-const tipMeta = (overrides) => ({
+const tipMeta = (overrides: Partial<RunMeta> = {}): RunMeta => ({
   runId: "20260618-010500-head-fix2",
   status: "ready_for_review",
   attempt: 1,
@@ -704,6 +728,7 @@ const tipMeta = (overrides) => ({
   branch: "meridian/20260618-010500-head-fix2",
   worktree: "/tmp/clone-fix2",
   stallRetries: 0,
+  crashRetries: 0,
   reorientRetries: 0,
   reviewerUnreachable: 0,
   promoted: false,

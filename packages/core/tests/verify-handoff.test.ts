@@ -27,6 +27,8 @@ import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 // Test helpers
 // ===========================================================================
 
+const TEST_RUN_ID = "test-run";
+
 const TS_COUNTER = { n: 0 };
 const fixedClock = (): Clock => ({
   now: () => 1700000000000 + TS_COUNTER.n++,
@@ -172,7 +174,9 @@ const makeRef = (overrides?: {
     } as unknown as Executor,
     verifyModel: { providerId: "test", modelId: "test", agent: "test" },
   };
-  const ref = { current: ctx } as unknown as RunRef;
+  const ref = {
+    byRunId: new Map([[TEST_RUN_ID, ctx]]),
+  } as unknown as RunRef;
   store.writeMeta({
     runId: packet.runId,
     status: "running",
@@ -201,6 +205,16 @@ const makeRef = (overrides?: {
   return { ref, tmp, clock };
 };
 
+const submitWriteHandoff = (
+  ref: ReturnType<typeof makeRef>["ref"],
+  input: Omit<Parameters<typeof handleWriteHandoff>[1], "runId">,
+) => handleWriteHandoff(ref, { runId: TEST_RUN_ID, ...input });
+
+const submitVerifyHandoff = (
+  ref: ReturnType<typeof makeRef>["ref"],
+  input: Omit<Parameters<typeof handleVerifyHandoff>[1], "runId">,
+) => handleVerifyHandoff(ref, { runId: TEST_RUN_ID, ...input });
+
 const makeHandoffArtifact = (
   overrides?: Partial<{
     runId: string;
@@ -225,7 +239,7 @@ const makeHandoffArtifact = (
 
 test("write_handoff: persists HandoffArtifact to run state dir", async () => {
   const { ref, tmp } = makeRef();
-  const result = await handleWriteHandoff(ref, {
+  const result = await submitWriteHandoff(ref, {
     completedSteps: [{ description: "added foo", files: ["src/foo.ts"] }],
     remainingWork: ["fix bar"],
     decisionsMade: ["use const"],
@@ -236,7 +250,7 @@ test("write_handoff: persists HandoffArtifact to run state dir", async () => {
   equal(body.written, true);
 
   // Check the file exists and contains valid HandoffArtifact.
-  const runId = ref.current!.packet.runId;
+  const runId = ref.byRunId.get(TEST_RUN_ID)!.packet.runId;
   const paths = makePaths(tmp);
   const handoffPath = join(paths.runDir(runId), "handoff.json");
   ok(existsSync(handoffPath), "handoff.json should exist at run state path");
@@ -257,11 +271,11 @@ test("write_handoff: persists HandoffArtifact to run state dir", async () => {
 
 test("write_handoff: overwrites on repeat calls", async () => {
   const { ref, tmp } = makeRef();
-  const runId = ref.current!.packet.runId;
+  const runId = ref.byRunId.get(TEST_RUN_ID)!.packet.runId;
   const paths = makePaths(tmp);
 
   // First write.
-  await handleWriteHandoff(ref, {
+  await submitWriteHandoff(ref, {
     completedSteps: [{ description: "first batch" }],
     remainingWork: ["a", "b"],
     decisionsMade: [],
@@ -276,7 +290,7 @@ test("write_handoff: overwrites on repeat calls", async () => {
   deepStrictEqual(parsed.data.remainingWork, ["a", "b"]);
 
   // Second write — should overwrite.
-  await handleWriteHandoff(ref, {
+  await submitWriteHandoff(ref, {
     completedSteps: [{ description: "second batch", files: ["src/bar.ts"] }],
     remainingWork: ["c"],
     decisionsMade: ["decided x"],
@@ -303,7 +317,7 @@ test("write_handoff: overwrites on repeat calls", async () => {
 
 test("handoff inject: prepends system message when handoff.json exists", async () => {
   const { ref, tmp } = makeRef();
-  const runId = ref.current!.packet.runId;
+  const runId = ref.byRunId.get(TEST_RUN_ID)!.packet.runId;
   const paths = makePaths(tmp);
   const runDir = paths.runDir(runId);
   const handoffPath = join(runDir, "handoff.json");
@@ -339,7 +353,7 @@ test("handoff inject: skips inject when handoff.json absent", async () => {
 
 test("verification gate: write_handoff blocked when awaitingVerification is true", async () => {
   const { ref } = makeRef({ awaitingVerification: true });
-  const result = await handleWriteHandoff(ref, {
+  const result = await submitWriteHandoff(ref, {
     completedSteps: [{ description: "blocked step" }],
     remainingWork: [],
     decisionsMade: [],
@@ -362,7 +376,7 @@ test("verification gate: write_handoff blocked when awaitingVerification is true
 
 test("verify_handoff: returns verdict and clears awaitingVerification", async () => {
   const { ref, tmp } = makeRef();
-  const runId = ref.current!.packet.runId;
+  const runId = ref.byRunId.get(TEST_RUN_ID)!.packet.runId;
   const paths = makePaths(tmp);
   const runDir = paths.runDir(runId);
   const handoffPath = join(runDir, "handoff.json");
@@ -387,7 +401,7 @@ test("verify_handoff: returns verdict and clears awaitingVerification", async ()
   })();
 
   // Set awaitingVerification to true.
-  ref.current!.awaitingVerification = true;
+  ref.byRunId.get(TEST_RUN_ID)!.awaitingVerification = true;
 
   // Mock executor that returns a valid verdict.
   const verdictJson = JSON.stringify({
@@ -410,9 +424,9 @@ test("verify_handoff: returns verdict and clears awaitingVerification", async ()
     deleteSession: async () => {},
     abortSession: async () => {},
   } as unknown as Executor;
-  ref.current!.executor = mockExecutor;
+  ref.byRunId.get(TEST_RUN_ID)!.executor = mockExecutor;
 
-  const result = await handleVerifyHandoff(ref, { claimedCompletions: ["added handoff.ts"] });
+  const result = await submitVerifyHandoff(ref, { claimedCompletions: ["added handoff.ts"] });
   equal(result.isError, false);
   const body = JSON.parse(result.content[0]!.text);
   equal(body.ok, true);
@@ -420,7 +434,7 @@ test("verify_handoff: returns verdict and clears awaitingVerification", async ()
   strictEqual(body.trusted[0]!.description, "added handoff.ts");
 
   // Gate should be cleared.
-  strictEqual(ref.current!.awaitingVerification, false);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.awaitingVerification, false);
 
   // Verify the prompt was built correctly.
   ok(capturedPrompt.includes("## Claimed completions"));
@@ -437,7 +451,7 @@ test("verify_handoff: returns verdict and clears awaitingVerification", async ()
 
 test("write_handoff: proceeds normally when awaitingVerification is false", async () => {
   const { ref } = makeRef({ awaitingVerification: false });
-  const result = await handleWriteHandoff(ref, {
+  const result = await submitWriteHandoff(ref, {
     completedSteps: [{ description: "ok step" }],
     remainingWork: [],
     decisionsMade: [],
@@ -457,7 +471,7 @@ test("write_handoff: proceeds normally when awaitingVerification is false", asyn
 
 test("verify_handoff: prompt includes all claimed steps, file samples, and questions", async () => {
   const { ref, tmp } = makeRef();
-  const runId = ref.current!.packet.runId;
+  const runId = ref.byRunId.get(TEST_RUN_ID)!.packet.runId;
   const paths = makePaths(tmp);
   const runDir = paths.runDir(runId);
   const handoffPath = join(runDir, "handoff.json");
@@ -485,7 +499,7 @@ test("verify_handoff: prompt includes all claimed steps, file samples, and quest
 
   const verdictJson = JSON.stringify({ ok: true, trusted: [], issues: [], resumeHint: "done" });
   let capturedPrompt = "";
-  ref.current!.executor = {
+  ref.byRunId.get(TEST_RUN_ID)!.executor = {
     createSession: async () => "s",
     sendMessage: async (_s: string, text: string) => {
       capturedPrompt = text;
@@ -495,7 +509,7 @@ test("verify_handoff: prompt includes all claimed steps, file samples, and quest
     deleteSession: async () => {},
   } as any;
 
-  await handleVerifyHandoff(ref, {
+  await submitVerifyHandoff(ref, {
     claimedCompletions: ["added handoff.ts", "added baby-tools.ts"],
     questionsForDaddy: ["is the Zod schema correct?"],
   });
@@ -519,7 +533,7 @@ test("verify_handoff: prompt includes all claimed steps, file samples, and quest
 // daddy-verify. After the fix, the full file content is included.
 test("verify_handoff: file samples include full content (no 4000-char cap)", async () => {
   const { ref, tmp } = makeRef();
-  const runId = ref.current!.packet.runId;
+  const runId = ref.byRunId.get(TEST_RUN_ID)!.packet.runId;
   const paths = makePaths(tmp);
   const runDir = paths.runDir(runId);
   const handoffPath = join(runDir, "handoff.json");
@@ -541,7 +555,7 @@ test("verify_handoff: file samples include full content (no 4000-char cap)", asy
 
   const verdictJson = JSON.stringify({ ok: true, trusted: [], issues: [], resumeHint: "done" });
   let capturedPrompt = "";
-  ref.current!.executor = {
+  ref.byRunId.get(TEST_RUN_ID)!.executor = {
     createSession: async () => "s",
     sendMessage: async (_s: string, text: string) => {
       capturedPrompt = text;
@@ -551,7 +565,7 @@ test("verify_handoff: file samples include full content (no 4000-char cap)", asy
     deleteSession: async () => {},
   } as any;
 
-  await handleVerifyHandoff(ref, {
+  await submitVerifyHandoff(ref, {
     claimedCompletions: ["added large.ts"],
     questionsForDaddy: [],
   });
@@ -574,7 +588,7 @@ test("verify_handoff: file samples include full content (no 4000-char cap)", asy
 
 test("verify_handoff: valid verdict JSON passed through correctly", async () => {
   const { ref, tmp } = makeRef();
-  const runId = ref.current!.packet.runId;
+  const runId = ref.byRunId.get(TEST_RUN_ID)!.packet.runId;
   const paths = makePaths(tmp);
   const handoffPath = join(paths.runDir(runId), "handoff.json");
 
@@ -590,7 +604,7 @@ test("verify_handoff: valid verdict JSON passed through correctly", async () => 
     resumeHint: "fix the type error in baz before continuing",
   });
 
-  ref.current!.executor = {
+  ref.byRunId.get(TEST_RUN_ID)!.executor = {
     createSession: async () => "s",
     sendMessage: async () => ({
       info: { tokens: {} },
@@ -600,7 +614,7 @@ test("verify_handoff: valid verdict JSON passed through correctly", async () => 
     deleteSession: async () => {},
   } as any;
 
-  const result = await handleVerifyHandoff(ref, { claimedCompletions: ["step 1"] });
+  const result = await submitVerifyHandoff(ref, { claimedCompletions: ["step 1"] });
   equal(result.isError, false);
   const body = JSON.parse(result.content[0]!.text);
 
@@ -619,14 +633,14 @@ test("verify_handoff: valid verdict JSON passed through correctly", async () => 
 
 test("verify_handoff: unparseable daddy response returns fallback verdict", async () => {
   const { ref, tmp } = makeRef();
-  const runId = ref.current!.packet.runId;
+  const runId = ref.byRunId.get(TEST_RUN_ID)!.packet.runId;
   const paths = makePaths(tmp);
   const handoffPath = join(paths.runDir(runId), "handoff.json");
 
   await writeFile(handoffPath, JSON.stringify(makeHandoffArtifact(), null, 2));
 
   // Daddy returns garbage — no JSON at all.
-  ref.current!.executor = {
+  ref.byRunId.get(TEST_RUN_ID)!.executor = {
     createSession: async () => "s",
     sendMessage: async () => ({
       info: { tokens: {} },
@@ -638,7 +652,7 @@ test("verify_handoff: unparseable daddy response returns fallback verdict", asyn
     deleteSession: async () => {},
   } as any;
 
-  const result = await handleVerifyHandoff(ref, { claimedCompletions: ["step 1"] });
+  const result = await submitVerifyHandoff(ref, { claimedCompletions: ["step 1"] });
   equal(result.isError, false);
   const body = JSON.parse(result.content[0]!.text);
 
@@ -652,13 +666,13 @@ test("verify_handoff: unparseable daddy response returns fallback verdict", asyn
 
 test("verify_handoff: executor exception returns error verdict", async () => {
   const { ref, tmp } = makeRef();
-  const runId = ref.current!.packet.runId;
+  const runId = ref.byRunId.get(TEST_RUN_ID)!.packet.runId;
   const paths = makePaths(tmp);
   const handoffPath = join(paths.runDir(runId), "handoff.json");
 
   await writeFile(handoffPath, JSON.stringify(makeHandoffArtifact(), null, 2));
 
-  ref.current!.executor = {
+  ref.byRunId.get(TEST_RUN_ID)!.executor = {
     createSession: async () => "s",
     sendMessage: async () => {
       throw new Error("provider timeout");
@@ -667,7 +681,7 @@ test("verify_handoff: executor exception returns error verdict", async () => {
     deleteSession: async () => {},
   } as any;
 
-  const result = await handleVerifyHandoff(ref, { claimedCompletions: ["step 1"] });
+  const result = await submitVerifyHandoff(ref, { claimedCompletions: ["step 1"] });
   equal(result.isError, false);
   const body = JSON.parse(result.content[0]!.text);
 
@@ -796,7 +810,7 @@ test("runVerify: executor failure returns error verdict", async () => {
 
 test("verify_handoff: returns turnCompleteError when turnComplete is true", async () => {
   const { ref } = makeRef({ turnComplete: true });
-  const result = await handleVerifyHandoff(ref, { claimedCompletions: ["step 1"] });
+  const result = await submitVerifyHandoff(ref, { claimedCompletions: ["step 1"] });
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
   match(body.error, /End your turn now/);
@@ -804,7 +818,7 @@ test("verify_handoff: returns turnCompleteError when turnComplete is true", asyn
 
 test("write_handoff: returns turnCompleteError when turnComplete is true", async () => {
   const { ref } = makeRef({ turnComplete: true });
-  const result = await handleWriteHandoff(ref, {
+  const result = await submitWriteHandoff(ref, {
     completedSteps: [{ description: "step" }],
     remainingWork: [],
     decisionsMade: [],
@@ -822,7 +836,7 @@ test("write_handoff: returns turnCompleteError when turnComplete is true", async
 test("verify_handoff: returns error when handoff.json does not exist", async () => {
   const { ref } = makeRef();
   // Don't write handoff.json — leave it absent.
-  const result = await handleVerifyHandoff(ref, { claimedCompletions: ["step 1"] });
+  const result = await submitVerifyHandoff(ref, { claimedCompletions: ["step 1"] });
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
   match(body.error, /no handoff.json found/);
@@ -833,8 +847,8 @@ test("verify_handoff: returns error when handoff.json does not exist", async () 
 // ===========================================================================
 
 test("write_handoff: returns error when no active run", async () => {
-  const result = await handleWriteHandoff(
-    { current: undefined },
+  const result = await submitWriteHandoff(
+    { byRunId: new Map() },
     {
       completedSteps: [{ description: "step" }],
       remainingWork: [],
@@ -844,15 +858,15 @@ test("write_handoff: returns error when no active run", async () => {
   );
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
-  strictEqual(body.error, "no active run");
+  strictEqual(body.error, `no active run for runId: ${TEST_RUN_ID}`);
 });
 
 test("verify_handoff: returns error when no active run", async () => {
-  const result = await handleVerifyHandoff(
-    { current: undefined },
+  const result = await submitVerifyHandoff(
+    { byRunId: new Map() },
     { claimedCompletions: ["step 1"] },
   );
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
-  strictEqual(body.error, "no active run");
+  strictEqual(body.error, `no active run for runId: ${TEST_RUN_ID}`);
 });

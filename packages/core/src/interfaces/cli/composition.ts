@@ -152,15 +152,15 @@ export const runDriver = async (
   // The bridge port (the lock) holds the serve substrate. bind() acquires the
   // lock and brings opencode up; close() tears both down. The driver loop calls
   // bind() first (R1) and close() in its finally.
-  const ref: RunRef = { current: undefined };
+  const ref: RunRef = { byRunId: new Map() };
   let serve: Serve | undefined;
   const bridge: BridgePort<RunRef> = {
     bind: async () => {
       serve = await startServe(config, paths, ref);
       return ref;
     },
-    clearActive: (r) => {
-      r.current = undefined;
+    clearActive: (r, runId) => {
+      r.byRunId.delete(runId);
     },
     close: () => {
       if (serve) {
@@ -191,11 +191,11 @@ export const runDriver = async (
         executor,
         verifyModel: modelOf(config.daddy),
       };
-      r.current = channel;
+      r.byRunId.set(packet.runId, channel);
       return channel;
     },
-    endRun: (r) => {
-      r.current = undefined;
+    endRun: (r, runId) => {
+      r.byRunId.delete(runId);
     },
   };
 

@@ -45,7 +45,7 @@ import { turnLoop } from "./turn-loop.js";
 // infrastructure ActiveRunRef is a structural superset, passed in with no cast.
 export type BridgeBinding<Ref> = {
   beginRun: (ref: Ref, packet: Packet, worktree: string) => RunChannel;
-  endRun: (ref: Ref) => void;
+  endRun: (ref: Ref, runId: string) => void;
 };
 
 type RunMetaPaths = { repo: string; worktree: string; base: string; branch: string };
@@ -314,7 +314,7 @@ export const makeExecuteRun =
         signal,
       );
     } finally {
-      bridge.endRun(ref);
+      bridge.endRun(ref, packet.runId);
     }
 
     finalizeRun(ports, runId, worktree, result);

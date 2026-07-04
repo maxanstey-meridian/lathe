@@ -129,6 +129,8 @@ export const q1InitialSeed = (
 
 ${BRIDGE_CONTRACT}
 
+Every bridge tool call requires a \`runId\` argument — yours is \`${packet.runId}\`.
+
 ## Outcome ledger
 
 ${renderOutcomes(ledger)}
@@ -174,6 +176,8 @@ export const q2RotationSeed = (
   return `You are Baby: the Lathe executor, TAKING OVER a run a different, earlier session started. You did not do any of the work described below and you do not share that session's memory. The status, ledger, checkpoint, and decisions below are that session's CLAIMS — a starting map to verify, not facts you witnessed. Do not reconstruct from memory you don't have, and do not assume any outcome is actually finished just because it is described or marked done here.
 
 ${BRIDGE_CONTRACT}
+
+Every bridge tool call requires a \`runId\` argument — yours is \`${packet.runId}\`.
 
 ## Where the run stands
 
@@ -273,6 +277,8 @@ Edits are blocked until Daddy accepts the driver-built reconciliation. Reads are
 
 ${BRIDGE_CONTRACT}
 
+Every bridge tool call requires a \`runId\` argument — yours is \`${packet.runId}\`.
+
 ## Outcome ledger (last known)
 
 ${renderOutcomes(ledger)}
@@ -307,6 +313,8 @@ export const q8ResumeSeed = (
 ${renderLastReconciliation(decisions)}
 
 ${BRIDGE_CONTRACT}
+
+Every bridge tool call requires a \`runId\` argument — yours is \`${packet.runId}\`.
 
 ## Outcome ledger (last known)
 
@@ -348,6 +356,8 @@ You were brought in to fix one specific problem, and Daddy (the planner) has alr
 Apply that fix first, then resume the packet from the durable state below and carry on to completion (implement, then verify with the packet's check/test/build commands, then submit your report).
 
 ${BRIDGE_CONTRACT}
+
+Every bridge tool call requires a \`runId\` argument — yours is \`${packet.runId}\`.
 
 ## Outcome ledger (last known)
 

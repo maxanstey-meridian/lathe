@@ -290,7 +290,7 @@ export const runLoop = async <Ref>(
         }
 
         // Clear the bridge context so the next run starts fresh.
-        bridge.clearActive(ref);
+        bridge.clearActive(ref, runId);
         continue;
       }
 

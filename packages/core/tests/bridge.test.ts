@@ -31,6 +31,8 @@ import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 // Test helpers
 // ===========================================================================
 
+const TEST_RUN_ID = "test-run";
+
 const TS_COUNTER = { n: 0 };
 const fixedClock = (): Clock => ({
   now: () => 1700000000000 + TS_COUNTER.n++,
@@ -153,7 +155,9 @@ const makeRef = (overrides?: {
     },
     verifyModel: { providerId: "test", modelId: "test", agent: "test" },
   };
-  const ref = { current: ctx };
+  const ref = {
+    byRunId: new Map([[TEST_RUN_ID, ctx]]),
+  } as const;
   // Initialize ledger and gate state
   store.writeMeta({
     runId: packet.runId,
@@ -184,6 +188,31 @@ const makeRef = (overrides?: {
   return { ref, tmp, clock };
 };
 
+const invokeAskPlanner = (
+  ref: ReturnType<typeof makeRef>["ref"],
+  input: Omit<Parameters<typeof handleAskPlanner>[1], "runId">,
+) => handleAskPlanner(ref, { runId: TEST_RUN_ID, ...input });
+
+const invokeUpdateOutcomes = (
+  ref: ReturnType<typeof makeRef>["ref"],
+  input: Omit<Parameters<typeof handleUpdateOutcomes>[1], "runId">,
+) => handleUpdateOutcomes(ref, { runId: TEST_RUN_ID, ...input });
+
+const invokeWriteCheckpoint = (
+  ref: ReturnType<typeof makeRef>["ref"],
+  input: Omit<Parameters<typeof handleWriteCheckpoint>[1], "runId">,
+) => handleWriteCheckpoint(ref, { runId: TEST_RUN_ID, ...input });
+
+const invokeSubmitReport = (
+  ref: ReturnType<typeof makeRef>["ref"],
+  input: Omit<Parameters<typeof handleSubmitReport>[1], "runId">,
+) => handleSubmitReport(ref, { runId: TEST_RUN_ID, ...input });
+
+const invokeGetDecisions = (
+  ref: ReturnType<typeof makeRef>["ref"],
+  input: Omit<Parameters<typeof handleGetDecisions>[1], "runId">,
+) => handleGetDecisions(ref, { runId: TEST_RUN_ID, ...input });
+
 // ===========================================================================
 // buildMcpServer: five tools present
 // ===========================================================================
@@ -209,7 +238,7 @@ test("ask_planner: records consult-requested intent on valid call", async () => 
       stopCalls += 1;
     },
   });
-  const result = await handleAskPlanner(ref, {
+  const result = await invokeAskPlanner(ref, {
     questionType: "repo_procedure",
     currentSlice: "tests/bridge.test.ts",
     question: "How do I write tests here?",
@@ -219,11 +248,11 @@ test("ask_planner: records consult-requested intent on valid call", async () => 
   equal(result.isError, false);
   const body = JSON.parse(result.content[0]!.text);
   equal(body.status, "submitted");
-  strictEqual(ref.current.intents.length, 1);
-  equal(ref.current.intents[0]!.kind, "consult-requested");
-  strictEqual(ref.current.turnComplete, true);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 1);
+  equal(ref.byRunId.get(TEST_RUN_ID)!.intents[0]!.kind, "consult-requested");
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.turnComplete, true);
   strictEqual(stopCalls, 1);
-  deepStrictEqual(ref.current.pendingConsult, {
+  deepStrictEqual(ref.byRunId.get(TEST_RUN_ID)!.pendingConsult, {
     questionType: "repo_procedure",
     currentSlice: "tests/bridge.test.ts",
     question: "How do I write tests here?",
@@ -231,7 +260,7 @@ test("ask_planner: records consult-requested intent on valid call", async () => 
     evidence: ["tests/store.test.ts"],
   });
   // The driver drains pendingConsult on the next turn.
-  ok(ref.current.pendingConsult);
+  ok(ref.byRunId.get(TEST_RUN_ID)!.pendingConsult);
   await cleanTemp(tmp);
 });
 
@@ -242,14 +271,14 @@ test("ask_planner: records consult-requested intent on valid call", async () => 
 test("ask_planner: already_submitted when pendingConsult is set", async () => {
   const { ref, tmp } = makeRef();
   // Set up a prior pending consult
-  ref.current.pendingConsult = {
+  ref.byRunId.get(TEST_RUN_ID)!.pendingConsult = {
     questionType: "architecture_discoverable",
     currentSlice: "src/bridge.ts",
     question: "How does X work?",
     approach: "Y",
     evidence: ["src/bridge.ts"],
   };
-  const result = await handleAskPlanner(ref, {
+  const result = await invokeAskPlanner(ref, {
     questionType: "repo_procedure",
     currentSlice: "tests/bridge.test.ts",
     question: "How do I write tests here?",
@@ -259,10 +288,10 @@ test("ask_planner: already_submitted when pendingConsult is set", async () => {
   equal(result.isError, false);
   const body = JSON.parse(result.content[0]!.text);
   equal(body.status, "already_submitted");
-  strictEqual(ref.current.intents.length, 1);
-  equal(ref.current.intents[0]!.kind, "consult-requested");
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 1);
+  equal(ref.byRunId.get(TEST_RUN_ID)!.intents[0]!.kind, "consult-requested");
   // pendingConsult should NOT be overwritten
-  equal(ref.current.pendingConsult?.questionType, "architecture_discoverable");
+  equal(ref.byRunId.get(TEST_RUN_ID)!.pendingConsult?.questionType, "architecture_discoverable");
   await cleanTemp(tmp);
 });
 
@@ -272,7 +301,7 @@ test("ask_planner: already_submitted when pendingConsult is set", async () => {
 
 test("ask_planner: rejects empty question", async () => {
   const { ref, tmp } = makeRef();
-  const result = await handleAskPlanner(ref, {
+  const result = await invokeAskPlanner(ref, {
     questionType: "other",
     currentSlice: "src/foo.ts",
     question: "   ",
@@ -283,14 +312,14 @@ test("ask_planner: rejects empty question", async () => {
   const body = JSON.parse(result.content[0]!.text);
   match(body.error, /invalid meridian-bridge_ask_planner/);
   ok(body.problems.includes("question is empty"));
-  strictEqual(ref.current.intents.length, 0);
-  strictEqual(ref.current.pendingConsult, null);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 0);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.pendingConsult, null);
   await cleanTemp(tmp);
 });
 
 test("ask_planner: rejects empty currentSlice", async () => {
   const { ref, tmp } = makeRef();
-  const result = await handleAskPlanner(ref, {
+  const result = await invokeAskPlanner(ref, {
     questionType: "other",
     currentSlice: "  ",
     question: "what is x?",
@@ -300,13 +329,13 @@ test("ask_planner: rejects empty currentSlice", async () => {
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
   ok(body.problems.includes("currentSlice is empty"));
-  strictEqual(ref.current.intents.length, 0);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 0);
   await cleanTemp(tmp);
 });
 
 test("ask_planner: rejects empty approach", async () => {
   const { ref, tmp } = makeRef();
-  const result = await handleAskPlanner(ref, {
+  const result = await invokeAskPlanner(ref, {
     questionType: "other",
     currentSlice: "src/foo.ts",
     question: "what is x?",
@@ -316,13 +345,13 @@ test("ask_planner: rejects empty approach", async () => {
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
   ok(body.problems.some((p: string) => p.includes("approach is empty")));
-  strictEqual(ref.current.intents.length, 0);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 0);
   await cleanTemp(tmp);
 });
 
 test("ask_planner: rejects empty evidence array", async () => {
   const { ref, tmp } = makeRef();
-  const result = await handleAskPlanner(ref, {
+  const result = await invokeAskPlanner(ref, {
     questionType: "other",
     currentSlice: "src/foo.ts",
     question: "what is x?",
@@ -332,13 +361,13 @@ test("ask_planner: rejects empty evidence array", async () => {
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
   ok(body.problems.includes("evidence is empty"));
-  strictEqual(ref.current.intents.length, 0);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 0);
   await cleanTemp(tmp);
 });
 
 test("ask_planner: accepts minimal reconciliation trigger without evidence", async () => {
   const { ref, tmp } = makeRef();
-  const result = await handleAskPlanner(ref, {
+  const result = await invokeAskPlanner(ref, {
     questionType: "reconciliation",
     currentSlice: "reconciliation",
     question: "Please reconcile this resumed run from driver-built evidence.",
@@ -346,15 +375,15 @@ test("ask_planner: accepts minimal reconciliation trigger without evidence", asy
     evidence: [],
   });
   equal(result.isError, false);
-  strictEqual(ref.current.intents.length, 1);
-  equal(ref.current.pendingConsult?.questionType, "reconciliation");
-  deepStrictEqual(ref.current.pendingConsult?.evidence, []);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 1);
+  equal(ref.byRunId.get(TEST_RUN_ID)!.pendingConsult?.questionType, "reconciliation");
+  deepStrictEqual(ref.byRunId.get(TEST_RUN_ID)!.pendingConsult?.evidence, []);
   await cleanTemp(tmp);
 });
 
 test("ask_planner: rejects all args empty", async () => {
   const { ref, tmp } = makeRef();
-  const result = await handleAskPlanner(ref, {
+  const result = await invokeAskPlanner(ref, {
     questionType: "other",
     currentSlice: "  ",
     question: "  ",
@@ -364,7 +393,7 @@ test("ask_planner: rejects all args empty", async () => {
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
   equal(body.problems.length, 4); // question, currentSlice, approach, evidence all empty
-  strictEqual(ref.current.intents.length, 0);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 0);
   await cleanTemp(tmp);
 });
 
@@ -374,7 +403,7 @@ test("ask_planner: rejects all args empty", async () => {
 
 test("update_outcomes: records outcomes-updated intent on valid call", async () => {
   const { ref, tmp } = makeRef();
-  const result = await handleUpdateOutcomes(ref, {
+  const result = await invokeUpdateOutcomes(ref, {
     outcomes: [
       { id: "test-outcome", status: "in_progress", state: "started", nextAction: "finish it" },
     ],
@@ -383,10 +412,12 @@ test("update_outcomes: records outcomes-updated intent on valid call", async () 
   const body = JSON.parse(result.content[0]!.text);
   equal(body.ok, true);
   equal(body.outcomes[0]!.status, "in_progress");
-  strictEqual(ref.current.intents.length, 1);
-  equal(ref.current.intents[0]!.kind, "outcomes-updated");
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 1);
+  equal(ref.byRunId.get(TEST_RUN_ID)!.intents[0]!.kind, "outcomes-updated");
   // Verify persisted in store
-  const ledger = ref.current.store.readLedger(ref.current.packet.runId);
+  const ledger = ref.byRunId
+    .get(TEST_RUN_ID)!
+    .store.readLedger(ref.byRunId.get(TEST_RUN_ID)!.packet.runId);
   equal(ledger.outcomes[0]!.status, "in_progress");
   equal(ledger.outcomes[0]!.state, "started");
   equal(ledger.outcomes[0]!.nextAction, "finish it");
@@ -395,59 +426,67 @@ test("update_outcomes: records outcomes-updated intent on valid call", async () 
 
 test("update_outcomes: rejects done without evidence (O2) when ledger also has no evidence", async () => {
   const { ref, tmp } = makeRef();
-  const result = await handleUpdateOutcomes(ref, {
+  const result = await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done" }],
   });
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
   ok(body.problems.some((p: string) => p.includes("cannot be done without evidence")));
-  strictEqual(ref.current.intents.length, 0);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 0);
   // Ledger unchanged
-  const ledger = ref.current.store.readLedger(ref.current.packet.runId);
+  const ledger = ref.byRunId
+    .get(TEST_RUN_ID)!
+    .store.readLedger(ref.byRunId.get(TEST_RUN_ID)!.packet.runId);
   equal(ledger.outcomes[0]!.status, "not_started");
   await cleanTemp(tmp);
 });
 
 test("update_outcomes: rejects done with whitespace-only evidence (O2)", async () => {
   const { ref, tmp } = makeRef();
-  const result = await handleUpdateOutcomes(ref, {
+  const result = await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["  "] }],
   });
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
   ok(body.problems.some((p: string) => p.includes("cannot be done without evidence")));
-  strictEqual(ref.current.intents.length, 0);
-  const ledger = ref.current.store.readLedger(ref.current.packet.runId);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 0);
+  const ledger = ref.byRunId
+    .get(TEST_RUN_ID)!
+    .store.readLedger(ref.byRunId.get(TEST_RUN_ID)!.packet.runId);
   equal(ledger.outcomes[0]!.status, "not_started");
   await cleanTemp(tmp);
 });
 
 test("update_outcomes: blank evidence does not overwrite existing non-empty evidence", async () => {
   const { ref, tmp } = makeRef();
-  await handleUpdateOutcomes(ref, {
+  await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["real-evidence.txt"] }],
   });
-  const result = await handleUpdateOutcomes(ref, {
+  const result = await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "in_progress", evidence: ["  "] }],
   });
   equal(result.isError, false);
-  const ledger = ref.current.store.readLedger(ref.current.packet.runId);
+  const ledger = ref.byRunId
+    .get(TEST_RUN_ID)!
+    .store.readLedger(ref.byRunId.get(TEST_RUN_ID)!.packet.runId);
   strictEqual(ledger.outcomes[0]!.evidence[0], "real-evidence.txt");
   await cleanTemp(tmp);
 });
 
 test("update_outcomes: allows done with evidence", async () => {
   const { ref, tmp } = makeRef();
-  const result = await handleUpdateOutcomes(ref, {
+  const result = await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["evidence.txt"] }],
   });
   equal(result.isError, false);
   const body = JSON.parse(result.content[0]!.text);
   equal(body.ok, true);
   equal(body.outcomes[0]!.status, "done");
-  strictEqual(ref.current.intents.length, 1);
-  equal(ref.current.intents[0]!.kind, "outcomes-updated");
-  const ledger = ref.current.store.readLedger(ref.current.packet.runId);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 1);
+  equal(ref.byRunId.get(TEST_RUN_ID)!.intents[0]!.kind, "outcomes-updated");
+  const ledger = ref.byRunId
+    .get(TEST_RUN_ID)!
+    .store.readLedger(ref.byRunId.get(TEST_RUN_ID)!.packet.runId);
   equal(ledger.outcomes[0]!.status, "done");
   equal(ledger.outcomes[0]!.evidence[0], "evidence.txt");
   await cleanTemp(tmp);
@@ -455,13 +494,13 @@ test("update_outcomes: allows done with evidence", async () => {
 
 test("update_outcomes: rejects unknown outcome id", async () => {
   const { ref, tmp } = makeRef();
-  const result = await handleUpdateOutcomes(ref, {
+  const result = await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "nonexistent", status: "done", evidence: ["x"] }],
   });
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
   ok(body.problems.some((p: string) => p.includes("unknown outcome id")));
-  strictEqual(ref.current.intents.length, 0);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 0);
   await cleanTemp(tmp);
 });
 
@@ -471,31 +510,31 @@ test("update_outcomes: rejects unknown outcome id", async () => {
 
 test("write_checkpoint: records checkpoint-written intent on valid call", async () => {
   const { ref, tmp } = makeRef();
-  const result = await handleWriteCheckpoint(ref, { summary: "halfway point" });
+  const result = await invokeWriteCheckpoint(ref, { summary: "halfway point" });
   equal(result.isError, false);
   const body = JSON.parse(result.content[0]!.text);
   equal(body.ok, true);
   equal(body.number, 1);
-  strictEqual(ref.current.intents.length, 1);
-  equal(ref.current.intents[0]!.kind, "checkpoint-written");
-  ok(ref.current.intents[0]!.checkpoint);
-  equal(ref.current.intents[0]!.checkpoint.number, 1);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 1);
+  equal(ref.byRunId.get(TEST_RUN_ID)!.intents[0]!.kind, "checkpoint-written");
+  ok(ref.byRunId.get(TEST_RUN_ID)!.intents[0]!.checkpoint);
+  equal(ref.byRunId.get(TEST_RUN_ID)!.intents[0]!.checkpoint.number, 1);
   await cleanTemp(tmp);
 });
 
 test("write_checkpoint: invalid checkpoint records zero intents, increments bounce count", async () => {
   const { ref, tmp } = makeRef();
   // Add a phantom outcome to the packet that's not in the ledger, so checkpointProblems rejects.
-  ref.current.packet.frontmatter.outcomes.push({
+  ref.byRunId.get(TEST_RUN_ID)!.packet.frontmatter.outcomes.push({
     id: "phantom-outcome",
     description: "not in ledger",
   });
-  const result = await handleWriteCheckpoint(ref, { summary: "halfway point" });
+  const result = await invokeWriteCheckpoint(ref, { summary: "halfway point" });
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
   equal(body.ok, false);
-  strictEqual(ref.current.intents.length, 0);
-  strictEqual(ref.current.checkpointBounceCount, 1);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 0);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.checkpointBounceCount, 1);
   await cleanTemp(tmp);
 });
 
@@ -505,7 +544,7 @@ test("write_checkpoint: invalid checkpoint records zero intents, increments boun
 
 test("submit_report: blocked records report-accepted intent", async () => {
   const { ref, tmp } = makeRef();
-  const result = await handleSubmitReport(ref, {
+  const result = await invokeSubmitReport(ref, {
     status: "blocked",
     blockedReason: "human_decision",
     blockedQuestion: "Should we proceed with this design?",
@@ -515,15 +554,15 @@ test("submit_report: blocked records report-accepted intent", async () => {
   const body = JSON.parse(result.content[0]!.text);
   equal(body.ok, true);
   equal(body.status, "blocked");
-  strictEqual(ref.current.intents.length, 1);
-  equal(ref.current.intents[0]!.kind, "report-accepted");
-  equal(ref.current.intents[0]!.status, "blocked");
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 1);
+  equal(ref.byRunId.get(TEST_RUN_ID)!.intents[0]!.kind, "report-accepted");
+  equal(ref.byRunId.get(TEST_RUN_ID)!.intents[0]!.status, "blocked");
   await cleanTemp(tmp);
 });
 
 test("submit_report: failed records report-accepted intent", async () => {
   const { ref, tmp } = makeRef();
-  const result = await handleSubmitReport(ref, {
+  const result = await invokeSubmitReport(ref, {
     status: "failed",
     summary: "Could not complete the task.",
   });
@@ -531,8 +570,8 @@ test("submit_report: failed records report-accepted intent", async () => {
   const body = JSON.parse(result.content[0]!.text);
   equal(body.ok, true);
   equal(body.status, "failed");
-  strictEqual(ref.current.intents.length, 1);
-  equal(ref.current.intents[0]!.kind, "report-accepted");
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 1);
+  equal(ref.byRunId.get(TEST_RUN_ID)!.intents[0]!.kind, "report-accepted");
   await cleanTemp(tmp);
 });
 
@@ -548,32 +587,37 @@ test("submit_report: sets final-review-requested intent when ready_for_review su
     },
   });
   // Mark outcome done, gate clear (initial phase by default), verification green (echo ok passes)
-  await handleUpdateOutcomes(ref, {
+  await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
   // Verify gate is clear
-  const gateState = ref.current.store.readGateState(ref.current.packet.runId);
+  const gateState = ref.byRunId
+    .get(TEST_RUN_ID)!
+    .store.readGateState(ref.byRunId.get(TEST_RUN_ID)!.packet.runId);
   equal(gateState.phase.phase, "initial");
-  const result = await handleSubmitReport(ref, {
+  const result = await invokeSubmitReport(ref, {
     status: "ready_for_review",
     summary: "All done.",
   });
   equal(result.isError, false);
   const body = JSON.parse(result.content[0]!.text);
   equal(body.status, "review_pending");
-  strictEqual(ref.current.intents.length, 2);
-  equal(ref.current.intents[0]!.kind, "outcomes-updated");
-  equal(ref.current.intents[ref.current.intents.length - 1].kind, "final-review-requested");
-  strictEqual(ref.current.pendingFinalReview !== null, true);
-  strictEqual(ref.current.turnComplete, true);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 2);
+  equal(ref.byRunId.get(TEST_RUN_ID)!.intents[0]!.kind, "outcomes-updated");
+  equal(
+    ref.byRunId.get(TEST_RUN_ID)!.intents[ref.byRunId.get(TEST_RUN_ID)!.intents.length - 1].kind,
+    "final-review-requested",
+  );
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.pendingFinalReview !== null, true);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.turnComplete, true);
   strictEqual(stopCalls, 1);
   await cleanTemp(tmp);
 });
 
 test("submit_report: ready_for_review is not blocked by a latched edit gate", async () => {
   const { ref, tmp, clock } = makeRef();
-  ref.current.store.writeGateState(ref.current.packet.runId, {
-    runId: ref.current.packet.runId,
+  ref.byRunId.get(TEST_RUN_ID)!.store.writeGateState(ref.byRunId.get(TEST_RUN_ID)!.packet.runId, {
+    runId: ref.byRunId.get(TEST_RUN_ID)!.packet.runId,
     phase: { phase: "first-edit-latched", reason: "first edit of the new session" },
     expectedGlobs: ["src/**"],
     suspiciousGlobs: [],
@@ -581,11 +625,11 @@ test("submit_report: ready_for_review is not blocked by a latched edit gate", as
     updatedAt: clock.nowIso(),
     mutationCommandPatterns: [],
   });
-  await handleUpdateOutcomes(ref, {
+  await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
 
-  const result = await handleSubmitReport(ref, {
+  const result = await invokeSubmitReport(ref, {
     status: "ready_for_review",
     summary: "All done.",
   });
@@ -593,7 +637,10 @@ test("submit_report: ready_for_review is not blocked by a latched edit gate", as
   equal(result.isError, false);
   const body = JSON.parse(result.content[0]!.text);
   equal(body.status, "review_pending");
-  equal(ref.current.intents[ref.current.intents.length - 1].kind, "final-review-requested");
+  equal(
+    ref.byRunId.get(TEST_RUN_ID)!.intents[ref.byRunId.get(TEST_RUN_ID)!.intents.length - 1].kind,
+    "final-review-requested",
+  );
   await cleanTemp(tmp);
 });
 
@@ -604,15 +651,15 @@ test("submit_report: ready_for_review is not blocked by a latched edit gate", as
 test("submit_report: rejected when ready_for_review with incomplete outcomes", async () => {
   const { ref, tmp } = makeRef();
   // Outcome is "not_started" in the ledger — ready_for_review should fail.
-  const result = await handleSubmitReport(ref, {
+  const result = await invokeSubmitReport(ref, {
     status: "ready_for_review",
     summary: "All done.",
   });
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
   ok(body.problems.some((p: string) => p.includes("ready_for_review requires every outcome done")));
-  strictEqual(ref.current.intents.length, 1);
-  equal(ref.current.intents[0]!.kind, "report-rejected");
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 1);
+  equal(ref.byRunId.get(TEST_RUN_ID)!.intents[0]!.kind, "report-rejected");
   await cleanTemp(tmp);
 });
 
@@ -622,7 +669,7 @@ test("submit_report: rejected when ready_for_review with incomplete outcomes", a
 
 test("submit_report: returns review_pending and RE-ARMS the intent when pendingFinalReview is set", async () => {
   const { ref, tmp } = makeRef();
-  ref.current.pendingFinalReview = {
+  ref.byRunId.get(TEST_RUN_ID)!.pendingFinalReview = {
     status: "ready_for_review",
     summary: "prev review",
     filesChanged: [],
@@ -634,7 +681,7 @@ test("submit_report: returns review_pending and RE-ARMS the intent when pendingF
     remainingUncertainty: [],
     regressionGuard: { tests: [] },
   };
-  const result = await handleSubmitReport(ref, {
+  const result = await invokeSubmitReport(ref, {
     status: "ready_for_review",
     summary: "another review",
   });
@@ -643,8 +690,8 @@ test("submit_report: returns review_pending and RE-ARMS the intent when pendingF
   equal(body.status, "review_pending");
   // The sticky pendingFinalReview must re-arm its one-shot trigger every turn,
   // else a review orphaned by a prior higher-precedence branch never reruns.
-  strictEqual(ref.current.intents.length, 1);
-  equal(ref.current.intents[0]!.kind, "final-review-requested");
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 1);
+  equal(ref.byRunId.get(TEST_RUN_ID)!.intents[0]!.kind, "final-review-requested");
   await cleanTemp(tmp);
 });
 
@@ -658,19 +705,19 @@ test("submit_report: returns review_pending and RE-ARMS the intent when pendingF
 test("submit_report: a passing re-submit drops the same-turn report-rejected intent", async () => {
   const { ref, tmp } = makeRef();
   // First submit this turn: outcome not done → floor rejects → report-rejected.
-  const rejected = await handleSubmitReport(ref, {
+  const rejected = await invokeSubmitReport(ref, {
     status: "ready_for_review",
     summary: "premature",
   });
   equal(rejected.isError, true);
-  strictEqual(ref.current.intents.length, 1);
-  equal(ref.current.intents[0]!.kind, "report-rejected");
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 1);
+  equal(ref.byRunId.get(TEST_RUN_ID)!.intents[0]!.kind, "report-rejected");
 
   // Same turn (intents NOT cleared): Baby fixes the outcome and re-submits → passes.
-  await handleUpdateOutcomes(ref, {
+  await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
-  const passed = await handleSubmitReport(ref, {
+  const passed = await invokeSubmitReport(ref, {
     status: "ready_for_review",
     summary: "fixed",
   });
@@ -679,11 +726,14 @@ test("submit_report: a passing re-submit drops the same-turn report-rejected int
 
   // The superseded rejection is gone; final-review-requested is the live intent.
   ok(
-    !ref.current.intents.some((i) => i.kind === "report-rejected"),
+    !ref.byRunId.get(TEST_RUN_ID)!.intents.some((i) => i.kind === "report-rejected"),
     "stale same-turn report-rejected must be dropped",
   );
-  equal(ref.current.intents[ref.current.intents.length - 1].kind, "final-review-requested");
-  strictEqual(ref.current.pendingFinalReview !== null, true);
+  equal(
+    ref.byRunId.get(TEST_RUN_ID)!.intents[ref.byRunId.get(TEST_RUN_ID)!.intents.length - 1].kind,
+    "final-review-requested",
+  );
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.pendingFinalReview !== null, true);
   await cleanTemp(tmp);
 });
 
@@ -693,11 +743,11 @@ test("submit_report: a passing re-submit drops the same-turn report-rejected int
 
 test("submit_report: pass-1 ready_for_review with no guard → floor clean", async () => {
   const { ref, tmp } = makeRef();
-  await handleUpdateOutcomes(ref, {
+  await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
   // pass-1: V8 does not fire; regressionGuard is optional
-  const result = await handleSubmitReport(ref, {
+  const result = await invokeSubmitReport(ref, {
     status: "ready_for_review",
     summary: "All done.",
   });
@@ -709,10 +759,10 @@ test("submit_report: pass-1 ready_for_review with no guard → floor clean", asy
 
 test("submit_report: pass-2 ready_for_review with no test and no justification → rejected", async () => {
   const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
-  await handleUpdateOutcomes(ref, {
+  await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
-  const result = await handleSubmitReport(ref, {
+  const result = await invokeSubmitReport(ref, {
     status: "ready_for_review",
     summary: "Fixed it.",
   });
@@ -720,7 +770,7 @@ test("submit_report: pass-2 ready_for_review with no test and no justification �
   const body = JSON.parse(result.content[0]!.text);
   ok(body.problems.some((p: string) => p.includes("repair pass (pass 2)")));
   ok(body.problems.some((p: string) => p.includes("regression test")));
-  strictEqual(ref.current.intents[1]!.kind, "report-rejected");
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents[1]!.kind, "report-rejected");
   await cleanTemp(tmp);
 });
 
@@ -732,10 +782,10 @@ test("submit_report: pass-1 anti-fabrication — test not in diff → rejected",
   // empty list will trigger the anti-fabrication check.
   // But we also need pass-1 (V8B should NOT fire).
   const { ref, tmp } = makeRef();
-  await handleUpdateOutcomes(ref, {
+  await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
-  const result = await handleSubmitReport(ref, {
+  const result = await invokeSubmitReport(ref, {
     status: "ready_for_review",
     summary: "All done.",
     regressionGuard: {
@@ -745,16 +795,16 @@ test("submit_report: pass-1 anti-fabrication — test not in diff → rejected",
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
   ok(body.problems.some((p: string) => p.includes("is not among your changed files")));
-  strictEqual(ref.current.intents[1]!.kind, "report-rejected");
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents[1]!.kind, "report-rejected");
   await cleanTemp(tmp);
 });
 
 test("submit_report: pass-2 anti-fabrication — test not in diff → rejected", async () => {
   const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
-  await handleUpdateOutcomes(ref, {
+  await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
-  const result = await handleSubmitReport(ref, {
+  const result = await invokeSubmitReport(ref, {
     status: "ready_for_review",
     summary: "Fixed it.",
     regressionGuard: {
@@ -764,7 +814,7 @@ test("submit_report: pass-2 anti-fabrication — test not in diff → rejected",
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
   ok(body.problems.some((p: string) => p.includes("is not among your changed files")));
-  strictEqual(ref.current.intents[1]!.kind, "report-rejected");
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents[1]!.kind, "report-rejected");
   await cleanTemp(tmp);
 });
 
@@ -786,14 +836,14 @@ const seedWorktreeGit = async (worktree: string, addedFile: string) => {
 
 test("submit_report: pass-2 naming a real changed test file → floor clean", async () => {
   const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
-  await handleUpdateOutcomes(ref, {
+  await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
   // Create a real test file in the diff
   await seedWorktreeGit(tmp, "tests/fix.test.ts");
   // Override the worktree reference to ensure readDiffStats picks up the file
-  ref.current.worktree = tmp;
-  const result = await handleSubmitReport(ref, {
+  ref.byRunId.get(TEST_RUN_ID)!.worktree = tmp;
+  const result = await invokeSubmitReport(ref, {
     status: "ready_for_review",
     summary: "Fixed it.",
     regressionGuard: {
@@ -830,12 +880,12 @@ test("submit_report: named test in COMMITTED work (diff HEAD clean) → floor cl
   // named regression test forever. filesChanged must diff `base`, which sees the
   // committed work. Old (HEAD-relative) code rejects here; fixed code passes.
   const { ref, tmp } = makeRef();
-  await handleUpdateOutcomes(ref, {
+  await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
   await seedWorktreeGitCommitted(tmp, "tests/fix.test.ts");
-  ref.current.worktree = tmp;
-  const result = await handleSubmitReport(ref, {
+  ref.byRunId.get(TEST_RUN_ID)!.worktree = tmp;
+  const result = await invokeSubmitReport(ref, {
     status: "ready_for_review",
     summary: "Fixed it.",
     regressionGuard: {
@@ -851,10 +901,10 @@ test("submit_report: named test in COMMITTED work (diff HEAD clean) → floor cl
 test("submit_report: pass-2 with non-empty justification and no test → floor clean", async () => {
   // With no named tests, anti-fabrication only requires a justification.
   const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
-  await handleUpdateOutcomes(ref, {
+  await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
-  const result = await handleSubmitReport(ref, {
+  const result = await invokeSubmitReport(ref, {
     status: "ready_for_review",
     summary: "Fixed it.",
     regressionGuard: { tests: [], noTestJustification: "The fix is a config change only." },
@@ -869,12 +919,12 @@ test("submit_report: whitespace-only noTestJustification → rejects at parse ti
   // z.string().trim().min(1).optional() rejects whitespace-only strings at zod parse time.
   // SubmitReport.parse at bridge.ts:498 has no try/catch, so this throws (not returns isError).
   const { ref, tmp } = makeRef();
-  await handleUpdateOutcomes(ref, {
+  await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
   await rejects(
     () =>
-      handleSubmitReport(ref, {
+      invokeSubmitReport(ref, {
         status: "ready_for_review",
         summary: "Fixed it.",
         regressionGuard: { tests: [], noTestJustification: "   " },
@@ -889,12 +939,12 @@ test("submit_report: pass-2 naming a real changed non-test file → V8B rejects 
   // V8A anti-fabrication should NOT fire (file is in diff), but V8B should reject because
   // isTestPath("src/fix.ts") === false and no justification is given.
   const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
-  await handleUpdateOutcomes(ref, {
+  await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
   await seedWorktreeGit(tmp, "src/fix.ts");
-  ref.current.worktree = tmp;
-  const result = await handleSubmitReport(ref, {
+  ref.byRunId.get(TEST_RUN_ID)!.worktree = tmp;
+  const result = await invokeSubmitReport(ref, {
     status: "ready_for_review",
     summary: "Fixed it.",
     regressionGuard: {
@@ -914,10 +964,10 @@ test("submit_report: pass-2 naming a real changed non-test file → V8B rejects 
 
 test("submit_report: blocked report with no regressionGuard → unaffected", async () => {
   const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
-  await handleUpdateOutcomes(ref, {
+  await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
-  const result = await handleSubmitReport(ref, {
+  const result = await invokeSubmitReport(ref, {
     status: "blocked",
     blockedReason: "wedged",
     blockedQuestion: "Should we proceed?",
@@ -932,10 +982,10 @@ test("submit_report: blocked report with no regressionGuard → unaffected", asy
 
 test("submit_report: failed report with no regressionGuard → unaffected", async () => {
   const { ref, tmp } = makeRef({ packet: makeTestPacket({ pass: 2 }) });
-  await handleUpdateOutcomes(ref, {
+  await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
-  const result = await handleSubmitReport(ref, {
+  const result = await invokeSubmitReport(ref, {
     status: "failed",
     summary: "Could not complete.",
   });
@@ -953,7 +1003,7 @@ test("submit_report: failed report with no regressionGuard → unaffected", asyn
 test("get_decisions: returns decisions", async () => {
   const { ref, tmp } = makeRef();
   // Plant a decision
-  ref.current.store.appendDecision(ref.current.packet.runId, {
+  ref.byRunId.get(TEST_RUN_ID)!.store.appendDecision(ref.byRunId.get(TEST_RUN_ID)!.packet.runId, {
     timestamp: "2026-01-01T00:00:00.000Z",
     source: "daddy",
     evidence: [],
@@ -963,7 +1013,7 @@ test("get_decisions: returns decisions", async () => {
     answer: "a1",
     constraints: [],
   });
-  const result = await handleGetDecisions(ref, {});
+  const result = await invokeGetDecisions(ref, {});
   equal(result.isError, false);
   const body = JSON.parse(result.content[0]!.text);
   equal(body.decisions.length, 1);
@@ -973,7 +1023,7 @@ test("get_decisions: returns decisions", async () => {
 
 test("get_decisions: respects limit", async () => {
   const { ref, tmp } = makeRef();
-  ref.current.store.appendDecision(ref.current.packet.runId, {
+  ref.byRunId.get(TEST_RUN_ID)!.store.appendDecision(ref.byRunId.get(TEST_RUN_ID)!.packet.runId, {
     timestamp: "2026-01-01T00:00:00.000Z",
     source: "daddy",
     evidence: [],
@@ -983,7 +1033,7 @@ test("get_decisions: respects limit", async () => {
     answer: "a1",
     constraints: [],
   });
-  ref.current.store.appendDecision(ref.current.packet.runId, {
+  ref.byRunId.get(TEST_RUN_ID)!.store.appendDecision(ref.byRunId.get(TEST_RUN_ID)!.packet.runId, {
     timestamp: "2026-01-01T00:00:01.000Z",
     source: "daddy",
     evidence: [],
@@ -993,7 +1043,7 @@ test("get_decisions: respects limit", async () => {
     answer: "a2",
     constraints: [],
   });
-  const result = await handleGetDecisions(ref, { limit: 1 });
+  const result = await invokeGetDecisions(ref, { limit: 1 });
   equal(result.isError, false);
   const body = JSON.parse(result.content[0]!.text);
   equal(body.decisions.length, 1);
@@ -1008,8 +1058,8 @@ test("get_decisions: respects limit", async () => {
 test("get_decisions: clears gate on accepted decision newer than lastAcceptedDecisionAt", async () => {
   const { ref, tmp, clock } = makeRef();
   // Overwrite with a dirty gate so post-clear assertions are non-vacuous
-  ref.current.store.writeGateState(ref.current.packet.runId, {
-    runId: ref.current.packet.runId,
+  ref.byRunId.get(TEST_RUN_ID)!.store.writeGateState(ref.byRunId.get(TEST_RUN_ID)!.packet.runId, {
+    runId: ref.byRunId.get(TEST_RUN_ID)!.packet.runId,
     phase: { phase: "reconciliation-latched", reason: "work in progress" },
     expectedGlobs: ["src/**"],
     suspiciousGlobs: [],
@@ -1022,7 +1072,7 @@ test("get_decisions: clears gate on accepted decision newer than lastAcceptedDec
     mutationCommandPatterns: [],
   });
   // Plant an accepted decision with a newer timestamp
-  ref.current.store.appendDecision(ref.current.packet.runId, {
+  ref.byRunId.get(TEST_RUN_ID)!.store.appendDecision(ref.byRunId.get(TEST_RUN_ID)!.packet.runId, {
     timestamp: "2026-01-01T00:00:00.000Z",
     source: "daddy",
     evidence: [],
@@ -1032,8 +1082,10 @@ test("get_decisions: clears gate on accepted decision newer than lastAcceptedDec
     answer: "go ahead",
     constraints: [],
   });
-  await handleGetDecisions(ref, {});
-  const gateState = ref.current.store.readGateState(ref.current.packet.runId);
+  await invokeGetDecisions(ref, {});
+  const gateState = ref.byRunId
+    .get(TEST_RUN_ID)!
+    .store.readGateState(ref.byRunId.get(TEST_RUN_ID)!.packet.runId);
   strictEqual(gateState.phase.phase, "cleared");
   ok(
     gateState.lastAcceptedDecisionAt &&
@@ -1048,8 +1100,8 @@ test("get_decisions: clears gate on accepted decision newer than lastAcceptedDec
 
 test("get_decisions: gate unchanged for non-accepted decision", async () => {
   const { ref, tmp, clock } = makeRef();
-  ref.current.store.writeGateState(ref.current.packet.runId, {
-    runId: ref.current.packet.runId,
+  ref.byRunId.get(TEST_RUN_ID)!.store.writeGateState(ref.byRunId.get(TEST_RUN_ID)!.packet.runId, {
+    runId: ref.byRunId.get(TEST_RUN_ID)!.packet.runId,
     phase: { phase: "reconciliation-latched", reason: "work in progress" },
     expectedGlobs: ["src/**"],
     suspiciousGlobs: [],
@@ -1059,7 +1111,7 @@ test("get_decisions: gate unchanged for non-accepted decision", async () => {
     mutationCommandPatterns: [],
   });
   // Plant a non-accepted decision
-  ref.current.store.appendDecision(ref.current.packet.runId, {
+  ref.byRunId.get(TEST_RUN_ID)!.store.appendDecision(ref.byRunId.get(TEST_RUN_ID)!.packet.runId, {
     timestamp: "2026-01-01T00:00:00.000Z",
     source: "daddy",
     evidence: [],
@@ -1069,8 +1121,10 @@ test("get_decisions: gate unchanged for non-accepted decision", async () => {
     answer: "try again",
     constraints: [],
   });
-  await handleGetDecisions(ref, {});
-  const gateState = ref.current.store.readGateState(ref.current.packet.runId);
+  await invokeGetDecisions(ref, {});
+  const gateState = ref.byRunId
+    .get(TEST_RUN_ID)!
+    .store.readGateState(ref.byRunId.get(TEST_RUN_ID)!.packet.runId);
   strictEqual(gateState.phase.phase, "reconciliation-latched");
   strictEqual(gateState.phase.reason, "work in progress");
   strictEqual(gateState.lastAcceptedDecisionAt, "2025-01-01T00:00:00.000Z");
@@ -1079,8 +1133,8 @@ test("get_decisions: gate unchanged for non-accepted decision", async () => {
 
 test("get_decisions: gate unchanged for stale accepted decision", async () => {
   const { ref, tmp, clock } = makeRef();
-  ref.current.store.writeGateState(ref.current.packet.runId, {
-    runId: ref.current.packet.runId,
+  ref.byRunId.get(TEST_RUN_ID)!.store.writeGateState(ref.byRunId.get(TEST_RUN_ID)!.packet.runId, {
+    runId: ref.byRunId.get(TEST_RUN_ID)!.packet.runId,
     phase: { phase: "reconciliation-latched", reason: "work in progress" },
     expectedGlobs: ["src/**"],
     suspiciousGlobs: [],
@@ -1090,7 +1144,7 @@ test("get_decisions: gate unchanged for stale accepted decision", async () => {
     mutationCommandPatterns: [],
   });
   // Plant an accepted decision with an OLDER timestamp than lastAcceptedDecisionAt
-  ref.current.store.appendDecision(ref.current.packet.runId, {
+  ref.byRunId.get(TEST_RUN_ID)!.store.appendDecision(ref.byRunId.get(TEST_RUN_ID)!.packet.runId, {
     timestamp: "2026-01-01T00:00:00.000Z",
     source: "daddy",
     evidence: [],
@@ -1100,8 +1154,10 @@ test("get_decisions: gate unchanged for stale accepted decision", async () => {
     answer: "go ahead",
     constraints: [],
   });
-  await handleGetDecisions(ref, {});
-  const gateState = ref.current.store.readGateState(ref.current.packet.runId);
+  await invokeGetDecisions(ref, {});
+  const gateState = ref.byRunId
+    .get(TEST_RUN_ID)!
+    .store.readGateState(ref.byRunId.get(TEST_RUN_ID)!.packet.runId);
   strictEqual(gateState.phase.phase, "reconciliation-latched");
   strictEqual(gateState.phase.reason, "work in progress");
   strictEqual(gateState.lastAcceptedDecisionAt, "2027-01-01T00:00:00.000Z");
@@ -1114,12 +1170,14 @@ test("get_decisions: gate unchanged for stale accepted decision", async () => {
 
 test("update_outcomes: ledger persists through store read", async () => {
   const { ref, tmp } = makeRef();
-  await handleUpdateOutcomes(ref, {
+  await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "done", evidence: ["test.txt"] }],
   });
-  strictEqual(ref.current.intents.length, 1);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 1);
   // Fresh read from store
-  const fresh = ref.current.store.readLedger(ref.current.packet.runId);
+  const fresh = ref.byRunId
+    .get(TEST_RUN_ID)!
+    .store.readLedger(ref.byRunId.get(TEST_RUN_ID)!.packet.runId);
   equal(fresh.outcomes[0]!.status, "done");
   equal(fresh.outcomes[0]!.evidence[0], "test.txt");
   await cleanTemp(tmp);
@@ -1132,18 +1190,18 @@ test("update_outcomes: ledger persists through store read", async () => {
 test("listenBridge: second bind on same port fails with one-driver error", async () => {
   const { ref } = makeRef();
   const port = 19876; // arbitrary non-privileged port
-  ref.current.config.opencode.bridgePort = port;
-  const server1 = startBridgeServer(ref.current.config, ref);
+  ref.byRunId.get(TEST_RUN_ID)!.config.opencode.bridgePort = port;
+  const server1 = startBridgeServer(ref.byRunId.get(TEST_RUN_ID)!.config, ref);
   await listenBridge(server1, {
-    ...ref.current.config,
-    opencode: { ...ref.current.config.opencode, bridgePort: port },
+    ...ref.byRunId.get(TEST_RUN_ID)!.config,
+    opencode: { ...ref.byRunId.get(TEST_RUN_ID)!.config.opencode, bridgePort: port },
   });
   // Second server on the same port
-  const server2 = startBridgeServer(ref.current.config, ref);
+  const server2 = startBridgeServer(ref.byRunId.get(TEST_RUN_ID)!.config, ref);
   try {
     await listenBridge(server2, {
-      ...ref.current.config,
-      opencode: { ...ref.current.config.opencode, bridgePort: port },
+      ...ref.byRunId.get(TEST_RUN_ID)!.config,
+      opencode: { ...ref.byRunId.get(TEST_RUN_ID)!.config.opencode, bridgePort: port },
     });
     equal(true, false, "should have thrown");
   } catch (err) {
@@ -1162,7 +1220,7 @@ test("listenBridge: second bind on same port fails with one-driver error", async
 
 test("verification gate: ask_planner blocked when awaitingVerification is true", async () => {
   const { ref, tmp } = makeRef({ awaitingVerification: true });
-  const result = await handleAskPlanner(ref, {
+  const result = await invokeAskPlanner(ref, {
     questionType: "other",
     currentSlice: "src/foo.ts",
     question: "what is x?",
@@ -1172,51 +1230,51 @@ test("verification gate: ask_planner blocked when awaitingVerification is true",
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
   match(body.error, /Handoff verification required/);
-  strictEqual(ref.current.intents.length, 0);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 0);
   await cleanTemp(tmp);
 });
 
 test("verification gate: update_outcomes blocked when awaitingVerification is true", async () => {
   const { ref, tmp } = makeRef({ awaitingVerification: true });
-  const result = await handleUpdateOutcomes(ref, {
+  const result = await invokeUpdateOutcomes(ref, {
     outcomes: [{ id: "test-outcome", status: "in_progress" }],
   });
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
   match(body.error, /Handoff verification required/);
-  strictEqual(ref.current.intents.length, 0);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 0);
   await cleanTemp(tmp);
 });
 
 test("verification gate: write_checkpoint blocked when awaitingVerification is true", async () => {
   const { ref, tmp } = makeRef({ awaitingVerification: true });
-  const result = await handleWriteCheckpoint(ref, { summary: "halfway" });
+  const result = await invokeWriteCheckpoint(ref, { summary: "halfway" });
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
   match(body.error, /Handoff verification required/);
-  strictEqual(ref.current.intents.length, 0);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 0);
   await cleanTemp(tmp);
 });
 
 test("verification gate: submit_report blocked when awaitingVerification is true", async () => {
   const { ref, tmp } = makeRef({ awaitingVerification: true });
-  const result = await handleSubmitReport(ref, {
+  const result = await invokeSubmitReport(ref, {
     status: "ready_for_review",
     summary: "All done.",
   });
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
   match(body.error, /Handoff verification required/);
-  strictEqual(ref.current.intents.length, 0);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 0);
   await cleanTemp(tmp);
 });
 
 test("verification gate: get_decisions blocked when awaitingVerification is true", async () => {
   const { ref, tmp } = makeRef({ awaitingVerification: true });
-  const result = await handleGetDecisions(ref, {});
+  const result = await invokeGetDecisions(ref, {});
   equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text);
   match(body.error, /Handoff verification required/);
-  strictEqual(ref.current.intents.length, 0);
+  strictEqual(ref.byRunId.get(TEST_RUN_ID)!.intents.length, 0);
   await cleanTemp(tmp);
 });

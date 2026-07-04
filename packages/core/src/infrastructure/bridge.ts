@@ -32,7 +32,7 @@ import {
 } from "../domain/index.js";
 import { JournalEvent } from "../domain/journal.js";
 import { isTestPath } from "../domain/report.js";
-import type { QuestionType } from "../domain/review.js";
+import type { AskPlannerInput as DomainAskPlannerInput, QuestionType } from "../domain/review.js";
 import { readDiffStats } from "./git.js";
 import { handleWriteHandoff, handleVerifyHandoff } from "./opencode/baby-tools.js";
 
@@ -50,7 +50,7 @@ import { handleWriteHandoff, handleVerifyHandoff } from "./opencode/baby-tools.j
 
 export type ActiveRunRef = {
   intents: BridgeIntent[];
-  pendingConsult: AskPlannerInput | null;
+  pendingConsult: DomainAskPlannerInput | null;
   pendingFinalReview: SubmitReport | null;
   reportRejectionCount: number;
   checkpointBounceCount: number;
@@ -77,7 +77,7 @@ export type ActiveRunRef = {
 // are per-run, not just packet. The holder is { current: undefined } at startup,
 // then set/cleared per run by the driver loop.
 export type RunRef = {
-  current: ActiveRunRef | undefined;
+  byRunId: Map<string, ActiveRunRef>;
 };
 
 // ---------------------------------------------------------------------------
@@ -245,6 +245,7 @@ const errorText = (t: string) => ({
 // hands the bound ref to the run channel with no cast. The MCP tool's zod enum
 // parses to exactly these members, so the handler input still satisfies it.
 export type AskPlannerInput = {
+  runId: string;
   questionType: QuestionType;
   currentSlice: string;
   question: string;
@@ -256,6 +257,7 @@ export type AskPlannerInput = {
 export type { AskPlannerInput as DomainAskPlannerInput, QuestionType } from "../domain/review.js";
 
 export type UpdateOutcomesInput = {
+  runId: string;
   outcomes: Array<{
     id: string;
     status: string;
@@ -266,11 +268,13 @@ export type UpdateOutcomesInput = {
 };
 
 export type WriteCheckpointInput = {
+  runId: string;
   summary: string;
   uncertainties?: string[];
 };
 
 export type SubmitReportInput = {
+  runId: string;
   status: "ready_for_review" | "blocked" | "failed";
   blockedReason?: string;
   blockedQuestion?: string;
@@ -286,6 +290,7 @@ export type SubmitReportInput = {
 };
 
 export type GetDecisionsInput = {
+  runId: string;
   limit?: number;
 };
 
@@ -305,9 +310,9 @@ const completeTurn = (ctx: ActiveRunRef): void => {
 };
 
 export const handleAskPlanner = async (ref: RunRef, input: AskPlannerInput) => {
-  const ctx = ref.current;
+  const ctx = ref.byRunId.get(input.runId);
   if (!ctx) {
-    return errorText(JSON.stringify({ error: "no active run" }));
+    return errorText(JSON.stringify({ error: `no active run for runId: ${input.runId}` }));
   }
   if (ctx.awaitingVerification) {
     return errorText(
@@ -385,9 +390,9 @@ export const handleAskPlanner = async (ref: RunRef, input: AskPlannerInput) => {
 };
 
 export const handleUpdateOutcomes = async (ref: RunRef, input: UpdateOutcomesInput) => {
-  const ctx = ref.current;
+  const ctx = ref.byRunId.get(input.runId);
   if (!ctx) {
-    return errorText(JSON.stringify({ error: "no active run" }));
+    return errorText(JSON.stringify({ error: `no active run for runId: ${input.runId}` }));
   }
   if (ctx.awaitingVerification) {
     return errorText(
@@ -447,9 +452,9 @@ export const handleUpdateOutcomes = async (ref: RunRef, input: UpdateOutcomesInp
 };
 
 export const handleWriteCheckpoint = async (ref: RunRef, input: WriteCheckpointInput) => {
-  const ctx = ref.current;
+  const ctx = ref.byRunId.get(input.runId);
   if (!ctx) {
-    return errorText(JSON.stringify({ error: "no active run" }));
+    return errorText(JSON.stringify({ error: `no active run for runId: ${input.runId}` }));
   }
   if (ctx.awaitingVerification) {
     return errorText(
@@ -517,9 +522,9 @@ export const handleWriteCheckpoint = async (ref: RunRef, input: WriteCheckpointI
 };
 
 export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) => {
-  const ctx = ref.current;
+  const ctx = ref.byRunId.get(input.runId);
   if (!ctx) {
-    return errorText(JSON.stringify({ error: "no active run" }));
+    return errorText(JSON.stringify({ error: `no active run for runId: ${input.runId}` }));
   }
   if (ctx.awaitingVerification) {
     return errorText(
@@ -688,9 +693,9 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
 };
 
 export const handleGetDecisions = async (ref: RunRef, input: GetDecisionsInput) => {
-  const ctx = ref.current;
+  const ctx = ref.byRunId.get(input.runId);
   if (!ctx) {
-    return errorText(JSON.stringify({ error: "no active run" }));
+    return errorText(JSON.stringify({ error: `no active run for runId: ${input.runId}` }));
   }
   if (ctx.awaitingVerification) {
     return errorText(
@@ -731,6 +736,7 @@ export const buildMcpServer = (ref: RunRef): McpServer => {
     "ask_planner",
     "Ask the planner (Daddy) a scoped question tied to the current slice. Returns a structured decision. human_required and stop are hard stops.",
     {
+      runId: z.string().describe("The run ID for routing. Include this in every bridge tool call."),
       questionType: z
         .enum([
           "repo_procedure",
@@ -764,6 +770,7 @@ export const buildMcpServer = (ref: RunRef): McpServer => {
     "update_outcomes",
     "Update the outcome ledger. Marking an outcome done requires evidence. in_progress entries should carry exact state and next action.",
     {
+      runId: z.string().describe("The run ID for routing. Include this in every bridge tool call."),
       outcomes: z
         .array(
           z.object({
@@ -785,6 +792,7 @@ export const buildMcpServer = (ref: RunRef): McpServer => {
     "write_checkpoint",
     "Write the rotation checkpoint for your successor. Supply only your subjective state — a prose summary of where the work stands and what comes next, plus any uncertainties a successor must not assume. The driver records WHICH outcomes are at what status (from the ledger) and WHICH files changed (from the diff); you don't restate them. Keep the ledger current via meridian-bridge_update_outcomes BEFORE you checkpoint so the snapshot is accurate.",
     {
+      runId: z.string().describe("The run ID for routing. Include this in every bridge tool call."),
       summary: z
         .string()
         .min(1)
@@ -807,6 +815,7 @@ export const buildMcpServer = (ref: RunRef): McpServer => {
     "submit_report",
     "Submit the final report — the ONLY way a run reaches a terminal status. Supply your terminal DECISION (status) and your subjective account in prose; the driver records the objective facts itself — which files changed (from the diff), which outcomes are done (from the ledger), and the verification results (the driver runs the commands). Do not restate those. ready_for_review is accepted only if the driver's own verification is green and every outcome is done; if not, submit blocked or failed and say why. On a repair pass (pass ≥ 2), name the regression test you added in regressionGuard.tests (or set regressionGuard.noTestJustification with your reason).",
     {
+      runId: z.string().describe("The run ID for routing. Include this in every bridge tool call."),
       status: z.enum(["ready_for_review", "blocked", "failed"]),
       blockedReason: BlockedReason.optional(),
       blockedQuestion: z
@@ -858,7 +867,10 @@ export const buildMcpServer = (ref: RunRef): McpServer => {
   server.tool(
     "get_decisions",
     "Read prior planner and Max decisions for this run.",
-    { limit: z.number().int().min(1).max(100).optional() },
+    {
+      runId: z.string().describe("The run ID for routing. Include this in every bridge tool call."),
+      limit: z.number().int().min(1).max(100).optional(),
+    },
     async (input) => handleGetDecisions(ref, input),
   );
 
@@ -868,6 +880,7 @@ export const buildMcpServer = (ref: RunRef): McpServer => {
     "write_handoff",
     "Write the current handoff artifact to disk. Called after each verified chunk of work so a recycled baby can resume from the latest state.",
     {
+      runId: z.string().describe("The run ID for routing. Include this in every bridge tool call."),
       completedSteps: z
         .array(
           z.object({
@@ -895,6 +908,7 @@ export const buildMcpServer = (ref: RunRef): McpServer => {
     "verify_handoff",
     "Verify the predecessor's handoff artifact. Reads handoff.json, checks the declared file surface, and asks daddy for a spot-check verdict. Call this immediately after reading a handoff-injected system message.",
     {
+      runId: z.string().describe("The run ID for routing. Include this in every bridge tool call."),
       claimedCompletions: z
         .array(z.string())
         .describe("Descriptions of the steps baby believes were completed."),

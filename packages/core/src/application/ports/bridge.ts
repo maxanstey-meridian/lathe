@@ -7,6 +7,6 @@
 
 export type BridgePort<Ref = unknown> = {
   bind(): Promise<Ref>;
-  clearActive(ref: Ref): void;
+  clearActive(ref: Ref, runId: string): void;
   close(): void;
 };

@@ -578,8 +578,8 @@ test("runLoop: drain queue before waiting", () => {
     const convergeStep: ConvergeCallback = async () => {};
 
     const bridge: BridgePort = {
-      bind: () => Promise.resolve({ current: undefined }),
-      clearActive: () => undefined,
+      bind: () => Promise.resolve({ byRunId: new Map() }),
+      clearActive: (_ref, _runId) => undefined,
       close: () => undefined,
     };
 
@@ -639,8 +639,8 @@ test("runLoop: wedged run → recoverStalledRun → requeued", () => {
     const convergeStep: ConvergeCallback = async () => {};
 
     const bridge: BridgePort = {
-      bind: () => Promise.resolve({ current: undefined }),
-      clearActive: () => undefined,
+      bind: () => Promise.resolve({ byRunId: new Map() }),
+      clearActive: (_ref, _runId) => undefined,
       close: () => undefined,
     };
 
@@ -782,8 +782,8 @@ test("runLoop crash branch: thrown executeRun requeues crashed run under cap", (
       { holdPowerAssertion: async () => {} },
       clock,
       {
-        bind: () => Promise.resolve({ current: undefined }),
-        clearActive: () => undefined,
+        bind: () => Promise.resolve({ byRunId: new Map() }),
+        clearActive: (_ref, _runId) => undefined,
         close: () => undefined,
       },
       executeRun,
@@ -857,8 +857,8 @@ test("runLoop crash branch: thrown executeRun escalates crashed run at cap", () 
       { holdPowerAssertion: async () => {} },
       clock,
       {
-        bind: () => Promise.resolve({ current: undefined }),
-        clearActive: () => undefined,
+        bind: () => Promise.resolve({ byRunId: new Map() }),
+        clearActive: (_ref, _runId) => undefined,
         close: () => undefined,
       },
       executeRun,
@@ -924,8 +924,8 @@ test("runLoop crash path clears active run pointer on executeRun throw", () => {
       { holdPowerAssertion: async () => {} },
       clock,
       {
-        bind: () => Promise.resolve({ current: undefined }),
-        clearActive: () => undefined,
+        bind: () => Promise.resolve({ byRunId: new Map() }),
+        clearActive: (_ref, _runId) => undefined,
         close: () => undefined,
       },
       executeRun,
@@ -1114,8 +1114,8 @@ test("runLoop: excludedRepos is built from listActiveRuns and listActiveConverge
       { holdPowerAssertion: async () => {} },
       clock,
       {
-        bind: () => Promise.resolve({ current: undefined }),
-        clearActive: () => undefined,
+        bind: () => Promise.resolve({ byRunId: new Map() }),
+        clearActive: (_ref, _runId) => undefined,
         close: () => undefined,
       },
       async () => {

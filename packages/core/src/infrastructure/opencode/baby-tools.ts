@@ -14,6 +14,7 @@ import { runVerify } from "./daddy-verify.js";
 // ---------------------------------------------------------------------------
 
 export type WriteHandoffInput = {
+  runId: string;
   completedSteps: Array<{ description: string; files?: string[] }>;
   remainingWork: string[];
   decisionsMade: string[];
@@ -21,6 +22,7 @@ export type WriteHandoffInput = {
 };
 
 export type VerifyHandoffInput = {
+  runId: string;
   claimedCompletions: string[];
   questionsForDaddy?: string[];
 };
@@ -56,9 +58,9 @@ const turnCompleteError = () =>
 // The file persists across baby recycling; the run loop reads it when
 // spawning a replacement baby.
 export const handleWriteHandoff = async (ref: RunRef, input: WriteHandoffInput) => {
-  const ctx = ref.current;
+  const ctx = ref.byRunId.get(input.runId);
   if (!ctx) {
-    return errorText(JSON.stringify({ error: "no active run" }));
+    return errorText(JSON.stringify({ error: `no active run for runId: ${input.runId}` }));
   }
   if (ctx.awaitingVerification) {
     return errorText(
@@ -127,9 +129,9 @@ export const handleWriteHandoff = async (ref: RunRef, input: WriteHandoffInput) 
 // client cancellation; in that case, switch to the deferred pattern
 // (record verify intent, turn loop runs it).
 export const handleVerifyHandoff = async (ref: RunRef, input: VerifyHandoffInput) => {
-  const ctx = ref.current;
+  const ctx = ref.byRunId.get(input.runId);
   if (!ctx) {
-    return errorText(JSON.stringify({ error: "no active run" }));
+    return errorText(JSON.stringify({ error: `no active run for runId: ${input.runId}` }));
   }
   if (ctx.turnComplete) {
     return turnCompleteError();

@@ -295,7 +295,10 @@ test("makeExecuteRun: fresh run → init state → terminal status in meta", () 
       },
     ]);
     const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
-    const bridge: BridgeBinding<unknown> = { beginRun: () => channel, endRun: () => {} };
+    const bridge: BridgeBinding<unknown> = {
+      beginRun: () => channel,
+      endRun: (_ref, _runId) => {},
+    };
 
     const executeRun = makeExecuteRun(ports, bridge);
     await executeRun(
@@ -361,7 +364,10 @@ test("makeExecuteRun: real fresh queue path — reads the live run packet", () =
       },
     ]);
     const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
-    const bridge: BridgeBinding<unknown> = { beginRun: () => channel, endRun: () => {} };
+    const bridge: BridgeBinding<unknown> = {
+      beginRun: () => channel,
+      endRun: (_ref, _runId) => {},
+    };
 
     const executeRun = makeExecuteRun(ports, bridge);
     await executeRun(
@@ -477,7 +483,10 @@ test("makeExecuteRun: resume → reuses prior Daddy session ID, refreshes gate",
       },
     ]);
     const ports = makePorts(store, fakeRepo(), executor, resumePlanner);
-    const bridge: BridgeBinding<unknown> = { beginRun: () => channel, endRun: () => {} };
+    const bridge: BridgeBinding<unknown> = {
+      beginRun: () => channel,
+      endRun: (_ref, _runId) => {},
+    };
 
     const executeRun = makeExecuteRun(ports, bridge);
     await executeRun(
@@ -619,7 +628,10 @@ test("makeExecuteRun: resume replaces stale Daddy session before reconciliation"
       },
     };
     const ports = makePorts(store, fakeRepo(), executor, planner);
-    const bridge: BridgeBinding<unknown> = { beginRun: () => channel, endRun: () => {} };
+    const bridge: BridgeBinding<unknown> = {
+      beginRun: () => channel,
+      endRun: (_ref, _runId) => {},
+    };
 
     const executeRun = makeExecuteRun(ports, bridge);
     await executeRun(
@@ -746,7 +758,10 @@ test("makeExecuteRun: resume without checkpoint but prior accepted reconciliatio
     };
 
     const ports = makePorts(store, fakeRepo(), capturingExecutor, capturingPlanner);
-    const bridge: BridgeBinding<unknown> = { beginRun: () => channel, endRun: () => {} };
+    const bridge: BridgeBinding<unknown> = {
+      beginRun: () => channel,
+      endRun: (_ref, _runId) => {},
+    };
 
     const executeRun = makeExecuteRun(ports, bridge);
     await executeRun(
@@ -799,7 +814,10 @@ test("makeExecuteRun: invalid queue packet → meta failed, no throw", () => {
     });
 
     const ports = makePorts(store, fakeRepo(), scriptedExecutor(emptyChannel(), []), fakePlanner());
-    const bridge: BridgeBinding<unknown> = { beginRun: () => emptyChannel(), endRun: () => {} };
+    const bridge: BridgeBinding<unknown> = {
+      beginRun: () => emptyChannel(),
+      endRun: (_ref, _runId) => {},
+    };
     const executeRun = makeExecuteRun(ports, bridge);
 
     await executeRun(
@@ -858,7 +876,10 @@ test("makeExecuteRun: run with prior meta but no baby session → fresh", () => 
       },
     ]);
     const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
-    const bridge: BridgeBinding<unknown> = { beginRun: () => channel, endRun: () => {} };
+    const bridge: BridgeBinding<unknown> = {
+      beginRun: () => channel,
+      endRun: (_ref, _runId) => {},
+    };
 
     const executeRun = makeExecuteRun(ports, bridge);
     await executeRun(
@@ -976,7 +997,10 @@ new body
       },
     ]);
     const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
-    const bridge: BridgeBinding<unknown> = { beginRun: () => channel, endRun: () => {} };
+    const bridge: BridgeBinding<unknown> = {
+      beginRun: () => channel,
+      endRun: (_ref, _runId) => {},
+    };
 
     const executeRun = makeExecuteRun(ports, bridge);
     await executeRun(
@@ -1077,7 +1101,10 @@ new body
       },
     ]);
     const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
-    const bridge: BridgeBinding<unknown> = { beginRun: () => channel, endRun: () => {} };
+    const bridge: BridgeBinding<unknown> = {
+      beginRun: () => channel,
+      endRun: (_ref, _runId) => {},
+    };
 
     const executeRun = makeExecuteRun(ports, bridge);
     await executeRun(
@@ -1131,7 +1158,10 @@ new body
       }),
     };
     const ports2 = makePorts(store, fakeRepo(), executor2, resumePlanner);
-    const bridge2: BridgeBinding<unknown> = { beginRun: () => channel2, endRun: () => {} };
+    const bridge2: BridgeBinding<unknown> = {
+      beginRun: () => channel2,
+      endRun: (_ref, _runId) => {},
+    };
 
     const executeRun2 = makeExecuteRun(ports2, bridge2);
     await executeRun2(

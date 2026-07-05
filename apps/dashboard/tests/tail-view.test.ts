@@ -61,7 +61,9 @@ const mountTailView = (
         isLive: ref(true),
         errorMessage: ref(null),
         now: ref(Date.parse("2026-07-01T18:00:00.000Z")),
+        selectedRunId: ref(null),
         refresh: async () => undefined,
+        selectRun: () => {},
       });
       provideLatheActions({
         stopLoading: ref(false),
@@ -93,6 +95,10 @@ const mountTailView = (
         UModal: {
           props: { open: Boolean, title: String, persist: Boolean },
           template: '<div v-if="open" class="modal"><slot name="body" /><slot name="footer" /></div>',
+        },
+        USelect: {
+          props: { modelValue: String, items: Array },
+          template: '<div class="u-select" />',
         },
         TailPane: { template: '<div class="tail-pane" />' },
       },

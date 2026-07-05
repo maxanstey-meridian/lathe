@@ -1,7 +1,7 @@
 import { client, type TailEvent } from "@lathe/contract";
-import { onUnmounted, ref } from "vue";
+import { onUnmounted, ref, watch } from "vue";
 
-import { daemonTailEventsUrl } from "../logic/daemon-url";
+import { daemonTailEventsUrl, daemonTailRunEventsUrl } from "../logic/daemon-url";
 import { applyTailEvent, tailStateFromSnapshot } from "../logic/tail-state";
 import type { LatheTail } from "../ports/lathe-tail";
 
@@ -22,13 +22,16 @@ export const useLatheTail = (): LatheTail => {
   const isLive = ref(false);
   const errorMessage = ref<string | null>(null);
   const now = ref(Date.now());
+  const selectedRunId = ref<string | null>(null);
 
   const refresh = async (): Promise<void> => {
     isLoading.value = true;
     errorMessage.value = null;
 
     try {
-      const result = await client.GET("/tail/active");
+      const result = selectedRunId.value
+        ? await client.GET("/tail/{runId}", { params: { path: { runId: selectedRunId.value } } })
+        : await client.GET("/tail/active");
 
       if (result.response.ok) {
         state.value = tailStateFromSnapshot(result.data ?? null);
@@ -43,22 +46,41 @@ export const useLatheTail = (): LatheTail => {
     }
   };
 
-  const eventSource = new EventSource(daemonTailEventsUrl(runtimeConfig.public.apiBaseUrl));
+  let eventSource: EventSource | null = null;
 
-  eventSource.onopen = () => {
-    isLive.value = true;
+  const connectEventSource = (): void => {
+    eventSource?.close();
+
+    const url = selectedRunId.value
+      ? daemonTailRunEventsUrl(runtimeConfig.public.apiBaseUrl, selectedRunId.value)
+      : daemonTailEventsUrl(runtimeConfig.public.apiBaseUrl);
+
+    const source = new EventSource(url);
+
+    source.onopen = () => {
+      isLive.value = true;
+    };
+
+    source.onerror = () => {
+      isLive.value = false;
+    };
+
+    for (const kind of TAIL_EVENT_KINDS) {
+      source.addEventListener(kind, (raw: MessageEvent) => {
+        const event = JSON.parse(raw.data) as TailEvent;
+        state.value = applyTailEvent(state.value, event, Date.now());
+      });
+    }
+
+    eventSource = source;
   };
 
-  eventSource.onerror = () => {
-    isLive.value = false;
-  };
+  watch(selectedRunId, () => {
+    connectEventSource();
+    void refresh();
+  });
 
-  for (const kind of TAIL_EVENT_KINDS) {
-    eventSource.addEventListener(kind, (raw: MessageEvent) => {
-      const event = JSON.parse(raw.data) as TailEvent;
-      state.value = applyTailEvent(state.value, event, Date.now());
-    });
-  }
+  connectEventSource();
 
   const timer = setInterval(() => {
     now.value = Date.now();
@@ -66,7 +88,7 @@ export const useLatheTail = (): LatheTail => {
 
   onUnmounted(() => {
     clearInterval(timer);
-    eventSource.close();
+    eventSource?.close();
   });
 
   return {
@@ -75,6 +97,10 @@ export const useLatheTail = (): LatheTail => {
     isLive,
     errorMessage,
     now,
+    selectedRunId,
     refresh,
+    selectRun: (runId: string | null): void => {
+      selectedRunId.value = runId;
+    },
   };
 };

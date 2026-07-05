@@ -10,7 +10,9 @@ export interface LatheTail {
   readonly isLive: Ref<boolean>;
   readonly errorMessage: Ref<string | null>;
   readonly now: Ref<number>;
+  readonly selectedRunId: Ref<string | null>;
   readonly refresh: () => Promise<void>;
+  readonly selectRun: (runId: string | null) => void;
 }
 
 export const [injectLatheTail, provideLatheTail] = useProvideInject<LatheTail>("LatheTail");

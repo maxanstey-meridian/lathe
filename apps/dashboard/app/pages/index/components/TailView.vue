@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, type CSSProperties } from "vue";
 
-import { formatTailDuration, runLabel } from "../logic/tail-state";
+import { formatTailDuration } from "../logic/tail-state";
 import { injectLatheActions } from "../ports/lathe-actions";
 import { injectLatheStatus } from "../ports/lathe-status";
 import { injectLatheTail } from "../ports/lathe-tail";
@@ -113,10 +113,28 @@ const babyModel = computed(() => {
   }
   return current.promoted ? `promoted ${current.models.promoted}` : current.models.baby;
 });
-const label = computed(() => {
-  const current = snapshot.value;
-  return current === null ? "No active run" : runLabel(current.runId, current.summary);
+
+const AUTO = "__auto__";
+const runSelectItems = computed(() => {
+  const activeRuns = status.status.value?.activeRuns ?? [];
+  const activeIds = new Set(activeRuns.map((r) => r.runId));
+  const items: Array<{ label: string; value: string }> = [
+    { label: "Auto (follow active)", value: AUTO },
+  ];
+  for (const run of activeRuns) {
+    const outcomes = run.outcomes ? ` (${run.outcomes})` : "";
+    items.push({ label: `${run.runId}${outcomes}`, value: run.runId });
+  }
+  const selected = tail.selectedRunId.value;
+  if (selected && !activeIds.has(selected)) {
+    items.push({ label: `${selected} (finished)`, value: selected });
+  }
+  return items;
 });
+const selectedRunValue = computed(() => tail.selectedRunId.value ?? AUTO);
+const handleRunSelect = (value: string): void => {
+  tail.selectRun(value === AUTO ? null : value);
+};
 const elapsed = computed(() => {
   const current = snapshot.value;
   if (current === null || current.startedAt === null) {
@@ -164,7 +182,16 @@ const isTerminal = computed(() => {
       <div class="flex items-center gap-4">
         <div class="flex min-w-0 items-center gap-2">
           <span class="h-2 w-2 shrink-0 rounded-full" :class="tail.isLive.value ? 'bg-emerald-400' : 'bg-red-500'"></span>
-          <h2 class="truncate font-mono text-sm text-slate-300">{{ label }}</h2>
+          <USelect
+            :model-value="selectedRunValue"
+            :items="runSelectItems"
+            size="sm"
+            color="neutral"
+            variant="ghost"
+            class="min-w-0 max-w-[22rem] font-mono text-sm text-slate-300"
+            :ui="{ content: 'max-w-[22rem]' }"
+            @update:model-value="handleRunSelect"
+          />
         </div>
 
         <div v-if="snapshot" class="flex items-center gap-3 font-mono text-xs text-slate-600">

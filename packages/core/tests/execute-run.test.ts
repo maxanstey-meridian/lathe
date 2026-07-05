@@ -74,7 +74,7 @@ const fakeRepo = (): Repo => ({
   headBranch: () => "main",
   branchExists: () => true,
   repoValid: () => true,
-  mergeAccept: () => {},
+  deleteBranch: () => {},
 });
 
 const fakePlanner = (): Planner => ({
@@ -187,6 +187,7 @@ test("rotateSession: replaces the session, updates meta, latches first-edit (wit
       reorientRetries: 0,
       reviewerUnreachable: 0,
       promoted: false,
+      pass: 1,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     store.writeGateState(
@@ -238,6 +239,7 @@ test("rotateSession: no checkpoint stacks reconciliation (O6)", () => {
       reorientRetries: 0,
       reviewerUnreachable: 0,
       promoted: false,
+      pass: 1,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     store.writeGateState(
@@ -417,6 +419,7 @@ test("makeExecuteRun: resume → reuses prior Daddy session ID, refreshes gate",
       reorientRetries: 2,
       reviewerUnreachable: 0,
       promoted: false,
+      pass: 1,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     // Prior gate state.
@@ -546,6 +549,7 @@ test("makeExecuteRun: resume replaces stale Daddy session before reconciliation"
       reorientRetries: 0,
       reviewerUnreachable: 0,
       promoted: false,
+      pass: 1,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     store.writeGateState(
@@ -683,6 +687,7 @@ test("makeExecuteRun: resume without checkpoint but prior accepted reconciliatio
       reorientRetries: 0,
       reviewerUnreachable: 0,
       promoted: false,
+      pass: 1,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     // Simulate the real gate state after reconciliation was accepted:
@@ -810,6 +815,7 @@ test("makeExecuteRun: invalid queue packet → meta failed, no throw", () => {
       reorientRetries: 0,
       reviewerUnreachable: 0,
       promoted: false,
+      pass: 1,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
 
@@ -858,6 +864,7 @@ test("makeExecuteRun: run with prior meta but no baby session → fresh", () => 
       reorientRetries: 0,
       reviewerUnreachable: 0,
       promoted: false,
+      pass: 1,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
 
@@ -979,6 +986,7 @@ new body
       reorientRetries: 0,
       reviewerUnreachable: 0,
       promoted: false,
+      pass: 1,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
 
@@ -1083,6 +1091,7 @@ new body
       reorientRetries: 0,
       reviewerUnreachable: 0,
       promoted: false,
+      pass: 1,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
 

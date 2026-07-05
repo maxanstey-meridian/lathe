@@ -207,6 +207,15 @@ export class SqliteStoreAdapter implements Store {
     return rows.map((r) => RunMetaSchema.parse(jsonParse(r.meta)));
   }
 
+  listRunsByCampaign(campaignId: string): RunMeta[] {
+    const rows = this.db
+      .prepare(
+        "SELECT meta FROM runs WHERE json_extract(meta, '$.campaignId') = ? ORDER BY json_extract(meta, '$.pass') ASC",
+      )
+      .all(campaignId) as { meta: string }[];
+    return rows.map((r) => RunMetaSchema.parse(jsonParse(r.meta)));
+  }
+
   // ---------------------------------------------------------------------------
   // Outcome ledger
 
@@ -544,6 +553,10 @@ export class SqliteStoreAdapter implements Store {
     // (f) On success: write the live editable run packet + write meta as queued.
     mkdirSync(this.paths.runDir(runId), { recursive: true });
     writeTextAtomic(this.paths.packetFile(runId), stamped);
+
+    // Campaign fields from packet frontmatter (optional campaign_id, pass defaults to 1).
+    const campaignId = shape.packet.frontmatter.campaign_id;
+    const pass = shape.packet.frontmatter.pass ?? 1;
     this.writeMeta({
       runId,
       status: "queued",
@@ -552,6 +565,8 @@ export class SqliteStoreAdapter implements Store {
       base,
       branch: `meridian/${runId}`,
       worktree: join(this.paths.runDir(runId), "worktree"),
+      ...(campaignId !== undefined ? { campaignId } : {}),
+      pass,
       stallRetries: 0,
       crashRetries: 0,
       reorientRetries: 0,
@@ -611,6 +626,7 @@ export class SqliteStoreAdapter implements Store {
       base,
       branch: `meridian/${runId}`,
       worktree: join(this.paths.runDir(runId), "worktree"),
+      pass: 1,
       stallRetries: 0,
       crashRetries: 0,
       reorientRetries: 0,

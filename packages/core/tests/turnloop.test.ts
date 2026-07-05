@@ -83,7 +83,7 @@ const fakeRepo = (diffStats: Record<string, { added: number; removed: number }> 
   headBranch: () => "main",
   branchExists: () => true,
   repoValid: () => true,
-  mergeAccept: () => {},
+  deleteBranch: () => {},
 });
 
 const PROCEED: PlannerResponse = {
@@ -222,6 +222,7 @@ const seedRun = (
     reorientRetries: 0,
     reviewerUnreachable: 0,
     promoted: false,
+    pass: 1,
     updatedAt: "2026-01-01T00:00:00.000Z",
   });
   store.writeLedger(store.initialLedger(packet));

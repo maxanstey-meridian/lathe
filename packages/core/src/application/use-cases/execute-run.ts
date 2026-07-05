@@ -209,6 +209,8 @@ export const makeExecuteRun =
       summary: packet.frontmatter.summary,
       babySessionId,
       daddySessionId,
+      campaignId: priorMeta?.campaignId,
+      pass: priorMeta?.pass ?? 1,
       stallRetries: priorMeta?.stallRetries ?? 0,
       crashRetries: priorMeta?.crashRetries ?? 0,
       reorientRetries: priorMeta?.reorientRetries ?? 0,

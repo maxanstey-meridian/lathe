@@ -41,8 +41,8 @@ export const promoteStaged = (store: Store, repo: Repo): void => {
         // Parent converged → base the child on the tip. If the tip is NOT yet
         // accepted, its work lives only in its clone sandbox, so fetch the tip
         // branch into the source repo first. If it IS accepted, accept already
-        // merged it into the canonical repo (and destroyed the clone + branch),
-        // so skip the fetch and base off the branch it was merged into.
+        // fetched the tip branch into the source repo (the clone is destroyed),
+        // so skip the fetch and base off the preserved meridian branch.
         try {
           const raw = store.readStaged(child.runId);
           if (raw === undefined) {

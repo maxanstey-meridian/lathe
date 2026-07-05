@@ -65,7 +65,7 @@ const fakeRepo = (opts?: {
       untracked: [],
       changedFiles: [],
     }),
-    mergeAccept: () => {
+    deleteBranch: () => {
       throw new Error("unimplemented");
     },
   };
@@ -157,6 +157,7 @@ test("store: meta round-trip", async () => {
     reorientRetries: 0,
     reviewerUnreachable: 0,
     promoted: false,
+    pass: 1,
     updatedAt: clock.nowIso(),
   };
   store.writeMeta(meta);
@@ -192,6 +193,7 @@ test("store: listRunIds returns sorted ids", async () => {
     reorientRetries: 0,
     reviewerUnreachable: 0,
     promoted: false,
+    pass: 1,
     updatedAt: clock.nowIso(),
   };
   const meta2 = {
@@ -207,6 +209,7 @@ test("store: listRunIds returns sorted ids", async () => {
     reorientRetries: 0,
     reviewerUnreachable: 0,
     promoted: false,
+    pass: 1,
     updatedAt: clock.nowIso(),
   };
   store.writeMeta(meta1);
@@ -626,6 +629,7 @@ test("store: listQueue returns all queued runs in lexical order", async () => {
     reorientRetries: 0,
     reviewerUnreachable: 0,
     promoted: false,
+    pass: 1,
     updatedAt: clock.nowIso(),
   };
   store.writeMeta(meta);
@@ -675,6 +679,7 @@ test("store: listQueue returns requeued runs (attempt>1) before fresh runs", asy
     reorientRetries: 0,
     reviewerUnreachable: 0,
     promoted: false,
+    pass: 1,
     updatedAt: clock.nowIso(),
   };
   store.writeMeta(requeuedMeta);
@@ -736,6 +741,7 @@ test("store: claimNextQueuedRun skips excluded repos", async () => {
     reorientRetries: 0,
     reviewerUnreachable: 0,
     promoted: false,
+    pass: 1,
     updatedAt: clock.nowIso(),
   };
   mkdirSync(join(tmp, "run-b", "worktree"), { recursive: true });
@@ -768,6 +774,7 @@ test("store: claimNextQueuedRun claims requeued (attempt>1) before fresh", async
     reorientRetries: 0,
     reviewerUnreachable: 0,
     promoted: false,
+    pass: 1,
     updatedAt: clock.nowIso(),
   };
   store.writeMeta(requeuedMeta);
@@ -801,6 +808,7 @@ test("store: claimNextQueuedRun retries when first candidate loses CAS race", as
     reorientRetries: 0,
     reviewerUnreachable: 0,
     promoted: false,
+    pass: 1,
     updatedAt: clock.nowIso(),
   };
   mkdirSync(join(tmp, "run-b", "worktree"), { recursive: true });
@@ -1115,6 +1123,7 @@ const runContractTests = async (
       reorientRetries: 0,
       reviewerUnreachable: 0,
       promoted: false,
+      pass: 1,
       updatedAt: clock.nowIso(),
     };
     store.writeMeta(meta);
@@ -1410,6 +1419,7 @@ verification:
       reorientRetries: 0,
       reviewerUnreachable: 0,
       promoted: false,
+      pass: 1,
       updatedAt: clock.nowIso(),
     };
     const aMeta = {
@@ -1425,6 +1435,7 @@ verification:
       reorientRetries: 0,
       reviewerUnreachable: 0,
       promoted: false,
+      pass: 1,
       updatedAt: clock.nowIso(),
     };
     const bMeta = {
@@ -1440,6 +1451,7 @@ verification:
       reorientRetries: 0,
       reviewerUnreachable: 0,
       promoted: false,
+      pass: 1,
       updatedAt: clock.nowIso(),
     };
     store.writeMeta(zMeta);

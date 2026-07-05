@@ -992,7 +992,7 @@ export const createSupervisor = (
       if (!isChainTip(runId)) {
         throw new NonChainTipError(runId, findChainTip(runId));
       }
-      return acceptRunUc(runId, undefined, {
+      return acceptRunUc(runId, {
         store,
         repo,
         clock,

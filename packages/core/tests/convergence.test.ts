@@ -732,6 +732,7 @@ const tipMeta = (overrides: Partial<RunMeta> = {}): RunMeta => ({
   reorientRetries: 0,
   reviewerUnreachable: 0,
   promoted: false,
+  pass: 1,
   updatedAt: "2026-06-18T00:00:00.000Z",
   ...overrides,
 });

@@ -66,7 +66,7 @@ const fakeRepo = (): Repo => ({
   headBranch: () => "main",
   branchExists: () => true,
   repoValid: () => true,
-  mergeAccept: () => {
+  deleteBranch: () => {
     throw new Error("unimplemented");
   },
 });
@@ -172,6 +172,7 @@ const makeRef = (overrides?: {
     reorientRetries: 0,
     reviewerUnreachable: 0,
     promoted: false,
+    pass: 1,
     updatedAt: clock.nowIso(),
   });
   const ledger = store.initialLedger(packet);

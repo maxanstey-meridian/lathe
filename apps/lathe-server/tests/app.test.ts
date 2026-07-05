@@ -260,7 +260,7 @@ const makeAcceptSupervisor = (meta: RunMeta, currentBranch: string, isDirty = fa
     headBranch: (_repoPath: string): string => currentBranch,
     worktreeIsDirty: (_repoPath: string): boolean => isDirty,
     fetchBranchFromClone: () => {},
-    mergeAccept: () => {},
+    deleteBranch: () => {},
     removeSandbox: () => {},
   };
   const clock = { nowIso: () => new Date().toISOString() };
@@ -278,7 +278,7 @@ const makeAcceptSupervisor = (meta: RunMeta, currentBranch: string, isDirty = fa
     getRun: (runId: string): RunMeta | undefined => metaStore.get(runId),
     stopRun: (_runId: string): void => {},
     acceptRun: (runId: string): number =>
-      acceptRunUc(runId, undefined, { store, repo, clock, runsDir: "/tmp/runs" }),
+      acceptRunUc(runId, { store, repo, clock, runsDir: "/tmp/runs" }),
     rejectRun: (_runId: string, _reason: string): void => {},
     isChainTip: (_runId: string): boolean => true,
     lastVerdict: (_runId: string): string | null => null,
@@ -841,7 +841,7 @@ test("AcceptRun refusal returns a failing response", async () => {
   const runId = "accept-refused";
   const meta = {
     runId,
-    status: "ready_for_review" as const,
+    status: "blocked" as const,
     attempt: 1,
     repo: "/tmp/test",
     base: "main",
@@ -853,7 +853,7 @@ test("AcceptRun refusal returns a failing response", async () => {
     updatedAt: new Date().toISOString(),
     queuedAt: new Date().toISOString(),
   } as RunMeta;
-  const supervisor = makeAcceptSupervisor(meta, "develop");
+  const supervisor = makeAcceptSupervisor(meta, "main");
   const app = createApp(supervisor.appDeps, supervisor);
 
   const req = new Request(`http://localhost/runs/${runId}/accept`, { method: "POST" });

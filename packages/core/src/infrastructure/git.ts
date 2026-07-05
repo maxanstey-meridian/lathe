@@ -56,7 +56,8 @@ export const createSandbox = (
 // Pull a branch out of a run's clone into another repo's ref namespace, e.g. so a
 // super-daddy follow-up packet whose `base` is the parent run branch can pass
 // admission (`git rev-parse --verify <base>`) and be cloned from the source repo
-// at the parent's commits. `lathe accept` does the same fetch before merging.
+// at the parent's commits. `lathe accept` does the same fetch before fetching
+// into the source repo.
 //
 // Skips the fetch when the branch already exists in the repo — this happens in
 // chained accepts where a child run was accepted into this branch first,
@@ -398,13 +399,14 @@ export const repoValid = (path: string): boolean => {
   }
 };
 
-// Merge `sourceBranch` into the current branch of `repo` and delete the
-// `sourceBranch` branch. Operates on the explicit `repo` path (the source repo
-// Max invokes `lathe accept` in, per CONTRACT §12 X1). The caller guarantees
-// repo is on targetBranch and clean.
-// The 2-arg signature has no clone/sandbox args — those are separate port calls
-// (fetchBranchFromClone, removeSandbox) owned by the accept use case.
-export const mergeAccept = (repo: string, sourceBranch: string): void => {
-  git(repo, ["merge", sourceBranch]);
-  git(repo, ["branch", "-D", sourceBranch]);
+// Delete a branch from the source repo. Used by campaign-aware accept to
+// clean up intermediate fix-pass branches. Best-effort: if the branch does
+// not exist in the source repo (never fetched during convergence), swallow
+// the error and return void.
+export const deleteBranch = (repo: string, branch: string): void => {
+  try {
+    git(repo, ["branch", "-D", branch]);
+  } catch {
+    // Branch may not exist in the source repo — best-effort, swallow.
+  }
 };

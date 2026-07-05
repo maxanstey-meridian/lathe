@@ -37,13 +37,20 @@ export const RunMeta = z.object({
   base: z.string(),
   branch: z.string(),
   worktree: z.string(),
-  // The branch this run's work was merged INTO when `lathe accept` ran (CONTRACT
-  // X1). Written by acceptRun alongside status: "accepted". The clone sandbox and
-  // the run's own `meridian/<runId>` branch (legacy prefix, not renamed) are destroyed by accept, so this is
-  // the only record of where the converged work now lives — a staged child of an
-  // accepted tip must base off this branch (the canonical repo already has it),
-  // never the deleted sandbox branch. Absent until accepted.
+  // The branch this run's work was fetched INTO the source repo when `lathe
+  // accept` ran (CONTRACT X1). Written by acceptRun alongside status: "accepted".
+  // The clone sandbox is destroyed; the meridian branch is preserved in the source
+  // repo for manual merge. A staged child of an accepted tip must base off this
+  // branch (the canonical repo already has it), never the destroyed sandbox
+  // branch. Absent until accepted.
   acceptedInto: z.string().optional(),
+  // Campaign membership: which campaign this run belongs to. First-pass runs
+  // omit this (default: runId). Follow-up runs get it stamped from packet
+  // frontmatter campaign_id at admission.
+  campaignId: z.string().optional(),
+  // Fix-pass counter: which pass of a campaign this run is. First-pass runs
+  // default to 1. Follow-up runs get it stamped from packet frontmatter pass.
+  pass: z.number().int().min(1).default(1),
   // Copied from the packet at run start so `lathe tail` can show it without
   // re-parsing the packet (the run slug is the fallback when absent).
   summary: z.string().optional(),

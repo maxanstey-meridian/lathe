@@ -53,7 +53,7 @@ const fakeRepo = (_opts?: {
     untracked: [],
     changedFiles: [],
   }),
-  mergeAccept: () => {
+  deleteBranch: () => {
     throw new Error("unimplemented");
   },
 });
@@ -85,7 +85,7 @@ const gitRepo = (): Repo => ({
     untracked: [],
     changedFiles: [],
   }),
-  mergeAccept: () => {
+  deleteBranch: () => {
     throw new Error("unimplemented");
   },
 });

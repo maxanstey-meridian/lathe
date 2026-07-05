@@ -22,7 +22,7 @@ import {
   headBranch,
   branchExists,
   repoValid,
-  mergeAccept,
+  deleteBranch,
 } from "../src/infrastructure/git.ts";
 
 // ===========================================================================
@@ -623,30 +623,38 @@ test("fetchBranchFromClone: force=true overwrites a stale local ref", () => {
 });
 
 // ===========================================================================
-// mergeAccept
+// deleteBranch
 // ===========================================================================
 
-test("mergeAccept: merges sourceBranch into current branch and deletes it", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "meridian-merge-"));
+test("deleteBranch: deletes an existing branch", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "meridian-delete-branch-"));
   try {
     const { repo } = initSourceRepo(tmp);
     execSync("git config user.email t@t.t", { cwd: repo, stdio: "ignore" });
     execSync("git config user.name t", { cwd: repo, stdio: "ignore" });
 
-    // Create a source branch with a commit.
-    execSync("git checkout -q -b source-branch", { cwd: repo, stdio: "ignore" });
-    writeFileSync(join(repo, "source.txt"), "source\n");
-    execSync("git add -A && git commit -qm source", { cwd: repo, stdio: "ignore" });
-
-    // Go back to main.
+    // Create a branch.
+    execSync("git checkout -q -b to-delete", { cwd: repo, stdio: "ignore" });
+    writeFileSync(join(repo, "delete.txt"), "delete\n");
+    execSync("git add -A && git commit -qm delete", { cwd: repo, stdio: "ignore" });
     execSync("git checkout -q main", { cwd: repo, stdio: "ignore" });
 
-    // Merge and delete — mergeAccept operates on the repo path directly.
-    mergeAccept(repo, "source-branch");
+    // Delete it — deleteBranch operates on the repo path directly.
+    deleteBranch(repo, "to-delete");
 
-    // File should be present, branch should be deleted.
-    assert.ok(existsSync(join(repo, "source.txt")), "merged file should exist");
-    assert.ok(!branchExists(repo, "source-branch"), "source branch should be deleted");
+    assert.ok(!branchExists(repo, "to-delete"), "branch should be deleted");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("deleteBranch: swallows error for non-existent branch", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "meridian-delete-missing-"));
+  try {
+    const { repo } = initSourceRepo(tmp);
+    // Deleting a branch that never existed should not throw.
+    deleteBranch(repo, "nonexistent-branch");
+    // No assertion — the test passes if no exception is thrown.
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

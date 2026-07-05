@@ -58,7 +58,7 @@ const fakeRepo = (): Repo => ({
   headBranch: () => "main",
   branchExists: () => true,
   repoValid: () => true,
-  mergeAccept: () => {
+  deleteBranch: () => {
     throw new Error("unimplemented");
   },
 });
@@ -71,6 +71,7 @@ const makeMeta = (overrides: Partial<RunMeta>): RunMeta => ({
   base: "main",
   branch: "meridian/test",
   worktree: "/tmp/worktree",
+  pass: 1,
   stallRetries: 0,
   crashRetries: 0,
   reorientRetries: 0,
@@ -756,7 +757,7 @@ test("runLoop crash branch: thrown executeRun requeues crashed run under cap", (
       headBranch: () => "main",
       branchExists: () => true,
       repoValid: () => true,
-      mergeAccept: () => undefined,
+      deleteBranch: () => undefined,
     };
     const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
     const runId = "20260101-000000-crash-queue";
@@ -833,7 +834,7 @@ test("runLoop crash branch: thrown executeRun escalates crashed run at cap", () 
       headBranch: () => "main",
       branchExists: () => true,
       repoValid: () => true,
-      mergeAccept: () => undefined,
+      deleteBranch: () => undefined,
     };
     const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
     const runId = "20260101-000000-crash-block";
@@ -1072,6 +1073,7 @@ test("runLoop: excludedRepos is built from listActiveRuns and listActiveConverge
         throw new Error("not called");
       },
       listCampaigns: () => [],
+      listRunsByCampaign: () => [],
       listQueue: () => [],
       admitQueue: () => {
         throw new Error("not called");

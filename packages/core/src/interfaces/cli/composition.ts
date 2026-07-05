@@ -45,7 +45,7 @@ import {
   removeSandbox,
   headBranch,
   branchExists,
-  mergeAccept,
+  deleteBranch,
   repoValid,
 } from "../../infrastructure/git.js";
 import {
@@ -79,7 +79,7 @@ export const buildRepo = (): Repo => ({
   removeSandbox,
   headBranch,
   branchExists,
-  mergeAccept,
+  deleteBranch,
   repoValid,
 });
 

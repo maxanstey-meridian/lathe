@@ -48,7 +48,7 @@ const _repoContract: Repo = {
   headBranch: () => "main",
   branchExists: () => true,
   repoValid: () => true,
-  mergeAccept: () => {},
+  deleteBranch: () => {},
 };
 
 const _storeContract: Store = {
@@ -60,6 +60,7 @@ const _storeContract: Store = {
     base: "",
     branch: "",
     worktree: "",
+    pass: 1,
     updatedAt: "00000000-00:00:00.000Z",
     stallRetries: 0,
     crashRetries: 0,
@@ -115,6 +116,7 @@ const _storeContract: Store = {
   readCampaign: () => undefined,
   writeCampaign: () => {},
   listCampaigns: () => [],
+  listRunsByCampaign: () => [],
   listQueue: () => [],
   admitQueue: () => {},
   archiveQueue: () => {},

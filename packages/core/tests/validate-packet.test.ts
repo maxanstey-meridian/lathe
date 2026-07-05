@@ -30,7 +30,7 @@ const makeRepo = (
   },
   headBranch: () => opts.headBranch ?? "main",
   branchExists: () => opts.branchExists ?? true,
-  mergeAccept: () => {
+  deleteBranch: () => {
     throw new Error("unused");
   },
   repoValid: () => opts.repoValid ?? true,

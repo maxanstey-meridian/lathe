@@ -47,7 +47,7 @@ const fakeRepo = (opts?: {
   },
   headBranch: () => "main",
   branchExists: () => true,
-  mergeAccept: () => {
+  deleteBranch: () => {
     throw new Error("unimplemented");
   },
   repoValid: () => true,
@@ -74,6 +74,7 @@ const makeBlockedMeta = (runId: string, clock: Clock): RunMeta => ({
   reorientRetries: 0,
   reviewerUnreachable: 0,
   promoted: false,
+  pass: 1,
   updatedAt: clock.nowIso(),
   blockedReason: "stop_condition",
   blockedQuestion: "How should I structure the new module?",
@@ -109,6 +110,7 @@ test("answer-run: refuses when run is not blocked", async () => {
     reorientRetries: 0,
     reviewerUnreachable: 0,
     promoted: false,
+    pass: 1,
     updatedAt: clock.nowIso(),
   };
   store.writeMeta(meta);
@@ -230,6 +232,7 @@ test("answer-run: succeeds for failed run (retry)", async () => {
     reorientRetries: 0,
     reviewerUnreachable: 0,
     promoted: false,
+    pass: 1,
     updatedAt: clock.nowIso(),
   };
   store.writeMeta(meta);

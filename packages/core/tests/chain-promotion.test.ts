@@ -61,7 +61,7 @@ const fakeRepo = (opts?: {
   headBranch: () => opts?.headBranch ?? "main",
   branchExists: () => opts?.branchExists ?? true,
   repoValid: () => opts?.repoValid ?? true,
-  mergeAccept: () => {
+  deleteBranch: () => {
     throw new Error("unimplemented");
   },
 });
@@ -74,6 +74,7 @@ const makeMeta = (overrides: Partial<RunMeta> = {}): RunMeta => ({
   base: "main",
   branch: "meridian/test",
   worktree: "/tmp/worktree",
+  pass: 1,
   stallRetries: 0,
   crashRetries: 0,
   reorientRetries: 0,

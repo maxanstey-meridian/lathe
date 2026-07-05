@@ -113,9 +113,9 @@ export const decidePromotion = (
 //   - tip NOT yet accepted: the campaign converged but `lathe accept` hasn't run,
 //     so the tip's work lives only in its self-rooted clone sandbox. Base off the
 //     tip branch and fetch it from the clone first (fetchFromClone = clone path).
-//   - tip ALREADY accepted: accept merged it into `acceptedInto` and destroyed the
-//     clone + the meridian/<tip> branch (legacy prefix). The canonical repo already has the work
-//     on that branch, so base off it and do NOT fetch (fetchFromClone undefined).
+//   - tip ALREADY accepted: accept fetched the tip branch into the source repo
+//     and destroyed the clone. The meridian branch is preserved in the source repo
+//     for manual merge, so base off it and do NOT fetch (fetchFromClone undefined).
 //     Fall back to the run's own base for metas predating the acceptedInto field.
 //
 // This is the fix for the strand: without it, an accepted tip still routes through

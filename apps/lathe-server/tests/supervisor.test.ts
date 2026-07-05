@@ -38,7 +38,7 @@ const fakeRepo = (_opts?: {
   headBranch: () => "main",
   branchExists: () => true,
   repoValid: () => true,
-  mergeAccept: () => { throw new Error("unimplemented"); },
+  deleteBranch: () => { throw new Error("unimplemented"); },
 });
 
 const makeTestPaths = async (base?: string): Promise<Paths & { teardown: () => Promise<void> }> => {
@@ -57,6 +57,7 @@ const makeTestMeta = (partial: Partial<RunMeta>): RunMeta => ({
   base: "main",
   branch: "lathe/test",
   worktree: "/tmp/test-worktree",
+  pass: 1,
   stallRetries: 0,
   reorientRetries: 0,
   reviewerUnreachable: 0,

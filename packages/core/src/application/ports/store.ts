@@ -110,6 +110,7 @@ export type Store = {
   readCampaign(campaignId: string): Campaign | undefined;
   writeCampaign(campaign: Campaign): void;
   listCampaigns(): Campaign[];
+  listRunsByCampaign(campaignId: string): RunMeta[];
 
   // Queue (list/admit/archive/claim)
   listQueue(): QueueEntry[];

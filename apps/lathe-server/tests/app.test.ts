@@ -1,7 +1,7 @@
 import { deepStrictEqual, equal, ok, strictEqual } from "node:assert";
 import { test } from "node:test";
 
-import { acceptRun as acceptRunUc } from "@lathe/core";
+import { acceptRun as acceptRunUc, Config } from "@lathe/core";
 import type { RunMeta } from "@lathe/core";
 import type { Supervisor } from "../src/supervisor.js";
 import { createApp, createEventBus, createTailEventBus } from "../src/app.js";
@@ -188,6 +188,12 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
           blockedQuestion: meta.blockedQuestion ?? null,
         })),
     }),
+
+    writeConfig: (raw: unknown) => Config.parse(raw),
+    getDecisions: () => [],
+    getLedger: () => ({ outcomes: [] }),
+    getReport: () => "",
+    getConvergence: () => [],
   };
 
   // Apply overrides: they replace base methods. To keep CRUD methods working
@@ -1495,4 +1501,163 @@ test("status mapping handles all domain values", async () => {
   strictEqual(mapStatus("failed"), "failed");
   strictEqual(mapStatus("accepted"), "accepted");
   strictEqual(mapStatus("stopped"), "stopped");
+});
+
+// ---------------------------------------------------------------------------
+// Settings & restart sidecar routes
+// ---------------------------------------------------------------------------
+
+test("GET /settings returns full config as JSON", async () => {
+  const supervisor = makeFakeSupervisor();
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request("http://localhost/settings");
+  equal(res.status, 200);
+  const body = await res.json() as Record<string, unknown>;
+  ok("baby" in body);
+  ok("daddy" in body);
+  ok("superdaddy" in body);
+  ok("thresholds" in body);
+});
+
+test("PUT /settings validates body and returns parsed config", async () => {
+  const supervisor = makeFakeSupervisor();
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const body = { baby: { modelId: "new-model" } };
+  const res = await app.request("http://localhost/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  equal(res.status, 200);
+  const parsed = await res.json() as Record<string, unknown>;
+  ok("baby" in parsed);
+  equal((parsed.baby as Record<string, unknown>).modelId, "new-model");
+});
+
+test("PUT /settings returns 400 for invalid body", async () => {
+  const supervisor = makeFakeSupervisor();
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request("http://localhost/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ baby: { modelId: 12345 } }),
+  });
+  equal(res.status, 400);
+  const body = await res.json() as { error: string };
+  ok(body.error.length > 0);
+});
+
+test("POST /restart calls onRestart and returns 200", async () => {
+  let restartCalled = false;
+  const supervisor = makeFakeSupervisor();
+  const app = createApp(supervisor.appDeps, supervisor, {
+    onRestart: () => { restartCalled = true; },
+  });
+
+  const res = await app.request("http://localhost/restart", { method: "POST" });
+  equal(res.status, 200);
+  const body = await res.json() as { restarting: boolean };
+  equal(body.restarting, true);
+  ok(restartCalled, "onRestart callback was invoked");
+});
+
+test("POST /restart returns 400 when onRestart not configured", async () => {
+  const supervisor = makeFakeSupervisor();
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request("http://localhost/restart", { method: "POST" });
+  equal(res.status, 400);
+  const body = await res.json() as { error: string };
+  equal(body.error, "restart not available");
+});
+
+// ---------------------------------------------------------------------------
+// Run ledger sidecar routes
+// ---------------------------------------------------------------------------
+
+test("GET /runs/:runId/decisions returns decisions array for known run", async () => {
+  const supervisor = makeFakeSupervisor();
+  supervisor.enqueueRun("/tmp/test-run.md");
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request("http://localhost/runs/test-run/decisions");
+  equal(res.status, 200);
+  const body = await res.json() as unknown[];
+  ok(Array.isArray(body));
+});
+
+test("GET /runs/:runId/decisions returns 404 for unknown run", async () => {
+  const supervisor = makeFakeSupervisor();
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request("http://localhost/runs/nonexistent/decisions");
+  equal(res.status, 404);
+  const body = await res.json() as { error: string };
+  equal(body.error, "run not found");
+});
+
+test("GET /runs/:runId/outcomes returns ledger for known run", async () => {
+  const supervisor = makeFakeSupervisor();
+  supervisor.enqueueRun("/tmp/test-run.md");
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request("http://localhost/runs/test-run/outcomes");
+  equal(res.status, 200);
+  const body = await res.json() as { outcomes: unknown[] };
+  ok(Array.isArray(body.outcomes));
+});
+
+test("GET /runs/:runId/outcomes returns 404 for unknown run", async () => {
+  const supervisor = makeFakeSupervisor();
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request("http://localhost/runs/nonexistent/outcomes");
+  equal(res.status, 404);
+  const body = await res.json() as { error: string };
+  equal(body.error, "run not found");
+});
+
+test("GET /runs/:runId/report returns report string for known run", async () => {
+  const supervisor = makeFakeSupervisor();
+  supervisor.enqueueRun("/tmp/test-run.md");
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request("http://localhost/runs/test-run/report");
+  equal(res.status, 200);
+  const body = await res.json() as { report: string };
+  ok(typeof body.report === "string");
+});
+
+test("GET /runs/:runId/report returns 404 for unknown run", async () => {
+  const supervisor = makeFakeSupervisor();
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request("http://localhost/runs/nonexistent/report");
+  equal(res.status, 404);
+  const body = await res.json() as { error: string };
+  equal(body.error, "run not found");
+});
+
+test("GET /runs/:runId/convergence returns convergence log for known run", async () => {
+  const supervisor = makeFakeSupervisor();
+  supervisor.enqueueRun("/tmp/test-run.md");
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request("http://localhost/runs/test-run/convergence");
+  equal(res.status, 200);
+  const body = await res.json() as unknown[];
+  ok(Array.isArray(body));
+});
+
+test("GET /runs/:runId/convergence returns 404 for unknown run", async () => {
+  const supervisor = makeFakeSupervisor();
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request("http://localhost/runs/nonexistent/convergence");
+  equal(res.status, 404);
+  const body = await res.json() as { error: string };
+  equal(body.error, "run not found");
 });

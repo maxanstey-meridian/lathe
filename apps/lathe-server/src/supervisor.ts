@@ -11,7 +11,6 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { basename, join, resolve } from "node:path";
 
 import type {
-  Config,
   Clock,
   Repo,
   Store,
@@ -40,6 +39,7 @@ import {
   createEvents,
   createContextTokenReader,
   parsePacketShape,
+  Config,
 } from "@lathe/core";
 import type { OpencodeEvent } from "@lathe/core";
 
@@ -146,6 +146,16 @@ export type Supervisor = {
   outcomes(runId: string): string;
   /** Packet/journal-backed fields for run DTOs. */
   runReadModel(runId: string): RunReadModel;
+  /** Validate and write a new config to disk. Returns parsed config. Throws on validation failure. */
+  writeConfig(raw: unknown): Config;
+  /** Full planner Q&A decision history for a run. */
+  getDecisions(runId: string): ReturnType<Store["readDecisions"]>;
+  /** Full outcome ledger for a run. */
+  getLedger(runId: string): ReturnType<Store["readLedger"]>;
+  /** Baby's completion report for a run. */
+  getReport(runId: string): string;
+  /** Convergence log for a run. */
+  getConvergence(runId: string): ReturnType<Store["readConvergence"]>;
 };
 
 export type RunReadModel = {
@@ -1045,6 +1055,28 @@ export const createSupervisor = (
       const updated: RunMeta = { ...meta, status: "queued" as const, updatedAt: clock.nowIso() };
       store.writeMeta(updated);
       return updated;
+    },
+
+    writeConfig(raw: unknown): Config {
+      const parsed = Config.parse(raw);
+      writeFileSync(paths.configFile, JSON.stringify(parsed, null, 2) + "\n", "utf-8");
+      return parsed;
+    },
+
+    getDecisions(runId: string): ReturnType<Store["readDecisions"]> {
+      return store.readDecisions(runId);
+    },
+
+    getLedger(runId: string): ReturnType<Store["readLedger"]> {
+      return store.readLedger(runId);
+    },
+
+    getReport(runId: string): string {
+      return store.readReport(runId);
+    },
+
+    getConvergence(runId: string): ReturnType<Store["readConvergence"]> {
+      return store.readConvergence(runId);
     },
   };
 };

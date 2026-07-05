@@ -67,6 +67,7 @@ export interface AppDeps {
 export interface CreateAppOptions {
   readonly logger?: boolean;
   readonly cors?: boolean;
+  readonly onRestart?: () => void;
 }
 
 export const createApp = (
@@ -388,6 +389,62 @@ export const createApp = (
   app.get("/tail/:runId/events", (c) =>
     streamTailSse(c, deps, () => supervisor.getTailSnapshot(c.req.param("runId")) ?? null, c.req.param("runId")),
   );
+
+  // --- Settings & restart sidecar ---------------------------------------------
+
+  app.get("/settings", (c) => c.json(supervisor.config));
+
+  app.put("/settings", async (c) => {
+    try {
+      const body = await c.req.json();
+      const written = supervisor.writeConfig(body);
+      return c.json(written);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    }
+  });
+
+  app.post("/restart", (c) => {
+    if (!options.onRestart) {
+      return c.json({ error: "restart not available" }, 400);
+    }
+    options.onRestart();
+    return c.json({ restarting: true });
+  });
+
+  // --- Run ledger sidecar -----------------------------------------------------
+
+  app.get("/runs/:runId/decisions", (c) => {
+    const meta = supervisor.getRun(c.req.param("runId"));
+    if (!meta) {
+      return c.json({ error: "run not found" }, 404);
+    }
+    return c.json(supervisor.getDecisions(c.req.param("runId")));
+  });
+
+  app.get("/runs/:runId/outcomes", (c) => {
+    const meta = supervisor.getRun(c.req.param("runId"));
+    if (!meta) {
+      return c.json({ error: "run not found" }, 404);
+    }
+    return c.json(supervisor.getLedger(c.req.param("runId")));
+  });
+
+  app.get("/runs/:runId/report", (c) => {
+    const meta = supervisor.getRun(c.req.param("runId"));
+    if (!meta) {
+      return c.json({ error: "run not found" }, 404);
+    }
+    return c.json({ report: supervisor.getReport(c.req.param("runId")) });
+  });
+
+  app.get("/runs/:runId/convergence", (c) => {
+    const meta = supervisor.getRun(c.req.param("runId"));
+    if (!meta) {
+      return c.json({ error: "run not found" }, 404);
+    }
+    return c.json(supervisor.getConvergence(c.req.param("runId")));
+  });
 
   // Unhandled handler errors become a structured 500 — same envelope rivetHttpError
   // produces, matching the scaffolder's app.onError (behavioral parity).

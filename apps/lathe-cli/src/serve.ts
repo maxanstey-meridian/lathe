@@ -27,6 +27,7 @@ import { getRequestListener } from "@hono/node-server";
 import type { Server } from "node:http";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
+import { spawn } from "node:child_process";
 
 type SignalName = "SIGINT" | "SIGTERM";
 type LockHandle = { server: Server; release: () => void };
@@ -66,7 +67,22 @@ export const startDaemon = async (deps?: DaemonDeps, userPort?: number): Promise
 
   // 3. Build the Hono app: use supervisor's own bus (journal tail publishes here) + readEventsSince.
   const appFactory = deps?.createApp ?? createApp;
-  const app = appFactory(sup.appDeps, sup, { logger: true, cors: true });
+  const app = appFactory(sup.appDeps, sup, {
+    logger: true,
+    cors: true,
+    onRestart: () => {
+      const [bin, ...args] = process.argv;
+      const escapedCommand = [bin, ...args].map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
+      spawn("sh", ["-c", `sleep 1; exec ${escapedCommand}`], {
+        detached: true,
+        stdio: "ignore",
+      }).unref();
+      setTimeout(() => {
+        releaseLock();
+        process.exit(0);
+      }, 200);
+    },
+  });
 
   // 4. Attach the request listener to the already-bound held server.
   server.on("request", getRequestListener(app.fetch, { hostname: host }));

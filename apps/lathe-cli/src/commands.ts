@@ -444,7 +444,7 @@ const renderReviewDto = (review: ReviewDto): string => {
     if (run.status === "ready_for_review") {
       lines.push(`   diff:   git -C ${run.repo} diff ${run.base}...${run.branch}`);
       lines.push(
-        `   accept: lathe accept ${run.runId} [branch]   (merges into [branch], default ${run.base}; tidies the worktree)`,
+        `   accept: lathe accept ${run.runId}   (fetches campaign tip branch; you merge manually)`,
       );
     }
   }

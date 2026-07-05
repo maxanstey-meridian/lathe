@@ -1,9 +1,8 @@
-import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { test, expect } from "vitest";
+import { computed, defineComponent, nextTick, ref, type Ref } from "vue";
+import { mount } from "@vue/test-utils";
 
 import type { LatheStatus, StatusDto } from "../app/pages/index/ports/lathe-status";
-import { createRenderer, computed, defineComponent, nextTick, ref, type Ref } from "vue";
-
 import { useReviewData } from "../app/pages/index/composables/useReviewData";
 
 type ReviewRun = {
@@ -16,37 +15,6 @@ type ReviewRun = {
   blockedQuestion: string | null;
 };
 
-type HostNode = {
-  kind: "root" | "element" | "text" | "comment";
-  children: HostNode[];
-  text?: string;
-};
-
-const renderer = createRenderer<HostNode, HostNode>({
-  patchProp: () => undefined,
-  insert: (child, parent) => {
-    parent.children.push(child);
-  },
-  remove: () => undefined,
-  createElement: () => ({ kind: "element", children: [] }),
-  createText: (text) => ({ kind: "text", children: [], text }),
-  createComment: (text) => ({ kind: "comment", children: [], text }),
-  setText: (node, text) => {
-    node.text = text;
-  },
-  setElementText: (node, text) => {
-    node.text = text;
-  },
-  parentNode: () => null,
-  nextSibling: () => null,
-  setScopeId: () => undefined,
-  cloneNode: (node) => ({ ...node, children: [...node.children] }),
-  insertStaticContent: (content) => [
-    { kind: "comment", children: [], text: content },
-    { kind: "comment", children: [], text: content },
-  ],
-});
-
 const makeReviewRun = (runId: string, status: string): ReviewRun => ({
   runId,
   status,
@@ -58,7 +26,7 @@ const makeReviewRun = (runId: string, status: string): ReviewRun => ({
 });
 
 const makeStatus = (): StatusDto => ({
-  activeRun: null,
+  activeRuns: [],
   queued: [],
   parked: [],
   campaigns: [],
@@ -95,15 +63,13 @@ const mountReviewDataHarness = (loadReviewRuns: () => Promise<ReviewRun[]> | Rev
     },
   });
 
-  const app = renderer.createApp(Harness);
-  const root: HostNode = { kind: "root", children: [] };
-  app.mount(root);
+  const wrapper = mount(Harness);
 
   if (!api) {
     throw new Error("review data composable was not created");
   }
 
-  return { api, app, status };
+  return { api, wrapper, status };
 };
 
 test("useReviewData fetches on mount and refetches when status changes", async () => {
@@ -111,29 +77,29 @@ test("useReviewData fetches on mount and refetches when status changes", async (
   const secondRun = makeReviewRun("run-2", "failed");
   let callCount = 0;
 
-  const { api, app, status } = mountReviewDataHarness(async () => {
+  const { api, wrapper, status } = mountReviewDataHarness(async () => {
     callCount += 1;
     return callCount === 1 ? [firstRun] : [secondRun];
   });
 
   await flush();
-  assert.deepEqual(api.reviewRuns.value, [firstRun]);
-  assert.equal(api.reviewError.value, null);
+  expect(api.reviewRuns.value).toEqual([firstRun]);
+  expect(api.reviewError.value).toBeNull();
 
   status.value = makeStatus();
   await flush();
 
-  assert.deepEqual(api.reviewRuns.value, [secondRun]);
-  assert.equal(api.reviewError.value, null);
+  expect(api.reviewRuns.value).toEqual([secondRun]);
+  expect(api.reviewError.value).toBeNull();
 
-  app.unmount();
+  wrapper.unmount();
 });
 
 test("useReviewData surfaces load failures and recovers on a later refresh", async () => {
   const recoveredRun = makeReviewRun("run-3", "ready_for_review");
   let callCount = 0;
 
-  const { api, app, status } = mountReviewDataHarness(async () => {
+  const { api, wrapper, status } = mountReviewDataHarness(async () => {
     callCount += 1;
     if (callCount === 1) {
       throw new Error("review backend down");
@@ -142,14 +108,14 @@ test("useReviewData surfaces load failures and recovers on a later refresh", asy
   });
 
   await flush();
-  assert.deepEqual(api.reviewRuns.value, []);
-  assert.equal(api.reviewError.value, "Unable to fetch review data.");
+  expect(api.reviewRuns.value).toEqual([]);
+  expect(api.reviewError.value).toBe("Unable to fetch review data.");
 
   status.value = makeStatus();
   await flush();
 
-  assert.deepEqual(api.reviewRuns.value, [recoveredRun]);
-  assert.equal(api.reviewError.value, null);
+  expect(api.reviewRuns.value).toEqual([recoveredRun]);
+  expect(api.reviewError.value).toBeNull();
 
-  app.unmount();
+  wrapper.unmount();
 });

@@ -82,12 +82,12 @@ const summary = (runId: string, status: string) => ({
 });
 
 const statusSnapshot = () => ({
-  activeRun: {
+  activeRuns: [{
     runId: "active-run",
     outcomes: "1/2 done, 1 in progress",
     gateLatched: null,
     recentEvents: [{ at: "2026-01-01T12:34:56Z", event: "thinking" }],
-  },
+  }],
   queued: [{ runId: "queued-run" }],
   parked: [],
   campaigns: [],
@@ -97,7 +97,7 @@ const statusSnapshot = () => ({
 
 const statusWithFailedReview = () => ({
   ...statusSnapshot(),
-  activeRun: null,
+  activeRuns: [],
   review: { readyForReview: 0, failed: 1 },
 });
 
@@ -337,6 +337,32 @@ test("cmdStatus: points to review when failed runs need attention", async () => 
   const code = await cmdStatus(h.env);
   equal(code, 0);
   ok(h.logs.some((line) => line.includes("review: 1 failed — lathe review")), h.logs.join("|"));
+});
+
+test("cmdStatus: renders multiple ACTIVE sections for multiple active runs", async () => {
+  const multiStatus = () => ({
+    activeRuns: [
+      { runId: "run-a", outcomes: "1/1 done", gateLatched: null, recentEvents: [] },
+      { runId: "run-b", outcomes: "0/2 done, 1 in progress", gateLatched: "latch", recentEvents: [{ at: "2026-01-01T12:34:56Z", event: "thinking" }] },
+    ],
+    queued: [],
+    parked: [],
+    campaigns: [],
+    staged: [],
+    review: { readyForReview: 0, failed: 0 },
+  });
+
+  const h = harness((req) => {
+    if (new URL(req.url).pathname === "/status") {
+      return jsonResponse(200, multiStatus());
+    }
+    return jsonResponse(200, { models: {}, thresholds: {} });
+  });
+  const code = await cmdStatus(h.env);
+  equal(code, 0);
+  ok(h.logs.some((line) => line.includes("ACTIVE: run-a")), `logs include run-a: ${h.logs.join("|")}`);
+  ok(h.logs.some((line) => line.includes("ACTIVE: run-b")), `logs include run-b: ${h.logs.join("|")}`);
+  ok(h.logs.some((line) => line.includes("gate latched: latch")), `logs include gate latch: ${h.logs.join("|")}`);
 });
 
 test("cmdReview: reads review through the daemon", async () => {
@@ -625,7 +651,7 @@ const fakeSupervisor = (order: string[], config = ConfigSchema.parse({})): Super
   outcomes: () => "",
   getTailSnapshot: () => undefined,
   getActiveTailSnapshot: () => null,
-  getStatus: () => ({ activeRun: null, queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
+  getStatus: () => ({ activeRuns: [], queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
   getReview: () => ({ runs: [] }),
 });
 
@@ -898,10 +924,70 @@ test("lathe db active: reads v3 multi-row state and picks deterministic default 
     const code = cmdDb(env, ["active"]);
     equal(code, 0);
 
-    // Should show the deterministically-selected run (20260101-000000-a)
+    // Should show both active runs
     ok(logs.some((l) => l.includes("20260101-000000-a")), `should show first run_id, logs: ${logs.join("|")}`);
     ok(logs.some((l) => l.includes("sess-a")), `should show session, logs: ${logs.join("|")}`);
+    ok(logs.some((l) => l.includes("20260101-000000-z")), `should show second run_id, logs: ${logs.join("|")}`);
+    ok(logs.some((l) => l.includes("sess-z")), `should show second session, logs: ${logs.join("|")}`);
     ok(logs.some((l) => l.includes("converging")), `should show convergence, logs: ${logs.join("|")}`);
+    equal(errs.length, 0, `no errors expected, got: ${errs.join("|")}`);
+  } finally {
+    process.env.HOME = homeBack;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("lathe db active --json: returns all active runs plus convergences", () => {
+  const dir = mkdtempSync(join(tmpdir(), "lathe-db-json-"));
+  const homeBack = process.env.HOME;
+  process.env.HOME = dir;
+  try {
+    const configPath = join(dir, ".meridian", "v3", "config.json");
+    mkdirSync(join(dir, ".meridian", "v3"), { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ stateRoot: dir }));
+
+    const db = new DatabaseSync(join(dir, "lathe.db"));
+    db.exec("PRAGMA journal_mode=WAL;");
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS active_run(
+        run_id TEXT PRIMARY KEY,
+        run TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS active_convergence(
+        run_id TEXT PRIMARY KEY,
+        convergence TEXT NOT NULL
+      );
+    `);
+
+    const runA = JSON.stringify({ runId: "run-a", worktree: "/tmp/a", babySessionId: "sess-a" });
+    const runB = JSON.stringify({ runId: "run-b", worktree: "/tmp/b", babySessionId: "sess-b" });
+    const conv = JSON.stringify({ runId: "run-c" });
+    db.prepare("INSERT OR REPLACE INTO active_run (run_id, run) VALUES (?, ?)").run("run-a", runA);
+    db.prepare("INSERT OR REPLACE INTO active_run (run_id, run) VALUES (?, ?)").run("run-b", runB);
+    db.prepare("INSERT OR REPLACE INTO active_convergence (run_id, convergence) VALUES (?, ?)").run("run-c", conv);
+    db.close();
+
+    const logs: string[] = [];
+    const errs: string[] = [];
+    const env: CliEnv = {
+      client: stubClient(() => jsonResponse(200, {})),
+      isDaemonUp: () => Promise.resolve(false),
+      log: (line) => logs.push(line),
+      err: (line) => errs.push(line),
+    };
+
+    const code = cmdDb(env, ["active", "--json"]);
+    equal(code, 0);
+
+    // Parse JSON output
+    const json = JSON.parse(logs.join("\n"));
+    ok(Array.isArray(json.activeRuns), "activeRuns is an array");
+    equal(json.activeRuns.length, 2, "both active runs present");
+    ok(json.activeRuns.some((r: { runId: string }) => r.runId === "run-a"), "includes run-a");
+    ok(json.activeRuns.some((r: { runId: string }) => r.runId === "run-b"), "includes run-b");
+    ok(Array.isArray(json.activeConvergences), "activeConvergences is an array");
+    equal(json.activeConvergences.length, 1, "one active convergence");
+    equal(json.activeConvergences[0]?.runId, "run-c", "convergence runId is run-c");
     equal(errs.length, 0, `no errors expected, got: ${errs.join("|")}`);
   } finally {
     process.env.HOME = homeBack;

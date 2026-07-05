@@ -152,7 +152,7 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
     getTailSnapshot: (runId: string): TailSnapshotDto | undefined => metaStore.has(runId) ? tailSnapshot(runId) : undefined,
     getActiveTailSnapshot: (): TailSnapshotDto | null => null,
     getStatus: () => ({
-      activeRun: null,
+      activeRuns: [],
       queued: Array.from(metaStore.values())
         .filter((meta) => meta.status === "queued")
         .map((meta) => ({ runId: meta.runId })),
@@ -293,7 +293,7 @@ const makeAcceptSupervisor = (meta: RunMeta, currentBranch: string, isDirty = fa
     }),
     getTailSnapshot: (_runId: string): TailSnapshotDto | undefined => undefined,
     getActiveTailSnapshot: (): TailSnapshotDto | null => null,
-    getStatus: () => ({ activeRun: null, queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
+    getStatus: () => ({ activeRuns: [], queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
     getReview: () => ({ runs: [] }),
     listStaged: (): Array<{ runId: string; parentRunId: string | undefined }> => [],
   } satisfies Supervisor;
@@ -452,7 +452,7 @@ test("GetRun returns RunDetailDto for known run", async () => {
 test("GetStatus returns daemon status snapshot", async () => {
   const supervisor = makeFakeSupervisor({
     getStatus: () => ({
-      activeRun: { runId: "active", outcomes: "1/1 done", gateLatched: null, recentEvents: [] },
+      activeRuns: [{ runId: "active", outcomes: "1/1 done", gateLatched: null, recentEvents: [] }],
       queued: [{ runId: "queued" }],
       parked: [],
       campaigns: [],
@@ -464,8 +464,8 @@ test("GetStatus returns daemon status snapshot", async () => {
 
   const res = await app.request(new Request("http://localhost/status"));
   equal(res.status, 200);
-  const body = await res.json() as { activeRun: { runId: string } | null; queued: Array<{ runId: string }> };
-  equal(body.activeRun?.runId, "active");
+  const body = await res.json() as { activeRuns: Array<{ runId: string }>; queued: Array<{ runId: string }> };
+  equal(body.activeRuns[0]?.runId, "active");
   equal(body.queued[0]?.runId, "queued");
 });
 

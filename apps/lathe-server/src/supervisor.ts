@@ -255,6 +255,24 @@ const tailToolDetail = (state: Record<string, unknown>): string => {
   return typeof inputObj.status === "string" ? inputObj.status : "";
 };
 
+export const resolveSpeaker = (store: Store, runId: string, sessionId: string): "baby" | "daddy" | "super" | undefined => {
+  const activeRuns = store.listActiveRuns();
+  if (activeRuns.some((r) => r.runId === runId && sessionId === r.babySessionId)) {
+    return "baby";
+  }
+  const meta = store.readMetaIfExists(runId);
+  if (meta?.daddySessionId === sessionId) {
+    return "daddy";
+  }
+  if (meta?.reviewerSessionId === sessionId) {
+    return "super";
+  }
+  if (meta?.babySessionId === sessionId) {
+    return "baby";
+  }
+  return undefined;
+};
+
 const startTailOpenCode = (
   config: Config,
   paths: Paths,
@@ -269,23 +287,8 @@ const startTailOpenCode = (
   const toolSeen = new Set<string>();
   let running = true;
 
-  const speakerFor = (runId: string, sessionId: string): "baby" | "daddy" | "super" | undefined => {
-    const active = store.listActiveRuns().sort((a, b) => (b.startedAt > a.startedAt ? 1 : -1))[0];
-    if (active?.runId === runId && sessionId === active.babySessionId) {
-      return "baby";
-    }
-    const meta = store.readMetaIfExists(runId);
-    if (meta?.daddySessionId === sessionId) {
-      return "daddy";
-    }
-    if (meta?.reviewerSessionId === sessionId) {
-      return "super";
-    }
-    if (meta?.babySessionId === sessionId) {
-      return "baby";
-    }
-    return undefined;
-  };
+  const speakerFor = (runId: string, sessionId: string): "baby" | "daddy" | "super" | undefined =>
+    resolveSpeaker(store, runId, sessionId);
 
   const onOpenCodeEvent = (runId: string, event: OpencodeEvent): void => {
     const props = event.properties;
@@ -373,27 +376,7 @@ const startTailOpenCode = (
   };
 
   const syncSubscriptions = (): void => {
-    const activeIds = new Set<string>();
-    const activeRuns = store.listActiveRuns().sort((a, b) => (b.startedAt > a.startedAt ? 1 : -1));
-    const activeRunId = activeRuns[0]?.runId;
-    const activeConvergences = store.listActiveConvergences();
-    const activeConvergenceId = activeConvergences[0]?.runId;
-    for (const runId of [activeRunId, activeConvergenceId]) {
-      if (!runId) {
-        continue;
-      }
-      const meta = store.readMetaIfExists(runId);
-      if (!meta) {
-        continue;
-      }
-      activeIds.add(runId);
-      ensureRun(meta);
-    }
-    for (const runId of [...subscriptions.keys()]) {
-      if (!activeIds.has(runId)) {
-        closeRun(runId);
-      }
-    }
+    _testSyncSubscriptions(store, subscriptions, ensureRun, closeRun);
   };
 
   const pollTokens = async (): Promise<void> => {
@@ -743,18 +726,15 @@ export const createSupervisor = (
     },
 
     getStatus(): StatusDto {
-      const active = firstActiveRun();
-      const activeRun = active
-        ? {
-            runId: active.runId,
-            outcomes: outcomes(active.runId),
-            gateLatched: gateLatchReason(active.runId),
-            recentEvents: store.readJournal(active.runId).slice(-5).map((event) => ({
-              at: event.at,
-              event: event.event,
-            })),
-          }
-        : null;
+      const activeRuns = store.listActiveRuns().sort((a, b) => (b.startedAt > a.startedAt ? 1 : -1)).map((run) => ({
+        runId: run.runId,
+        outcomes: outcomes(run.runId),
+        gateLatched: gateLatchReason(run.runId),
+        recentEvents: store.readJournal(run.runId).slice(-5).map((event) => ({
+          at: event.at,
+          event: event.event,
+        })),
+      }));
 
       const allMeta = store.listMeta();
 
@@ -792,7 +772,7 @@ export const createSupervisor = (
       );
 
       return {
-        activeRun,
+        activeRuns,
         queued: store.listQueue().map((entry) => ({ runId: entry.runId })),
         parked,
         campaigns,
@@ -1067,4 +1047,36 @@ export const createSupervisor = (
       return updated;
     },
   };
+};
+
+// ---------------------------------------------------------------------------
+// Test-only exports — no production code should import these.
+// ---------------------------------------------------------------------------
+
+export const _testSyncSubscriptions = (
+  store: Store,
+  subscriptions: Map<string, { close: () => void }[]>,
+  ensureRun: (meta: RunMeta) => void,
+  closeRun: (runId: string) => void,
+): void => {
+  const activeIds = new Set<string>();
+  for (const activeRun of store.listActiveRuns()) {
+    const meta = store.readMetaIfExists(activeRun.runId);
+    if (meta) {
+      activeIds.add(activeRun.runId);
+      ensureRun(meta);
+    }
+  }
+  for (const ac of store.listActiveConvergences()) {
+    const meta = store.readMetaIfExists(ac.runId);
+    if (meta) {
+      activeIds.add(ac.runId);
+      ensureRun(meta);
+    }
+  }
+  for (const runId of [...subscriptions.keys()]) {
+    if (!activeIds.has(runId)) {
+      closeRun(runId);
+    }
+  }
 };

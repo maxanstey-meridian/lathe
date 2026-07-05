@@ -7,7 +7,7 @@ import { test } from "node:test";
 import type { Config, Clock, Repo, Paths, RunMeta } from "@lathe/core";
 import { makePaths, SqliteStoreAdapter, systemClock, buildRepo, Config as ConfigSchema } from "@lathe/core";
 import type { Supervisor } from "../src/supervisor.js";
-import { createSupervisor, NonChainTipError, TerminalRunError, RunNotFoundError } from "../src/supervisor.js";
+import { createSupervisor, NonChainTipError, TerminalRunError, RunNotFoundError, resolveSpeaker, _testSyncSubscriptions } from "../src/supervisor.js";
 import { createEventBus } from "../src/app.js";
 
 // ---------------------------------------------------------------------------
@@ -281,7 +281,7 @@ test("acceptRun throws NonChainTipError for a non-chain-tip run", async () => {
     listStaged: () => stagedEntries,
     outcomes: () => "",
     runReadModel: (runId: string) => ({ campaignId: runId, parentRunId: null, expectedSurface: [], pass: 1, turn: 0, contextTokens: 0 }),
-    getStatus: () => ({ activeRun: null, queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
+    getStatus: () => ({ activeRuns: [], queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
     getReview: () => ({ runs: [] }),
     getTailSnapshot: () => undefined,
     getActiveTailSnapshot: () => null,
@@ -431,7 +431,7 @@ test("acceptRun throws NonChainTipError with chainTip for a non-chain-tip run", 
     listStaged: () => stagedEntries,
     outcomes: () => "",
     runReadModel: (runId: string) => ({ campaignId: runId, parentRunId: null, expectedSurface: [], pass: 1, turn: 0, contextTokens: 0 }),
-    getStatus: () => ({ activeRun: null, queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
+    getStatus: () => ({ activeRuns: [], queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
     getReview: () => ({ runs: [] }),
     getTailSnapshot: () => undefined,
     getActiveTailSnapshot: () => null,
@@ -475,7 +475,7 @@ test("acceptRun throws NonChainTipError with correct chainTip when multiple chai
     listStaged: () => stagedEntries,
     outcomes: () => "",
     runReadModel: (runId: string) => ({ campaignId: runId, parentRunId: null, expectedSurface: [], pass: 1, turn: 0, contextTokens: 0 }),
-    getStatus: () => ({ activeRun: null, queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
+    getStatus: () => ({ activeRuns: [], queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
     getReview: () => ({ runs: [] }),
     getTailSnapshot: () => undefined,
     getActiveTailSnapshot: () => null,
@@ -551,5 +551,93 @@ test("acceptRun (real supervisor) refuses a mid-chain run and names the chain ti
       ok(err instanceof NonChainTipError, "real acceptRun must throw NonChainTipError for a mid-chain run");
       equal(err.chainTip, childRunId, "findChainTip walks the staged ancestry to the real tip");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-run supervisor branches — direct regression for the new contract shape
+// ---------------------------------------------------------------------------
+
+test("getStatus returns multiple active runs", async () => {
+  await withSupervisor(async (supervisor, paths) => {
+    const repo = fakeRepo();
+    const store = SqliteStoreAdapter.create(paths, repo, systemClock);
+
+    const runA = "20260101-000000-a";
+    const runB = "20260101-000000-b";
+    const now = systemClock.nowIso();
+    store.writeMeta(makeTestMeta({ runId: runA, status: "running", queuedAt: now, startedAt: now, updatedAt: now }));
+    store.writeMeta(makeTestMeta({ runId: runB, status: "running", queuedAt: now, startedAt: now, updatedAt: now }));
+    store.addActiveRun({ runId: runA, babySessionId: "sess-a", runDir: "/tmp/a", worktree: "/tmp/a", startedAt: now });
+    store.addActiveRun({ runId: runB, babySessionId: "sess-b", runDir: "/tmp/b", worktree: "/tmp/b", startedAt: now });
+
+    const status = supervisor.getStatus();
+    equal(status.activeRuns.length, 2, "should have 2 active runs");
+    ok(status.activeRuns.some((r) => r.runId === runA), `activeRuns includes ${runA}`);
+    ok(status.activeRuns.some((r) => r.runId === runB), `activeRuns includes ${runB}`);
+  });
+});
+
+test("resolveSpeaker matches a non-first active run baby session", async () => {
+  await withSupervisor(async (supervisor, paths) => {
+    const repo = fakeRepo();
+    const store = SqliteStoreAdapter.create(paths, repo, systemClock);
+
+    const runA = "20260101-000000-a";
+    const runB = "20260101-000000-b";
+    const now = systemClock.nowIso();
+    // First active run (lexically first run_id)
+    store.writeMeta(makeTestMeta({ runId: runA, status: "running", queuedAt: now, startedAt: now, updatedAt: now }));
+    store.writeMeta(makeTestMeta({ runId: runB, status: "running", queuedAt: now, startedAt: now, updatedAt: now }));
+    store.addActiveRun({ runId: runB, babySessionId: "session-b", runDir: "/tmp/b", worktree: "/tmp/b", startedAt: now });
+
+    // resolveSpeaker should return "baby" when runB and session-b match
+    equal(resolveSpeaker(store, runB, "session-b"), "baby", "speaker matches runB session-b");
+    // resolveSpeaker should return undefined when session-a is passed with runB
+    equal(resolveSpeaker(store, runB, "session-a"), undefined, "speaker rejects wrong session");
+    // resolveSpeaker should return undefined for runA with session-b (runA has no babySessionId)
+    equal(resolveSpeaker(store, runA, "session-b"), undefined, "speaker rejects run without session");
+  });
+});
+
+test("_testSyncSubscriptions wires all active runs and convergences", async () => {
+  await withSupervisor(async (supervisor, paths) => {
+    const repo = fakeRepo();
+    const store = SqliteStoreAdapter.create(paths, repo, systemClock);
+
+    const runA = "20260101-000000-a";
+    const runB = "20260101-000000-b";
+    const runC = "20260101-000000-c";
+    const now = systemClock.nowIso();
+    store.writeMeta(makeTestMeta({ runId: runA, status: "running", queuedAt: now, startedAt: now, updatedAt: now }));
+    store.writeMeta(makeTestMeta({ runId: runB, status: "running", queuedAt: now, startedAt: now, updatedAt: now }));
+    store.writeMeta(makeTestMeta({ runId: runC, status: "running", queuedAt: now, startedAt: now, updatedAt: now }));
+
+    // Seed active_run rows
+    store.addActiveRun({ runId: runA, babySessionId: "sess-a", runDir: "/tmp/a", worktree: "/tmp/a", startedAt: now });
+    store.addActiveRun({ runId: runB, babySessionId: "sess-b", runDir: "/tmp/b", worktree: "/tmp/b", startedAt: now });
+    // Seed active_convergence row for runC
+    store.addActiveConvergence({ runId: runC, startedAt: now });
+
+    const ensured: string[] = [];
+    const closed: string[] = [];
+    const subscriptions = new Map<string, { close: () => void }[]>();
+
+    // Seed one existing subscription that should be closed (runX not in active set)
+    subscriptions.set("runX", [{ close: () => { closed.push("runX"); } }]);
+
+    const ensureRun = (meta: RunMeta): void => { ensured.push(meta.runId); };
+    const closeRun = (runId: string): void => { closed.push(runId); };
+
+    _testSyncSubscriptions(store, subscriptions, ensureRun, closeRun);
+
+    // Should have ensured all 3 active runs/convergences
+    equal(ensured.length, 3, "ensureRun called for all active runs and convergences");
+    ok(ensured.includes(runA), `ensured ${runA}`);
+    ok(ensured.includes(runB), `ensured ${runB}`);
+    ok(ensured.includes(runC), `ensured ${runC}`);
+
+    // Should have closed the stale subscription
+    ok(closed.includes("runX"), "closed stale subscription runX");
   });
 });

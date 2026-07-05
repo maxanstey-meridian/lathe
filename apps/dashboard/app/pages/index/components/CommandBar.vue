@@ -15,7 +15,7 @@ defineEmits<{
 
 const status = injectLatheStatus();
 
-const activeRun = computed(() => status.status.value?.activeRun ?? null);
+const activeRuns = computed(() => status.status.value?.activeRuns ?? []);
 const queueCount = computed(() => status.status.value?.queued.length ?? 0);
 const parkedCount = computed(() => status.status.value?.parked.length ?? 0);
 const reviewCount = computed(() => status.status.value?.review.readyForReview ?? 0);
@@ -33,9 +33,11 @@ const reviewCount = computed(() => status.status.value?.review.readyForReview ??
       <span class="text-xs text-slate-500">{{ status.isLive.value ? "live" : "offline" }}</span>
     </div>
 
-    <div v-if="activeRun" class="hidden items-center gap-2 lg:flex">
+    <div v-if="activeRuns.length > 0" class="hidden items-center gap-2 lg:flex">
       <span class="text-xs text-slate-600">|</span>
-      <span class="font-mono text-xs text-slate-400">{{ activeRun.runId }}</span>
+      <span class="font-mono text-xs text-slate-400">
+        {{ activeRuns.length === 1 ? activeRuns[0]?.runId ?? "" : `${activeRuns.length} active` }}
+      </span>
     </div>
 
     <nav class="flex items-center gap-0.5">

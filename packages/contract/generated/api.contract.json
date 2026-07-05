@@ -674,10 +674,10 @@
       "typeParameters": [],
       "properties": [
         {
-          "name": "activeRun",
+          "name": "activeRuns",
           "type": {
-            "kind": "nullable",
-            "inner": {
+            "kind": "array",
+            "element": {
               "kind": "ref",
               "name": "StatusActiveRunDto"
             }

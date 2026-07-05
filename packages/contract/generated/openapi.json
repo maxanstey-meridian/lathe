@@ -931,15 +931,11 @@
       "StatusDto": {
         "type": "object",
         "properties": {
-          "activeRun": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/StatusActiveRunDto"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "activeRuns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusActiveRunDto"
+            }
           },
           "queued": {
             "type": "array",
@@ -976,7 +972,7 @@
           }
         },
         "required": [
-          "activeRun",
+          "activeRuns",
           "queued",
           "parked",
           "campaigns",

@@ -381,35 +381,30 @@ const dbQueue = (env: CliEnv, db: DatabaseSync, _args: string[], jsonMode: boole
 };
 
 const dbActive = (env: CliEnv, db: DatabaseSync, _args: string[], jsonMode: boolean): number => {
-  const runRow = db.prepare("SELECT run FROM active_run ORDER BY run_id LIMIT 1").get() as
-    | { run: string }
-    | undefined;
-  const convRow = db.prepare("SELECT convergence FROM active_convergence ORDER BY run_id LIMIT 1").get() as
-    | { convergence: string }
-    | undefined;
+  const runRows = db.prepare("SELECT run FROM active_run ORDER BY run_id").all() as { run: string }[];
+  const convRows = db.prepare("SELECT convergence FROM active_convergence ORDER BY run_id").all() as { convergence: string }[];
 
-  if (!runRow && !convRow) {
+  if (runRows.length === 0 && convRows.length === 0) {
     env.log("no active run or convergence");
     return 0;
   }
 
-  const active: Obj = {};
-  if (runRow) active.activeRun = parseJson(runRow.run);
-  if (convRow) active.activeConvergence = parseJson(convRow.convergence);
-
   if (jsonMode) {
-    env.log(JSON.stringify(active, null, 2));
+    env.log(JSON.stringify({
+      activeRuns: runRows.map((r) => parseJson(r.run)),
+      activeConvergences: convRows.map((c) => parseJson(c.convergence)),
+    }, null, 2));
     return 0;
   }
 
-  if (active.activeRun) {
-    const r = active.activeRun as Obj;
+  for (const row of runRows) {
+    const r = parseJson(row.run) as Obj;
     env.log(kv("active run", r.runId));
     env.log(kv("session", r.babySessionId));
     env.log(kv("worktree", r.worktree));
   }
-  if (active.activeConvergence) {
-    const c = active.activeConvergence as Obj;
+  for (const row of convRows) {
+    const c = parseJson(row.convergence) as Obj;
     env.log(kv("converging", c.runId));
   }
   return 0;

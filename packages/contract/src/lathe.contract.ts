@@ -98,7 +98,7 @@ export interface StatusStoppedRunDto {
 }
 
 export interface StatusDto {
-  activeRun: StatusActiveRunDto | null;
+  activeRuns: StatusActiveRunDto[];
   queued: StatusQueuedRunDto[];
   parked: StatusParkedRunDto[];
   campaigns: StatusCampaignDto[];

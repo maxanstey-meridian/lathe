@@ -351,7 +351,7 @@ export interface components {
             originalIntent: string;
         };
         StatusDto: {
-            activeRun: components["schemas"]["StatusActiveRunDto"] | null;
+            activeRuns: components["schemas"]["StatusActiveRunDto"][];
             queued: components["schemas"]["StatusQueuedRunDto"][];
             parked: components["schemas"]["StatusParkedRunDto"][];
             campaigns: components["schemas"]["StatusCampaignDto"][];

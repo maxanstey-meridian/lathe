@@ -26,13 +26,18 @@ const closeStopConfirm = (): void => {
   showStopConfirm.value = false;
 };
 
+const tailedRunId = computed(() => tail.state.value.snapshot?.runId ?? null);
+const isActiveRun = computed(() =>
+  tailedRunId.value ? status.status.value?.activeRuns.some((r) => r.runId === tailedRunId.value) ?? false : false,
+);
+
 const handleStop = async (): Promise<void> => {
-  const run = status.status.value?.activeRun;
-  if (!run) {
+  const runId = tailedRunId.value;
+  if (!runId) {
     return;
   }
   try {
-    await actions.stop(run.runId);
+    await actions.stop(runId);
   } catch {
     // Error surfaced via latheActions.lastError
   } finally {
@@ -183,7 +188,7 @@ const isTerminal = computed(() => {
             Reset panes
           </UButton>
           <UButton
-            v-if="status.status.value?.activeRun"
+            v-if="isActiveRun"
             size="xs"
             color="error"
             variant="ghost"
@@ -237,7 +242,7 @@ const isTerminal = computed(() => {
     </div>
 
     <UModal
-      v-if="status.status.value?.activeRun"
+      v-if="isActiveRun"
       :open="showStopConfirm"
       title="Stop this run?"
       :persist="false"
@@ -245,7 +250,7 @@ const isTerminal = computed(() => {
     >
       <template #body>
         <p class="text-sm text-slate-400">
-          Stop <code class="font-mono text-xs text-slate-300">{{ status.status.value.activeRun.runId }}</code>?
+          Stop <code class="font-mono text-xs text-slate-300">{{ tailedRunId }}</code>?
         </p>
       </template>
       <template #footer>

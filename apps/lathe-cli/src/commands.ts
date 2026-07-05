@@ -359,13 +359,15 @@ const openTailDeps = (): TailDeps => {
 const renderStatusDto = (status: StatusDto): string => {
   const lines: string[] = [];
 
-  if (status.activeRun) {
-    lines.push(`ACTIVE: ${status.activeRun.runId}  (${status.activeRun.outcomes})`);
-    if (status.activeRun.gateLatched) {
-      lines.push(`  gate latched: ${status.activeRun.gateLatched}`);
-    }
-    for (const event of status.activeRun.recentEvents) {
-      lines.push(`  ${event.at.slice(11, 19)} ${event.event}`);
+  if (status.activeRuns.length > 0) {
+    for (const run of status.activeRuns) {
+      lines.push(`ACTIVE: ${run.runId}  (${run.outcomes})`);
+      if (run.gateLatched) {
+        lines.push(`  gate latched: ${run.gateLatched}`);
+      }
+      for (const event of run.recentEvents) {
+        lines.push(`  ${event.at.slice(11, 19)} ${event.event}`);
+      }
     }
   } else {
     lines.push("no active run");

@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { test } from "vitest";
 
 import { connectLatheStatusLiveUpdates, REFRESH_EVENT_KINDS } from "../app/pages/index/composables/lathe-status-live";
 

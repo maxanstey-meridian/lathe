@@ -244,12 +244,112 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["lathe_getSettings"];
+        put: operations["lathe_updateSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["lathe_restart"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/runs/{runId}/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["lathe_getDecisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/runs/{runId}/outcomes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["lathe_getOutcomes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/runs/{runId}/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["lathe_getReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/runs/{runId}/convergence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["lathe_getConvergence"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         AnswerRunRequest: {
             answer: string;
+        };
+        CommitMessageDto: {
+            subject: string;
+            body: string;
         };
         ConfigDto: {
             models: components["schemas"]["ModelConfigDto"];
@@ -260,6 +360,36 @@ export interface components {
                 turnSteps: number;
             };
         };
+        ConvergeDecisionDto: components["schemas"]["ConvergeDecisionDto_Author"] | components["schemas"]["ConvergeDecisionDto_Stop"] | components["schemas"]["ConvergeDecisionDto_Escalate"];
+        ConvergenceLogEntryDto: components["schemas"]["ConvergenceLogEntryDto_Reviewed"] | components["schemas"]["ConvergenceLogEntryDto_Unreachable"];
+        ConvergenceSignalDto: {
+            recommend_stop: boolean;
+            profile: {
+                p0: number;
+                p1: number;
+                p2: number;
+                p3: number;
+            };
+            rationale: string;
+        };
+        DecisionDto: {
+            timestamp: string;
+            /** @enum {string} */
+            source: "daddy" | "max";
+            questionType: string;
+            currentSlice?: string;
+            question: string;
+            approach?: string;
+            evidence: string[];
+            status: string;
+            answer: string;
+            constraints: string[];
+            evidenceUsed?: string[];
+            safeNextAction?: string;
+            humanDecisionNeeded?: string | null;
+            reconciliation?: components["schemas"]["ReconciliationDto"];
+            messageId?: string;
+        };
         EnqueueChainRequest: {
             chainDir: string;
         };
@@ -269,6 +399,23 @@ export interface components {
         };
         EnqueueRunRequest: {
             packetPath: string;
+        };
+        ErrorResponse: {
+            code: string;
+            message: string;
+        };
+        FindingDto: {
+            id: string;
+            severity: components["schemas"]["FindingSeverityDto"];
+            title: string;
+            evidence: string[];
+            grounding: components["schemas"]["FindingGroundingDto"];
+            suggested_outcome_id?: string;
+        };
+        FindingGroundingDto: {
+            /** @enum {string} */
+            kind: "command_fail" | "clause" | "none";
+            ref: string;
         };
         ModelConfigDto: {
             baby: {
@@ -284,8 +431,34 @@ export interface components {
                 modelId: string;
             };
         };
+        OutcomeEntryDto: {
+            id: string;
+            description: string;
+            /** @enum {string} */
+            status: "not_started" | "in_progress" | "done" | "blocked";
+            evidence: string[];
+            state?: string;
+            nextAction?: string;
+            updatedAt: string;
+        };
+        OutcomeLedgerDto: {
+            runId: string;
+            outcomes: components["schemas"]["OutcomeEntryDto"][];
+            updatedAt: string;
+        };
+        ReconciliationDto: {
+            fingerprint: string;
+            reused: boolean;
+            deltaKind?: string;
+        };
         RejectRunRequest: {
             reason?: string | null;
+        };
+        ReportDto: {
+            report: string;
+        };
+        RestartResponseDto: {
+            restarting: boolean;
         };
         ReviewDto: {
             runs: components["schemas"]["ReviewRunDto"][];
@@ -334,6 +507,101 @@ export interface components {
             startedAt: string;
             updatedAt: string;
         };
+        SettingsBabyDto: {
+            providerId: string;
+            modelId: string;
+            baseUrl: string;
+            apiKey: string;
+            agent: string;
+            contextWindow: number;
+            timeoutMs: number;
+            turnSteps: number;
+            /** @enum {string} */
+            thinkingMode: "budget" | "disabled";
+            thinkingBudget: number | null;
+            promoteTo?: components["schemas"]["SettingsBabyPromoteToDto"];
+        };
+        SettingsBabyPromoteToDto: {
+            providerId: string;
+            modelId: string;
+        };
+        SettingsConcurrencyDto: {
+            maxWorkers: number;
+        };
+        SettingsDaddyDto: {
+            providerId: string;
+            modelId: string;
+            agent: string;
+            timeoutMs: number;
+        };
+        SettingsDaemonDto: {
+            host: string;
+            port: number;
+        };
+        SettingsDto: {
+            stateRoot: string;
+            opencode: components["schemas"]["SettingsOpencodeDto"];
+            daddy: components["schemas"]["SettingsDaddyDto"];
+            baby: components["schemas"]["SettingsBabyDto"];
+            superdaddy: components["schemas"]["SettingsSuperdaddyDto"];
+            thresholds: components["schemas"]["SettingsThresholdsDto"];
+            idleTimeoutMs: number;
+            concurrency: components["schemas"]["SettingsConcurrencyDto"];
+            daemon: components["schemas"]["SettingsDaemonDto"];
+            mutationCommandPatterns: string[];
+            repos: {
+                [key: string]: components["schemas"]["SettingsRepoDto"];
+            };
+        };
+        SettingsOpencodeDto: {
+            binary: string;
+            port: number;
+            bridgePort: number;
+            expectedVersion: string;
+        };
+        SettingsRepoDto: {
+            seed: components["schemas"]["SettingsRepoSeedDto"];
+        };
+        SettingsRepoSeedDto: {
+            copies: string[];
+            writes: {
+                [key: string]: string;
+            };
+        };
+        SettingsSuperdaddyDto: {
+            providerId: string;
+            modelId: string;
+            agent: string;
+            timeoutMs: number;
+            baseUrl: string;
+            headerTimeoutMs: number;
+            apiKey?: string;
+            turnSteps: number;
+            skillPath: string;
+            packetSkillPath: string;
+            diffCapBytes: number;
+            transportRetries: number;
+        };
+        SettingsThresholdsDto: {
+            rotationFraction: number;
+            ladderParkAt: number;
+            ladderRotateAt: number;
+            checkpointNudgeMs: number;
+            checkpointToolCalls: number;
+            checkpointFiles: number;
+            checkpointLoc: number;
+            reportRejectionParkAt: number;
+            checkpointBounceLimit: number;
+            verificationTimeoutMs: number;
+            maxPasses: number;
+            maxReviewerUnreachable: number;
+            promoteAtCap: boolean;
+            maxStallRetries: number;
+            maxCrashRetries: number;
+            maxReorientRetries: number;
+            maxRunMs: number;
+            contextTokensFloor: number;
+        };
         StatusActiveRunDto: {
             runId: string;
             outcomes: string;
@@ -379,6 +647,15 @@ export interface components {
         StatusStoppedRunDto: {
             runId: string;
             status: string;
+        };
+        SuperReviewDto: {
+            /** @enum {string} */
+            verdict: "accept" | "request_changes" | "escalate";
+            findings: components["schemas"]["FindingDto"][];
+            convergence: components["schemas"]["ConvergenceSignalDto"];
+            commit_message: components["schemas"]["CommitMessageDto"] | null;
+            notes: string;
+            human_decision_needed: string | null;
         };
         TailJournalLineDto: {
             seq: number;
@@ -448,10 +725,80 @@ export interface components {
             body: string;
             problems: string[];
         };
+        VerificationResultDto: {
+            command: string;
+            exitCode: number;
+            outputTail: string;
+        };
+        /** @enum {string} */
+        FindingSeverityDto: "P0" | "P1" | "P2" | "P3";
         /** @enum {string} */
         RunStatus: "queued" | "running" | "paused" | "converged" | "accepted" | "stopped" | "failed";
         /** @enum {string} */
         TailRunStatus: "queued" | "running" | "interrupted" | "ready_for_review" | "blocked" | "failed" | "accepted" | "stopped";
+        ConvergeDecisionDto_Author: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "author";
+            blockers: components["schemas"]["FindingDto"][];
+            promote: boolean;
+        };
+        ConvergeDecisionDto_Stop: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "stop";
+        };
+        ConvergeDecisionDto_Escalate: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "escalate";
+            reason: string;
+        };
+        ConvergenceLogEntryDto_Reviewed: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "reviewed";
+            at: string;
+            runId: string;
+            campaignId: string;
+            pass: number;
+            maxPasses: number;
+            verification: {
+                green: boolean;
+                commands: components["schemas"]["VerificationResultDto"][];
+            };
+            decision: components["schemas"]["ConvergeDecisionDto"];
+            amendedCommitSha?: string | null;
+            primary: components["schemas"]["SuperReviewDto"];
+            primaryRaw: string;
+        };
+        ConvergenceLogEntryDto_Unreachable: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "unreachable";
+            at: string;
+            runId: string;
+            campaignId: string;
+            pass: number;
+            maxPasses: number;
+            verification: {
+                green: boolean;
+                commands: components["schemas"]["VerificationResultDto"][];
+            };
+            detail: string;
+            attempt: number;
+            budget: number;
+        };
     };
     responses: never;
     parameters: never;
@@ -503,6 +850,24 @@ export interface operations {
                     "application/json": components["schemas"]["RunSummaryDto"];
                 };
             };
+            /** @description invalid packet */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     lathe_enqueueContent: {
@@ -525,6 +890,24 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunSummaryDto"];
+                };
+            };
+            /** @description invalid packet */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -571,6 +954,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunDetailDto"];
+                };
+            };
+            /** @description run not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -659,6 +1051,24 @@ export interface operations {
                     "application/json": components["schemas"]["RunSummaryDto"];
                 };
             };
+            /** @description run not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description run is terminal */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     lathe_answerRun: {
@@ -685,6 +1095,24 @@ export interface operations {
                     "application/json": components["schemas"]["RunSummaryDto"];
                 };
             };
+            /** @description run not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description run is not answerable */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     lathe_acceptRun: {
@@ -705,6 +1133,24 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunSummaryDto"];
+                };
+            };
+            /** @description run not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description not a chain tip or accept refused */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -733,6 +1179,24 @@ export interface operations {
                     "application/json": components["schemas"]["RunSummaryDto"];
                 };
             };
+            /** @description run not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description run is terminal */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     lathe_requeueRun: {
@@ -753,6 +1217,24 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunSummaryDto"];
+                };
+            };
+            /** @description run not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description run is terminal */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -815,6 +1297,221 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TailSnapshotDto"];
+                };
+            };
+            /** @description run not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    lathe_getSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsDto"];
+                };
+            };
+        };
+    };
+    lathe_updateSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsDto"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsDto"];
+                };
+            };
+            /** @description invalid config body */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    lathe_restart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestartResponseDto"];
+                };
+            };
+            /** @description restart not available */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    lathe_getDecisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionDto"][];
+                };
+            };
+            /** @description run not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    lathe_getOutcomes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutcomeLedgerDto"];
+                };
+            };
+            /** @description run not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    lathe_getReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportDto"];
+                };
+            };
+            /** @description run not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    lathe_getConvergence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConvergenceLogEntryDto"][];
+                };
+            };
+            /** @description run not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };

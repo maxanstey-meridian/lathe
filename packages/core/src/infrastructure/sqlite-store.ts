@@ -47,6 +47,7 @@ import {
   stampBase,
   extractRepoFromYaml,
   extractBaseFromYaml,
+  extractPromotedFromYaml,
 } from "../domain/packet.js";
 import { RunMeta as RunMetaSchema } from "../domain/run.js";
 import { ReviewState as ReviewStateSchema } from "../domain/run.js";
@@ -571,7 +572,7 @@ export class SqliteStoreAdapter implements Store {
       crashRetries: 0,
       reorientRetries: 0,
       reviewerUnreachable: 0,
-      promoted: false,
+      promoted: shape.packet.frontmatter.promoted,
       updatedAt: this.clock.nowIso(),
     });
   }
@@ -631,7 +632,7 @@ export class SqliteStoreAdapter implements Store {
       crashRetries: 0,
       reorientRetries: 0,
       reviewerUnreachable: 0,
-      promoted: false,
+      promoted: extractPromotedFromYaml(raw),
       updatedAt: this.clock.nowIso(),
     };
   }

@@ -69,11 +69,14 @@ export const writeOpencodeConfig = (
             name: config.baby.modelId,
             limit: { context: config.baby.contextWindow, output: 16_384 },
             // Forwarded into oMLX's ChatCompletionRequest body (grounded in its
-            // OpenAPI schema). On reaching it the server forces `</think>` and
-            // Baby answers — see config.baby.thinkingBudget. Omitted when null.
-            ...(config.baby.thinkingBudget !== null
-              ? { options: { thinking_budget: config.baby.thinkingBudget } }
-              : {}),
+            // OpenAPI schema). "disabled" sends think:false — no reasoning at
+            // all. "budget" sends thinking_budget:N — server forces </think> on
+            // hitting it. Omitted entirely when budget mode + null budget.
+            ...(config.baby.thinkingMode === "disabled"
+              ? { options: { think: false } }
+              : config.baby.thinkingBudget !== null
+                ? { options: { thinking_budget: config.baby.thinkingBudget } }
+                : {}),
           },
         },
       },

@@ -15,6 +15,28 @@
       ]
     },
     {
+      "name": "CommitMessageDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "subject",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "body",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
       "name": "ConfigDto",
       "typeParameters": [],
       "properties": [
@@ -66,6 +88,507 @@
       ]
     },
     {
+      "name": "ConvergeDecisionDto",
+      "typeParameters": [],
+      "type": {
+        "kind": "taggedUnion",
+        "discriminator": "action",
+        "variants": [
+          {
+            "tag": "author",
+            "type": {
+              "kind": "inlineObject",
+              "properties": [
+                {
+                  "name": "action",
+                  "type": {
+                    "kind": "stringUnion",
+                    "values": [
+                      "author"
+                    ]
+                  }
+                },
+                {
+                  "name": "blockers",
+                  "type": {
+                    "kind": "array",
+                    "element": {
+                      "kind": "ref",
+                      "name": "FindingDto"
+                    }
+                  }
+                },
+                {
+                  "name": "promote",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "boolean"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "tag": "stop",
+            "type": {
+              "kind": "inlineObject",
+              "properties": [
+                {
+                  "name": "action",
+                  "type": {
+                    "kind": "stringUnion",
+                    "values": [
+                      "stop"
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "tag": "escalate",
+            "type": {
+              "kind": "inlineObject",
+              "properties": [
+                {
+                  "name": "action",
+                  "type": {
+                    "kind": "stringUnion",
+                    "values": [
+                      "escalate"
+                    ]
+                  }
+                },
+                {
+                  "name": "reason",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "string"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ConvergenceLogEntryDto",
+      "typeParameters": [],
+      "type": {
+        "kind": "taggedUnion",
+        "discriminator": "kind",
+        "variants": [
+          {
+            "tag": "reviewed",
+            "type": {
+              "kind": "inlineObject",
+              "properties": [
+                {
+                  "name": "kind",
+                  "type": {
+                    "kind": "stringUnion",
+                    "values": [
+                      "reviewed"
+                    ]
+                  }
+                },
+                {
+                  "name": "at",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "string"
+                  }
+                },
+                {
+                  "name": "runId",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "string"
+                  }
+                },
+                {
+                  "name": "campaignId",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "string"
+                  }
+                },
+                {
+                  "name": "pass",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "number"
+                  }
+                },
+                {
+                  "name": "maxPasses",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "number"
+                  }
+                },
+                {
+                  "name": "verification",
+                  "type": {
+                    "kind": "inlineObject",
+                    "properties": [
+                      {
+                        "name": "green",
+                        "type": {
+                          "kind": "primitive",
+                          "type": "boolean"
+                        }
+                      },
+                      {
+                        "name": "commands",
+                        "type": {
+                          "kind": "array",
+                          "element": {
+                            "kind": "ref",
+                            "name": "VerificationResultDto"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "name": "decision",
+                  "type": {
+                    "kind": "ref",
+                    "name": "ConvergeDecisionDto"
+                  }
+                },
+                {
+                  "name": "amendedCommitSha",
+                  "type": {
+                    "kind": "nullable",
+                    "inner": {
+                      "kind": "primitive",
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "name": "primary",
+                  "type": {
+                    "kind": "ref",
+                    "name": "SuperReviewDto"
+                  }
+                },
+                {
+                  "name": "primaryRaw",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "string"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "tag": "unreachable",
+            "type": {
+              "kind": "inlineObject",
+              "properties": [
+                {
+                  "name": "kind",
+                  "type": {
+                    "kind": "stringUnion",
+                    "values": [
+                      "unreachable"
+                    ]
+                  }
+                },
+                {
+                  "name": "at",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "string"
+                  }
+                },
+                {
+                  "name": "runId",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "string"
+                  }
+                },
+                {
+                  "name": "campaignId",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "string"
+                  }
+                },
+                {
+                  "name": "pass",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "number"
+                  }
+                },
+                {
+                  "name": "maxPasses",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "number"
+                  }
+                },
+                {
+                  "name": "verification",
+                  "type": {
+                    "kind": "inlineObject",
+                    "properties": [
+                      {
+                        "name": "green",
+                        "type": {
+                          "kind": "primitive",
+                          "type": "boolean"
+                        }
+                      },
+                      {
+                        "name": "commands",
+                        "type": {
+                          "kind": "array",
+                          "element": {
+                            "kind": "ref",
+                            "name": "VerificationResultDto"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "name": "detail",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "string"
+                  }
+                },
+                {
+                  "name": "attempt",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "number"
+                  }
+                },
+                {
+                  "name": "budget",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "number"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ConvergenceSignalDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "recommend_stop",
+          "type": {
+            "kind": "primitive",
+            "type": "boolean"
+          },
+          "optional": false
+        },
+        {
+          "name": "profile",
+          "type": {
+            "kind": "inlineObject",
+            "properties": [
+              {
+                "name": "p0",
+                "type": {
+                  "kind": "primitive",
+                  "type": "number"
+                }
+              },
+              {
+                "name": "p1",
+                "type": {
+                  "kind": "primitive",
+                  "type": "number"
+                }
+              },
+              {
+                "name": "p2",
+                "type": {
+                  "kind": "primitive",
+                  "type": "number"
+                }
+              },
+              {
+                "name": "p3",
+                "type": {
+                  "kind": "primitive",
+                  "type": "number"
+                }
+              }
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "rationale",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "DecisionDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "timestamp",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "source",
+          "type": {
+            "kind": "stringUnion",
+            "values": [
+              "daddy",
+              "max"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "questionType",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "currentSlice",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": true
+        },
+        {
+          "name": "question",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "approach",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": true
+        },
+        {
+          "name": "evidence",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "status",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "answer",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "constraints",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "evidenceUsed",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": true
+        },
+        {
+          "name": "safeNextAction",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": true
+        },
+        {
+          "name": "humanDecisionNeeded",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": true
+        },
+        {
+          "name": "reconciliation",
+          "type": {
+            "kind": "ref",
+            "name": "ReconciliationDto"
+          },
+          "optional": true
+        },
+        {
+          "name": "messageId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": true
+        }
+      ]
+    },
+    {
       "name": "EnqueueChainRequest",
       "typeParameters": [],
       "properties": [
@@ -107,6 +630,111 @@
       "properties": [
         {
           "name": "packetPath",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "ErrorResponse",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "code",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "message",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "FindingDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "severity",
+          "type": {
+            "kind": "ref",
+            "name": "FindingSeverityDto"
+          },
+          "optional": false
+        },
+        {
+          "name": "title",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "evidence",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "grounding",
+          "type": {
+            "kind": "ref",
+            "name": "FindingGroundingDto"
+          },
+          "optional": false
+        },
+        {
+          "name": "suggested_outcome_id",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": true
+        }
+      ]
+    },
+    {
+      "name": "FindingGroundingDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "kind",
+          "type": {
+            "kind": "stringUnion",
+            "values": [
+              "command_fail",
+              "clause",
+              "none"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "ref",
           "type": {
             "kind": "primitive",
             "type": "string"
@@ -191,6 +819,139 @@
       ]
     },
     {
+      "name": "OutcomeEntryDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "description",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "status",
+          "type": {
+            "kind": "stringUnion",
+            "values": [
+              "not_started",
+              "in_progress",
+              "done",
+              "blocked"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "evidence",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "state",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": true
+        },
+        {
+          "name": "nextAction",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": true
+        },
+        {
+          "name": "updatedAt",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "OutcomeLedgerDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "outcomes",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "OutcomeEntryDto"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "updatedAt",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "ReconciliationDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "fingerprint",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "reused",
+          "type": {
+            "kind": "primitive",
+            "type": "boolean"
+          },
+          "optional": false
+        },
+        {
+          "name": "deltaKind",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": true
+        }
+      ]
+    },
+    {
       "name": "RejectRunRequest",
       "typeParameters": [],
       "properties": [
@@ -204,6 +965,34 @@
             }
           },
           "optional": true
+        }
+      ]
+    },
+    {
+      "name": "ReportDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "report",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "RestartResponseDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "restarting",
+          "type": {
+            "kind": "primitive",
+            "type": "boolean"
+          },
+          "optional": false
         }
       ]
     },
@@ -565,6 +1354,634 @@
       ]
     },
     {
+      "name": "SettingsBabyDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "providerId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "modelId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "baseUrl",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "apiKey",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "agent",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "contextWindow",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "timeoutMs",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "turnSteps",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "thinkingMode",
+          "type": {
+            "kind": "stringUnion",
+            "values": [
+              "budget",
+              "disabled"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "thinkingBudget",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "number"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "promoteTo",
+          "type": {
+            "kind": "ref",
+            "name": "SettingsBabyPromoteToDto"
+          },
+          "optional": true
+        }
+      ]
+    },
+    {
+      "name": "SettingsBabyPromoteToDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "providerId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "modelId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "SettingsConcurrencyDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "maxWorkers",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "SettingsDaddyDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "providerId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "modelId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "agent",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "timeoutMs",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "SettingsDaemonDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "host",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "port",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "SettingsDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "stateRoot",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "opencode",
+          "type": {
+            "kind": "ref",
+            "name": "SettingsOpencodeDto"
+          },
+          "optional": false
+        },
+        {
+          "name": "daddy",
+          "type": {
+            "kind": "ref",
+            "name": "SettingsDaddyDto"
+          },
+          "optional": false
+        },
+        {
+          "name": "baby",
+          "type": {
+            "kind": "ref",
+            "name": "SettingsBabyDto"
+          },
+          "optional": false
+        },
+        {
+          "name": "superdaddy",
+          "type": {
+            "kind": "ref",
+            "name": "SettingsSuperdaddyDto"
+          },
+          "optional": false
+        },
+        {
+          "name": "thresholds",
+          "type": {
+            "kind": "ref",
+            "name": "SettingsThresholdsDto"
+          },
+          "optional": false
+        },
+        {
+          "name": "idleTimeoutMs",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "concurrency",
+          "type": {
+            "kind": "ref",
+            "name": "SettingsConcurrencyDto"
+          },
+          "optional": false
+        },
+        {
+          "name": "daemon",
+          "type": {
+            "kind": "ref",
+            "name": "SettingsDaemonDto"
+          },
+          "optional": false
+        },
+        {
+          "name": "mutationCommandPatterns",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "repos",
+          "type": {
+            "kind": "dictionary",
+            "value": {
+              "kind": "ref",
+              "name": "SettingsRepoDto"
+            }
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "SettingsOpencodeDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "binary",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "port",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "bridgePort",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "expectedVersion",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "SettingsRepoDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "seed",
+          "type": {
+            "kind": "ref",
+            "name": "SettingsRepoSeedDto"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "SettingsRepoSeedDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "copies",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "writes",
+          "type": {
+            "kind": "dictionary",
+            "value": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "SettingsSuperdaddyDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "providerId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "modelId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "agent",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "timeoutMs",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "baseUrl",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "headerTimeoutMs",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "apiKey",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": true
+        },
+        {
+          "name": "turnSteps",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "skillPath",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "packetSkillPath",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "diffCapBytes",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "transportRetries",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "SettingsThresholdsDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "rotationFraction",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "ladderParkAt",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "ladderRotateAt",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "checkpointNudgeMs",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "checkpointToolCalls",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "checkpointFiles",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "checkpointLoc",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "reportRejectionParkAt",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "checkpointBounceLimit",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "verificationTimeoutMs",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "maxPasses",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "maxReviewerUnreachable",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "promoteAtCap",
+          "type": {
+            "kind": "primitive",
+            "type": "boolean"
+          },
+          "optional": false
+        },
+        {
+          "name": "maxStallRetries",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "maxCrashRetries",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "maxReorientRetries",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "maxRunMs",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "contextTokensFloor",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
       "name": "StatusActiveRunDto",
       "typeParameters": [],
       "properties": [
@@ -871,6 +2288,73 @@
           "type": {
             "kind": "primitive",
             "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "SuperReviewDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "verdict",
+          "type": {
+            "kind": "stringUnion",
+            "values": [
+              "accept",
+              "request_changes",
+              "escalate"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "findings",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "FindingDto"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "convergence",
+          "type": {
+            "kind": "ref",
+            "name": "ConvergenceSignalDto"
+          },
+          "optional": false
+        },
+        {
+          "name": "commit_message",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "ref",
+              "name": "CommitMessageDto"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "notes",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "human_decision_needed",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
           },
           "optional": false
         }
@@ -1364,9 +2848,48 @@
           "optional": false
         }
       ]
+    },
+    {
+      "name": "VerificationResultDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "command",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "exitCode",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "outputTail",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
     }
   ],
   "enums": [
+    {
+      "name": "FindingSeverityDto",
+      "values": [
+        "P0",
+        "P1",
+        "P2",
+        "P3"
+      ]
+    },
     {
       "name": "RunStatus",
       "values": [
@@ -1421,6 +2944,22 @@
             "kind": "ref",
             "name": "RunSummaryDto"
           }
+        },
+        {
+          "statusCode": 400,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "invalid packet"
+        },
+        {
+          "statusCode": 500,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "internal error"
         }
       ]
     },
@@ -1451,6 +2990,22 @@
             "kind": "ref",
             "name": "RunSummaryDto"
           }
+        },
+        {
+          "statusCode": 400,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "invalid packet"
+        },
+        {
+          "statusCode": 500,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "internal error"
         }
       ]
     },
@@ -1543,6 +3098,14 @@
             "kind": "ref",
             "name": "RunDetailDto"
           }
+        },
+        {
+          "statusCode": 404,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run not found"
         }
       ]
     },
@@ -1643,6 +3206,22 @@
             "kind": "ref",
             "name": "RunSummaryDto"
           }
+        },
+        {
+          "statusCode": 404,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run not found"
+        },
+        {
+          "statusCode": 409,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run is terminal"
         }
       ]
     },
@@ -1682,6 +3261,22 @@
             "kind": "ref",
             "name": "RunSummaryDto"
           }
+        },
+        {
+          "statusCode": 404,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run not found"
+        },
+        {
+          "statusCode": 409,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run is not answerable"
         }
       ]
     },
@@ -1712,6 +3307,22 @@
             "kind": "ref",
             "name": "RunSummaryDto"
           }
+        },
+        {
+          "statusCode": 404,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run not found"
+        },
+        {
+          "statusCode": 409,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "not a chain tip or accept refused"
         }
       ]
     },
@@ -1751,6 +3362,22 @@
             "kind": "ref",
             "name": "RunSummaryDto"
           }
+        },
+        {
+          "statusCode": 404,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run not found"
+        },
+        {
+          "statusCode": 409,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run is terminal"
         }
       ]
     },
@@ -1781,6 +3408,22 @@
             "kind": "ref",
             "name": "RunSummaryDto"
           }
+        },
+        {
+          "statusCode": 404,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run not found"
+        },
+        {
+          "statusCode": 409,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run is terminal"
         }
       ]
     },
@@ -1857,6 +3500,264 @@
             "kind": "ref",
             "name": "TailSnapshotDto"
           }
+        },
+        {
+          "statusCode": 404,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run not found"
+        }
+      ]
+    },
+    {
+      "name": "getSettings",
+      "httpMethod": "GET",
+      "routeTemplate": "/settings",
+      "params": [],
+      "returnType": {
+        "kind": "ref",
+        "name": "SettingsDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "ref",
+            "name": "SettingsDto"
+          }
+        }
+      ]
+    },
+    {
+      "name": "updateSettings",
+      "httpMethod": "PUT",
+      "routeTemplate": "/settings",
+      "params": [
+        {
+          "name": "body",
+          "type": {
+            "kind": "ref",
+            "name": "SettingsDto"
+          },
+          "source": "body",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "ref",
+        "name": "SettingsDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "ref",
+            "name": "SettingsDto"
+          }
+        },
+        {
+          "statusCode": 400,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "invalid config body"
+        }
+      ]
+    },
+    {
+      "name": "restart",
+      "httpMethod": "POST",
+      "routeTemplate": "/restart",
+      "params": [],
+      "returnType": {
+        "kind": "ref",
+        "name": "RestartResponseDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "ref",
+            "name": "RestartResponseDto"
+          }
+        },
+        {
+          "statusCode": 400,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "restart not available"
+        }
+      ]
+    },
+    {
+      "name": "getDecisions",
+      "httpMethod": "GET",
+      "routeTemplate": "/runs/{runId}/decisions",
+      "params": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "source": "route",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "array",
+        "element": {
+          "kind": "ref",
+          "name": "DecisionDto"
+        }
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "DecisionDto"
+            }
+          }
+        },
+        {
+          "statusCode": 404,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run not found"
+        }
+      ]
+    },
+    {
+      "name": "getOutcomes",
+      "httpMethod": "GET",
+      "routeTemplate": "/runs/{runId}/outcomes",
+      "params": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "source": "route",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "ref",
+        "name": "OutcomeLedgerDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "ref",
+            "name": "OutcomeLedgerDto"
+          }
+        },
+        {
+          "statusCode": 404,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run not found"
+        }
+      ]
+    },
+    {
+      "name": "getReport",
+      "httpMethod": "GET",
+      "routeTemplate": "/runs/{runId}/report",
+      "params": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "source": "route",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "ref",
+        "name": "ReportDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "ref",
+            "name": "ReportDto"
+          }
+        },
+        {
+          "statusCode": 404,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run not found"
+        }
+      ]
+    },
+    {
+      "name": "getConvergence",
+      "httpMethod": "GET",
+      "routeTemplate": "/runs/{runId}/convergence",
+      "params": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "source": "route",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "array",
+        "element": {
+          "kind": "ref",
+          "name": "ConvergenceLogEntryDto"
+        }
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "ConvergenceLogEntryDto"
+            }
+          }
+        },
+        {
+          "statusCode": 404,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run not found"
         }
       ]
     }

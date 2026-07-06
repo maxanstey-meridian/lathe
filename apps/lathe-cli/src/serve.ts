@@ -72,7 +72,7 @@ export const startDaemon = async (deps?: DaemonDeps, userPort?: number): Promise
     cors: true,
     onRestart: () => {
       const [bin, ...args] = process.argv;
-      const escapedCommand = [bin, ...args].map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
+      const escapedCommand = [bin, ...args].filter((a): a is string => a !== undefined).map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
       spawn("sh", ["-c", `sleep 1; exec ${escapedCommand}`], {
         detached: true,
         stdio: "ignore",

@@ -188,6 +188,245 @@ export interface ConfigDto {
   };
 }
 
+/* ------------------- settings & restart DTOs ------------------- */
+
+export interface ErrorResponse {
+  code: string;
+  message: string;
+}
+
+export interface RestartResponseDto {
+  restarting: boolean;
+}
+
+export interface ReportDto {
+  report: string;
+}
+
+export interface SettingsOpencodeDto {
+  binary: string;
+  port: number;
+  bridgePort: number;
+  expectedVersion: string;
+}
+
+export interface SettingsDaddyDto {
+  providerId: string;
+  modelId: string;
+  agent: string;
+  timeoutMs: number;
+}
+
+export interface SettingsBabyPromoteToDto {
+  providerId: string;
+  modelId: string;
+}
+
+export interface SettingsBabyDto {
+  providerId: string;
+  modelId: string;
+  baseUrl: string;
+  apiKey: string;
+  agent: string;
+  contextWindow: number;
+  timeoutMs: number;
+  turnSteps: number;
+  thinkingMode: "budget" | "disabled";
+  thinkingBudget: number | null;
+  promoteTo?: SettingsBabyPromoteToDto;
+}
+
+export interface SettingsSuperdaddyDto {
+  providerId: string;
+  modelId: string;
+  agent: string;
+  timeoutMs: number;
+  baseUrl: string;
+  headerTimeoutMs: number;
+  apiKey?: string;
+  turnSteps: number;
+  skillPath: string;
+  packetSkillPath: string;
+  diffCapBytes: number;
+  transportRetries: number;
+}
+
+export interface SettingsThresholdsDto {
+  rotationFraction: number;
+  ladderParkAt: number;
+  ladderRotateAt: number;
+  checkpointNudgeMs: number;
+  checkpointToolCalls: number;
+  checkpointFiles: number;
+  checkpointLoc: number;
+  reportRejectionParkAt: number;
+  checkpointBounceLimit: number;
+  verificationTimeoutMs: number;
+  maxPasses: number;
+  maxReviewerUnreachable: number;
+  promoteAtCap: boolean;
+  maxStallRetries: number;
+  maxCrashRetries: number;
+  maxReorientRetries: number;
+  maxRunMs: number;
+  contextTokensFloor: number;
+}
+
+export interface SettingsConcurrencyDto {
+  maxWorkers: number;
+}
+
+export interface SettingsDaemonDto {
+  host: string;
+  port: number;
+}
+
+export interface SettingsRepoSeedDto {
+  copies: string[];
+  writes: Record<string, string>;
+}
+
+export interface SettingsRepoDto {
+  seed: SettingsRepoSeedDto;
+}
+
+export interface SettingsDto {
+  stateRoot: string;
+  opencode: SettingsOpencodeDto;
+  daddy: SettingsDaddyDto;
+  baby: SettingsBabyDto;
+  superdaddy: SettingsSuperdaddyDto;
+  thresholds: SettingsThresholdsDto;
+  idleTimeoutMs: number;
+  concurrency: SettingsConcurrencyDto;
+  daemon: SettingsDaemonDto;
+  mutationCommandPatterns: string[];
+  repos: Record<string, SettingsRepoDto>;
+}
+
+/* ------------------- run ledger DTOs ------------------- */
+
+export interface ReconciliationDto {
+  fingerprint: string;
+  reused: boolean;
+  deltaKind?: string;
+}
+
+export interface DecisionDto {
+  timestamp: string;
+  source: "daddy" | "max";
+  questionType: string;
+  currentSlice?: string;
+  question: string;
+  approach?: string;
+  evidence: string[];
+  status: string;
+  answer: string;
+  constraints: string[];
+  evidenceUsed?: string[];
+  safeNextAction?: string;
+  humanDecisionNeeded?: string | null;
+  reconciliation?: ReconciliationDto;
+  messageId?: string;
+}
+
+export interface OutcomeEntryDto {
+  id: string;
+  description: string;
+  status: "not_started" | "in_progress" | "done" | "blocked";
+  evidence: string[];
+  state?: string;
+  nextAction?: string;
+  updatedAt: string;
+}
+
+export interface OutcomeLedgerDto {
+  runId: string;
+  outcomes: OutcomeEntryDto[];
+  updatedAt: string;
+}
+
+/* ------------------- convergence DTOs ------------------- */
+
+export type FindingSeverityDto = "P0" | "P1" | "P2" | "P3";
+
+export interface FindingGroundingDto {
+  kind: "command_fail" | "clause" | "none";
+  ref: string;
+}
+
+export interface FindingDto {
+  id: string;
+  severity: FindingSeverityDto;
+  title: string;
+  evidence: string[];
+  grounding: FindingGroundingDto;
+  suggested_outcome_id?: string;
+}
+
+export interface ConvergenceSignalDto {
+  recommend_stop: boolean;
+  profile: {
+    p0: number;
+    p1: number;
+    p2: number;
+    p3: number;
+  };
+  rationale: string;
+}
+
+export interface CommitMessageDto {
+  subject: string;
+  body: string;
+}
+
+export interface SuperReviewDto {
+  verdict: "accept" | "request_changes" | "escalate";
+  findings: FindingDto[];
+  convergence: ConvergenceSignalDto;
+  commit_message: CommitMessageDto | null;
+  notes: string;
+  human_decision_needed: string | null;
+}
+
+export type ConvergeDecisionDto =
+  | { action: "author"; blockers: FindingDto[]; promote: boolean }
+  | { action: "stop" }
+  | { action: "escalate"; reason: string };
+
+export interface VerificationResultDto {
+  command: string;
+  exitCode: number;
+  outputTail: string;
+}
+
+export type ConvergenceLogEntryDto =
+  | {
+      kind: "reviewed";
+      at: string;
+      runId: string;
+      campaignId: string;
+      pass: number;
+      maxPasses: number;
+      verification: { green: boolean; commands: VerificationResultDto[] };
+      decision: ConvergeDecisionDto;
+      amendedCommitSha: string | null;
+      primary: SuperReviewDto;
+      primaryRaw: string;
+    }
+  | {
+      kind: "unreachable";
+      at: string;
+      runId: string;
+      campaignId: string;
+      pass: number;
+      maxPasses: number;
+      verification: { green: boolean; commands: VerificationResultDto[] };
+      detail: string;
+      attempt: number;
+      budget: number;
+    };
+
 export type TailRunStatus =
   | "queued"
   | "running"
@@ -307,6 +546,10 @@ export interface LatheContract extends Contract<"LatheContract"> {
     input: EnqueueRunRequest;
     response: RunSummaryDto;
     successStatus: 202;
+    errors: [
+      { status: 400; response: ErrorResponse; description: "invalid packet" },
+      { status: 500; response: ErrorResponse; description: "internal error" },
+    ];
   }>;
 
   enqueueContent: Endpoint<{
@@ -315,6 +558,10 @@ export interface LatheContract extends Contract<"LatheContract"> {
     input: EnqueueContentRequest;
     response: RunSummaryDto;
     successStatus: 202;
+    errors: [
+      { status: 400; response: ErrorResponse; description: "invalid packet" },
+      { status: 500; response: ErrorResponse; description: "internal error" },
+    ];
   }>;
 
   enqueueChain: Endpoint<{
@@ -336,6 +583,7 @@ export interface LatheContract extends Contract<"LatheContract"> {
     route: "/runs/{runId}";
     params: { runId: string };
     response: RunDetailDto;
+    errors: [{ status: 404; response: ErrorResponse; description: "run not found" }];
   }>;
 
   getStatus: Endpoint<{
@@ -363,6 +611,10 @@ export interface LatheContract extends Contract<"LatheContract"> {
     route: "/runs/{runId}/stop";
     params: { runId: string };
     response: RunSummaryDto;
+    errors: [
+      { status: 404; response: ErrorResponse; description: "run not found" },
+      { status: 409; response: ErrorResponse; description: "run is terminal" },
+    ];
   }>;
 
   answerRun: Endpoint<{
@@ -371,6 +623,10 @@ export interface LatheContract extends Contract<"LatheContract"> {
     input: AnswerRunRequest;
     params: { runId: string };
     response: RunSummaryDto;
+    errors: [
+      { status: 404; response: ErrorResponse; description: "run not found" },
+      { status: 409; response: ErrorResponse; description: "run is not answerable" },
+    ];
   }>;
 
   // DESTRUCTIVE: merges the run branch to base and deletes it. Legal ONLY when
@@ -381,6 +637,10 @@ export interface LatheContract extends Contract<"LatheContract"> {
     route: "/runs/{runId}/accept";
     params: { runId: string };
     response: RunSummaryDto;
+    errors: [
+      { status: 404; response: ErrorResponse; description: "run not found" },
+      { status: 409; response: ErrorResponse; description: "not a chain tip or accept refused" },
+    ];
   }>;
 
   rejectRun: Endpoint<{
@@ -389,6 +649,10 @@ export interface LatheContract extends Contract<"LatheContract"> {
     input: RejectRunRequest;
     params: { runId: string };
     response: RunSummaryDto;
+    errors: [
+      { status: 404; response: ErrorResponse; description: "run not found" },
+      { status: 409; response: ErrorResponse; description: "run is terminal" },
+    ];
   }>;
 
   requeueRun: Endpoint<{
@@ -396,6 +660,10 @@ export interface LatheContract extends Contract<"LatheContract"> {
     route: "/runs/{runId}/requeue";
     params: { runId: string };
     response: RunSummaryDto;
+    errors: [
+      { status: 404; response: ErrorResponse; description: "run not found" },
+      { status: 409; response: ErrorResponse; description: "run is terminal" },
+    ];
   }>;
 
   getConfig: Endpoint<{
@@ -415,5 +683,60 @@ export interface LatheContract extends Contract<"LatheContract"> {
     route: "/tail/{runId}";
     params: { runId: string };
     response: TailSnapshotDto;
+    errors: [{ status: 404; response: ErrorResponse; description: "run not found" }];
+  }>;
+
+  getSettings: Endpoint<{
+    method: "GET";
+    route: "/settings";
+    response: SettingsDto;
+  }>;
+
+  updateSettings: Endpoint<{
+    method: "PUT";
+    route: "/settings";
+    input: SettingsDto;
+    response: SettingsDto;
+    errors: [{ status: 400; response: ErrorResponse; description: "invalid config body" }];
+  }>;
+
+  restart: Endpoint<{
+    method: "POST";
+    route: "/restart";
+    response: RestartResponseDto;
+    successStatus: 200;
+    errors: [{ status: 400; response: ErrorResponse; description: "restart not available" }];
+  }>;
+
+  getDecisions: Endpoint<{
+    method: "GET";
+    route: "/runs/{runId}/decisions";
+    params: { runId: string };
+    response: DecisionDto[];
+    errors: [{ status: 404; response: ErrorResponse; description: "run not found" }];
+  }>;
+
+  getOutcomes: Endpoint<{
+    method: "GET";
+    route: "/runs/{runId}/outcomes";
+    params: { runId: string };
+    response: OutcomeLedgerDto;
+    errors: [{ status: 404; response: ErrorResponse; description: "run not found" }];
+  }>;
+
+  getReport: Endpoint<{
+    method: "GET";
+    route: "/runs/{runId}/report";
+    params: { runId: string };
+    response: ReportDto;
+    errors: [{ status: 404; response: ErrorResponse; description: "run not found" }];
+  }>;
+
+  getConvergence: Endpoint<{
+    method: "GET";
+    route: "/runs/{runId}/convergence";
+    params: { runId: string };
+    response: ConvergenceLogEntryDto[];
+    errors: [{ status: 404; response: ErrorResponse; description: "run not found" }];
   }>;
 }

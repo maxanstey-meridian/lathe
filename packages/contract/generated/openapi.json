@@ -38,6 +38,26 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "invalid packet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -90,6 +110,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RunSummaryDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid packet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -157,6 +197,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RunDetailDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -268,6 +318,26 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "run is terminal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -310,6 +380,26 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "run is not answerable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -339,6 +429,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RunSummaryDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "not a chain tip or accept refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -384,6 +494,26 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "run is terminal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -413,6 +543,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RunSummaryDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "run is terminal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -499,6 +649,284 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/settings": {
+      "get": {
+        "operationId": "lathe_getSettings",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "getSettings",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsDto"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "lathe_updateSettings",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "updateSettings",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid config body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/restart": {
+      "post": {
+        "operationId": "lathe_restart",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "restart",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestartResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "restart not available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/runs/{runId}/decisions": {
+      "get": {
+        "operationId": "lathe_getDecisions",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "getDecisions",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DecisionDto"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/runs/{runId}/outcomes": {
+      "get": {
+        "operationId": "lathe_getOutcomes",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "getOutcomes",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutcomeLedgerDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/runs/{runId}/report": {
+      "get": {
+        "operationId": "lathe_getReport",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "getReport",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/runs/{runId}/convergence": {
+      "get": {
+        "operationId": "lathe_getConvergence",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "getConvergence",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConvergenceLogEntryDto"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -515,6 +943,21 @@
         },
         "required": [
           "answer"
+        ]
+      },
+      "CommitMessageDto": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject",
+          "body"
         ]
       },
       "ConfigDto": {
@@ -552,6 +995,159 @@
           "thresholds"
         ]
       },
+      "ConvergeDecisionDto": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ConvergeDecisionDto_Author"
+          },
+          {
+            "$ref": "#/components/schemas/ConvergeDecisionDto_Stop"
+          },
+          {
+            "$ref": "#/components/schemas/ConvergeDecisionDto_Escalate"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "action",
+          "mapping": {
+            "author": "#/components/schemas/ConvergeDecisionDto_Author",
+            "stop": "#/components/schemas/ConvergeDecisionDto_Stop",
+            "escalate": "#/components/schemas/ConvergeDecisionDto_Escalate"
+          }
+        }
+      },
+      "ConvergenceLogEntryDto": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ConvergenceLogEntryDto_Reviewed"
+          },
+          {
+            "$ref": "#/components/schemas/ConvergenceLogEntryDto_Unreachable"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "kind",
+          "mapping": {
+            "reviewed": "#/components/schemas/ConvergenceLogEntryDto_Reviewed",
+            "unreachable": "#/components/schemas/ConvergenceLogEntryDto_Unreachable"
+          }
+        }
+      },
+      "ConvergenceSignalDto": {
+        "type": "object",
+        "properties": {
+          "recommend_stop": {
+            "type": "boolean"
+          },
+          "profile": {
+            "type": "object",
+            "properties": {
+              "p0": {
+                "type": "number"
+              },
+              "p1": {
+                "type": "number"
+              },
+              "p2": {
+                "type": "number"
+              },
+              "p3": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "p0",
+              "p1",
+              "p2",
+              "p3"
+            ]
+          },
+          "rationale": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "recommend_stop",
+          "profile",
+          "rationale"
+        ]
+      },
+      "DecisionDto": {
+        "type": "object",
+        "properties": {
+          "timestamp": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "daddy",
+              "max"
+            ]
+          },
+          "questionType": {
+            "type": "string"
+          },
+          "currentSlice": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          },
+          "approach": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string"
+          },
+          "answer": {
+            "type": "string"
+          },
+          "constraints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "evidenceUsed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "safeNextAction": {
+            "type": "string"
+          },
+          "humanDecisionNeeded": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reconciliation": {
+            "$ref": "#/components/schemas/ReconciliationDto"
+          },
+          "messageId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "timestamp",
+          "source",
+          "questionType",
+          "question",
+          "evidence",
+          "status",
+          "answer",
+          "constraints"
+        ]
+      },
       "EnqueueChainRequest": {
         "type": "object",
         "properties": {
@@ -587,6 +1183,74 @@
         },
         "required": [
           "packetPath"
+        ]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "FindingDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/FindingSeverityDto"
+          },
+          "title": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "grounding": {
+            "$ref": "#/components/schemas/FindingGroundingDto"
+          },
+          "suggested_outcome_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "title",
+          "evidence",
+          "grounding"
+        ]
+      },
+      "FindingGroundingDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "command_fail",
+              "clause",
+              "none"
+            ]
+          },
+          "ref": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "ref"
         ]
       },
       "ModelConfigDto": {
@@ -644,6 +1308,88 @@
           "superdaddy"
         ]
       },
+      "OutcomeEntryDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "not_started",
+              "in_progress",
+              "done",
+              "blocked"
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "state": {
+            "type": "string"
+          },
+          "nextAction": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "description",
+          "status",
+          "evidence",
+          "updatedAt"
+        ]
+      },
+      "OutcomeLedgerDto": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "outcomes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutcomeEntryDto"
+            }
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "outcomes",
+          "updatedAt"
+        ]
+      },
+      "ReconciliationDto": {
+        "type": "object",
+        "properties": {
+          "fingerprint": {
+            "type": "string"
+          },
+          "reused": {
+            "type": "boolean"
+          },
+          "deltaKind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "fingerprint",
+          "reused"
+        ]
+      },
       "RejectRunRequest": {
         "type": "object",
         "properties": {
@@ -654,6 +1400,28 @@
             ]
           }
         }
+      },
+      "ReportDto": {
+        "type": "object",
+        "properties": {
+          "report": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "report"
+        ]
+      },
+      "RestartResponseDto": {
+        "type": "object",
+        "properties": {
+          "restarting": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "restarting"
+        ]
       },
       "ReviewDto": {
         "type": "object",
@@ -858,6 +1626,372 @@
           "isChainTip",
           "startedAt",
           "updatedAt"
+        ]
+      },
+      "SettingsBabyDto": {
+        "type": "object",
+        "properties": {
+          "providerId": {
+            "type": "string"
+          },
+          "modelId": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "contextWindow": {
+            "type": "number"
+          },
+          "timeoutMs": {
+            "type": "number"
+          },
+          "turnSteps": {
+            "type": "number"
+          },
+          "thinkingMode": {
+            "type": "string",
+            "enum": [
+              "budget",
+              "disabled"
+            ]
+          },
+          "thinkingBudget": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "promoteTo": {
+            "$ref": "#/components/schemas/SettingsBabyPromoteToDto"
+          }
+        },
+        "required": [
+          "providerId",
+          "modelId",
+          "baseUrl",
+          "apiKey",
+          "agent",
+          "contextWindow",
+          "timeoutMs",
+          "turnSteps",
+          "thinkingMode",
+          "thinkingBudget"
+        ]
+      },
+      "SettingsBabyPromoteToDto": {
+        "type": "object",
+        "properties": {
+          "providerId": {
+            "type": "string"
+          },
+          "modelId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "providerId",
+          "modelId"
+        ]
+      },
+      "SettingsConcurrencyDto": {
+        "type": "object",
+        "properties": {
+          "maxWorkers": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "maxWorkers"
+        ]
+      },
+      "SettingsDaddyDto": {
+        "type": "object",
+        "properties": {
+          "providerId": {
+            "type": "string"
+          },
+          "modelId": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "providerId",
+          "modelId",
+          "agent",
+          "timeoutMs"
+        ]
+      },
+      "SettingsDaemonDto": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "host",
+          "port"
+        ]
+      },
+      "SettingsDto": {
+        "type": "object",
+        "properties": {
+          "stateRoot": {
+            "type": "string"
+          },
+          "opencode": {
+            "$ref": "#/components/schemas/SettingsOpencodeDto"
+          },
+          "daddy": {
+            "$ref": "#/components/schemas/SettingsDaddyDto"
+          },
+          "baby": {
+            "$ref": "#/components/schemas/SettingsBabyDto"
+          },
+          "superdaddy": {
+            "$ref": "#/components/schemas/SettingsSuperdaddyDto"
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/SettingsThresholdsDto"
+          },
+          "idleTimeoutMs": {
+            "type": "number"
+          },
+          "concurrency": {
+            "$ref": "#/components/schemas/SettingsConcurrencyDto"
+          },
+          "daemon": {
+            "$ref": "#/components/schemas/SettingsDaemonDto"
+          },
+          "mutationCommandPatterns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "repos": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SettingsRepoDto"
+            }
+          }
+        },
+        "required": [
+          "stateRoot",
+          "opencode",
+          "daddy",
+          "baby",
+          "superdaddy",
+          "thresholds",
+          "idleTimeoutMs",
+          "concurrency",
+          "daemon",
+          "mutationCommandPatterns",
+          "repos"
+        ]
+      },
+      "SettingsOpencodeDto": {
+        "type": "object",
+        "properties": {
+          "binary": {
+            "type": "string"
+          },
+          "port": {
+            "type": "number"
+          },
+          "bridgePort": {
+            "type": "number"
+          },
+          "expectedVersion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "binary",
+          "port",
+          "bridgePort",
+          "expectedVersion"
+        ]
+      },
+      "SettingsRepoDto": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "$ref": "#/components/schemas/SettingsRepoSeedDto"
+          }
+        },
+        "required": [
+          "seed"
+        ]
+      },
+      "SettingsRepoSeedDto": {
+        "type": "object",
+        "properties": {
+          "copies": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "writes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "copies",
+          "writes"
+        ]
+      },
+      "SettingsSuperdaddyDto": {
+        "type": "object",
+        "properties": {
+          "providerId": {
+            "type": "string"
+          },
+          "modelId": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "number"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "headerTimeoutMs": {
+            "type": "number"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "turnSteps": {
+            "type": "number"
+          },
+          "skillPath": {
+            "type": "string"
+          },
+          "packetSkillPath": {
+            "type": "string"
+          },
+          "diffCapBytes": {
+            "type": "number"
+          },
+          "transportRetries": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "providerId",
+          "modelId",
+          "agent",
+          "timeoutMs",
+          "baseUrl",
+          "headerTimeoutMs",
+          "turnSteps",
+          "skillPath",
+          "packetSkillPath",
+          "diffCapBytes",
+          "transportRetries"
+        ]
+      },
+      "SettingsThresholdsDto": {
+        "type": "object",
+        "properties": {
+          "rotationFraction": {
+            "type": "number"
+          },
+          "ladderParkAt": {
+            "type": "number"
+          },
+          "ladderRotateAt": {
+            "type": "number"
+          },
+          "checkpointNudgeMs": {
+            "type": "number"
+          },
+          "checkpointToolCalls": {
+            "type": "number"
+          },
+          "checkpointFiles": {
+            "type": "number"
+          },
+          "checkpointLoc": {
+            "type": "number"
+          },
+          "reportRejectionParkAt": {
+            "type": "number"
+          },
+          "checkpointBounceLimit": {
+            "type": "number"
+          },
+          "verificationTimeoutMs": {
+            "type": "number"
+          },
+          "maxPasses": {
+            "type": "number"
+          },
+          "maxReviewerUnreachable": {
+            "type": "number"
+          },
+          "promoteAtCap": {
+            "type": "boolean"
+          },
+          "maxStallRetries": {
+            "type": "number"
+          },
+          "maxCrashRetries": {
+            "type": "number"
+          },
+          "maxReorientRetries": {
+            "type": "number"
+          },
+          "maxRunMs": {
+            "type": "number"
+          },
+          "contextTokensFloor": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "rotationFraction",
+          "ladderParkAt",
+          "ladderRotateAt",
+          "checkpointNudgeMs",
+          "checkpointToolCalls",
+          "checkpointFiles",
+          "checkpointLoc",
+          "reportRejectionParkAt",
+          "checkpointBounceLimit",
+          "verificationTimeoutMs",
+          "maxPasses",
+          "maxReviewerUnreachable",
+          "promoteAtCap",
+          "maxStallRetries",
+          "maxCrashRetries",
+          "maxReorientRetries",
+          "maxRunMs",
+          "contextTokensFloor"
         ]
       },
       "StatusActiveRunDto": {
@@ -1067,6 +2201,55 @@
         "required": [
           "runId",
           "status"
+        ]
+      },
+      "SuperReviewDto": {
+        "type": "object",
+        "properties": {
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "accept",
+              "request_changes",
+              "escalate"
+            ]
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FindingDto"
+            }
+          },
+          "convergence": {
+            "$ref": "#/components/schemas/ConvergenceSignalDto"
+          },
+          "commit_message": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CommitMessageDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notes": {
+            "type": "string"
+          },
+          "human_decision_needed": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "verdict",
+          "findings",
+          "convergence",
+          "commit_message",
+          "notes",
+          "human_decision_needed"
         ]
       },
       "TailJournalLineDto": {
@@ -1374,6 +2557,34 @@
           "problems"
         ]
       },
+      "VerificationResultDto": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "exitCode": {
+            "type": "number"
+          },
+          "outputTail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "exitCode",
+          "outputTail"
+        ]
+      },
+      "FindingSeverityDto": {
+        "type": "string",
+        "enum": [
+          "P0",
+          "P1",
+          "P2",
+          "P3"
+        ]
+      },
       "RunStatus": {
         "type": "string",
         "enum": [
@@ -1397,6 +2608,199 @@
           "failed",
           "accepted",
           "stopped"
+        ]
+      },
+      "ConvergeDecisionDto_Author": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "author"
+            ]
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FindingDto"
+            }
+          },
+          "promote": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "action",
+          "blockers",
+          "promote"
+        ]
+      },
+      "ConvergeDecisionDto_Stop": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "stop"
+            ]
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "ConvergeDecisionDto_Escalate": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "escalate"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "reason"
+        ]
+      },
+      "ConvergenceLogEntryDto_Reviewed": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "reviewed"
+            ]
+          },
+          "at": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "campaignId": {
+            "type": "string"
+          },
+          "pass": {
+            "type": "number"
+          },
+          "maxPasses": {
+            "type": "number"
+          },
+          "verification": {
+            "type": "object",
+            "properties": {
+              "green": {
+                "type": "boolean"
+              },
+              "commands": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/VerificationResultDto"
+                }
+              }
+            },
+            "required": [
+              "green",
+              "commands"
+            ]
+          },
+          "decision": {
+            "$ref": "#/components/schemas/ConvergeDecisionDto"
+          },
+          "amendedCommitSha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "primary": {
+            "$ref": "#/components/schemas/SuperReviewDto"
+          },
+          "primaryRaw": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "at",
+          "runId",
+          "campaignId",
+          "pass",
+          "maxPasses",
+          "verification",
+          "decision",
+          "primary",
+          "primaryRaw"
+        ]
+      },
+      "ConvergenceLogEntryDto_Unreachable": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "unreachable"
+            ]
+          },
+          "at": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "campaignId": {
+            "type": "string"
+          },
+          "pass": {
+            "type": "number"
+          },
+          "maxPasses": {
+            "type": "number"
+          },
+          "verification": {
+            "type": "object",
+            "properties": {
+              "green": {
+                "type": "boolean"
+              },
+              "commands": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/VerificationResultDto"
+                }
+              }
+            },
+            "required": [
+              "green",
+              "commands"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "number"
+          },
+          "budget": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "kind",
+          "at",
+          "runId",
+          "campaignId",
+          "pass",
+          "maxPasses",
+          "verification",
+          "detail",
+          "attempt",
+          "budget"
         ]
       }
     }

@@ -1000,6 +1000,83 @@ verification:
   await cleanTemp(tmp);
 });
 
+test("store: admitQueue stamps promoted:true from frontmatter", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-adm-promoted-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const packet = `---
+repo: /tmp/test-repo
+base: main
+compare_commit: main
+promoted: true
+summary: promoted packet
+outcomes:
+  - id: o1
+    description: outcome 1
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+`;
+  store.admitQueue("20260101-000000-promo", packet);
+  const meta = store.readMetaIfExists("20260101-000000-promo");
+  ok(meta, "meta should exist after admit");
+  strictEqual(meta!.promoted, true, "promoted should be true from frontmatter");
+  await cleanTemp(tmp);
+});
+
+test("store: admitQueue defaults promoted:false when absent from frontmatter", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-adm-nopromo-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const packet = `---
+repo: /tmp/test-repo
+base: main
+compare_commit: main
+summary: not promoted
+outcomes:
+  - id: o1
+    description: outcome 1
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+`;
+  store.admitQueue("20260101-000000-nopromo", packet);
+  const meta = store.readMetaIfExists("20260101-000000-nopromo");
+  ok(meta, "meta should exist after admit");
+  strictEqual(meta!.promoted, false, "promoted should default to false");
+  await cleanTemp(tmp);
+});
+
+test("store: initMetaFromQueue stamps promoted:true from frontmatter", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-meta-promoted-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const packet = `---
+repo: /tmp/test-repo
+base: main
+compare_commit: main
+promoted: true
+summary: promoted packet
+outcomes:
+  - id: o1
+    description: outcome 1
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+`;
+  store.admitQueue("20260101-000000-meta-promo", packet);
+  const meta = store.initMetaFromQueue("20260101-000000-meta-promo");
+  ok(meta, "initMetaFromQueue should produce a RunMeta");
+  strictEqual(meta!.promoted, true, "promoted should be true from frontmatter");
+  await cleanTemp(tmp);
+});
+
 test("store: archiveQueue marks run stopped in SQLite", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-arch-"));
   const clock = fixedClock();

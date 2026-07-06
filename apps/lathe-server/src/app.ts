@@ -13,7 +13,7 @@ import { logger } from "hono/logger";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { registerRivetHonoRoutes, rivetHttpError } from "rivet-ts/hono";
-import type { AnswerRunRequest, EnqueueContentRequest, LatheContract, LatheEvent, RejectRunRequest, RunSummaryDto, TailEvent, TailSnapshotDto, ValidatePacketResponse } from "@lathe/contract";
+import type { AnswerRunRequest, EnqueueContentRequest, LatheContract, LatheEvent, RejectRunRequest, RunSummaryDto, TailEvent, TailSnapshotDto, ValidatePacketResponse, ErrorResponse, DecisionDto, OutcomeLedgerDto, ReportDto, RestartResponseDto, ConvergenceLogEntryDto, SettingsDto } from "@lathe/contract";
 import type { ValidatePacketResult } from "@lathe/core";
 export type { LatheEvent, TailEvent };
 import contract from "@lathe/contract/generated/api.contract.json" with { type: "json" };
@@ -102,7 +102,7 @@ export const createApp = (
       enqueueContent: async ({ body }) => {
         let runId: string;
         try {
-          runId = supervisor.enqueueContent((body as EnqueueContentRequest).content, (body as EnqueueContentRequest).filename);
+          runId = supervisor.enqueueContent(body.content, body.filename);
         } catch (err) {
           throw rivetHttpError(400, { code: "invalid_packet", message: err instanceof Error ? err.message : String(err) });
         }
@@ -115,7 +115,7 @@ export const createApp = (
       },
 
       validatePacket: async ({ body }) => {
-        const result = supervisor.validatePacket((body as { content: string; filename?: string }).content, (body as { content: string; filename?: string }).filename);
+        const result = supervisor.validatePacket(body.content, body.filename);
 
         // Fast path: all validation passes.
         if (result.shape.ok && result.repoValid && result.baseExists) {
@@ -225,7 +225,7 @@ export const createApp = (
       },
 
       answerRun: async ({ params, body }) => {
-        const answer = (body as AnswerRunRequest).answer;
+        const answer = body.answer;
         try {
           supervisor.answerRun(params.runId, answer);
         } catch (err) {
@@ -276,7 +276,7 @@ export const createApp = (
       },
 
       rejectRun: async ({ params, body }) => {
-        const reason = (body as RejectRunRequest).reason ?? "rejected";
+        const reason = body.reason ?? "rejected";
         try {
           supervisor.rejectRun(params.runId, reason);
         } catch (err) {
@@ -327,6 +327,63 @@ export const createApp = (
 
       getActiveTail: async () => {
         return supervisor.getActiveTailSnapshot();
+      },
+
+      getSettings: async () => {
+        // rivet-ts reflector can't express `number | false` — the two fields
+        // (idleTimeoutMs, superdaddy.headerTimeoutMs) are `number` in the contract
+        // but `number | false` in the Zod Config. Narrowing cast is sound: `false`
+        // is a diagnostic-only sentinel; all other fields are structurally identical.
+        return supervisor.config as SettingsDto;
+      },
+
+      updateSettings: async ({ body }) => {
+        try {
+          const written = supervisor.writeConfig(body);
+          return written as SettingsDto;
+        } catch (err) {
+          throw rivetHttpError(400, { code: "invalid_config", message: err instanceof Error ? err.message : String(err) });
+        }
+      },
+
+      restart: async () => {
+        if (!options.onRestart) {
+          throw rivetHttpError(400, { code: "restart_unavailable", message: "restart not available" });
+        }
+        options.onRestart();
+        return { restarting: true } satisfies RestartResponseDto;
+      },
+
+      getDecisions: async ({ params }) => {
+        const meta = supervisor.getRun(params.runId);
+        if (!meta) {
+          throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+        }
+        return supervisor.getDecisions(params.runId) as DecisionDto[];
+      },
+
+      getOutcomes: async ({ params }) => {
+        const meta = supervisor.getRun(params.runId);
+        if (!meta) {
+          throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+        }
+        return supervisor.getLedger(params.runId) as OutcomeLedgerDto;
+      },
+
+      getReport: async ({ params }) => {
+        const meta = supervisor.getRun(params.runId);
+        if (!meta) {
+          throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+        }
+        return { report: supervisor.getReport(params.runId) } satisfies ReportDto;
+      },
+
+      getConvergence: async ({ params }) => {
+        const meta = supervisor.getRun(params.runId);
+        if (!meta) {
+          throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
+        }
+        return supervisor.getConvergence(params.runId) as ConvergenceLogEntryDto[];
       },
     },
   });
@@ -389,62 +446,6 @@ export const createApp = (
   app.get("/tail/:runId/events", (c) =>
     streamTailSse(c, deps, () => supervisor.getTailSnapshot(c.req.param("runId")) ?? null, c.req.param("runId")),
   );
-
-  // --- Settings & restart sidecar ---------------------------------------------
-
-  app.get("/settings", (c) => c.json(supervisor.config));
-
-  app.put("/settings", async (c) => {
-    try {
-      const body = await c.req.json();
-      const written = supervisor.writeConfig(body);
-      return c.json(written);
-    } catch (err) {
-      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
-    }
-  });
-
-  app.post("/restart", (c) => {
-    if (!options.onRestart) {
-      return c.json({ error: "restart not available" }, 400);
-    }
-    options.onRestart();
-    return c.json({ restarting: true });
-  });
-
-  // --- Run ledger sidecar -----------------------------------------------------
-
-  app.get("/runs/:runId/decisions", (c) => {
-    const meta = supervisor.getRun(c.req.param("runId"));
-    if (!meta) {
-      return c.json({ error: "run not found" }, 404);
-    }
-    return c.json(supervisor.getDecisions(c.req.param("runId")));
-  });
-
-  app.get("/runs/:runId/outcomes", (c) => {
-    const meta = supervisor.getRun(c.req.param("runId"));
-    if (!meta) {
-      return c.json({ error: "run not found" }, 404);
-    }
-    return c.json(supervisor.getLedger(c.req.param("runId")));
-  });
-
-  app.get("/runs/:runId/report", (c) => {
-    const meta = supervisor.getRun(c.req.param("runId"));
-    if (!meta) {
-      return c.json({ error: "run not found" }, 404);
-    }
-    return c.json({ report: supervisor.getReport(c.req.param("runId")) });
-  });
-
-  app.get("/runs/:runId/convergence", (c) => {
-    const meta = supervisor.getRun(c.req.param("runId"));
-    if (!meta) {
-      return c.json({ error: "run not found" }, 404);
-    }
-    return c.json(supervisor.getConvergence(c.req.param("runId")));
-  });
 
   // Unhandled handler errors become a structured 500 — same envelope rivetHttpError
   // produces, matching the scaffolder's app.onError (behavioral parity).

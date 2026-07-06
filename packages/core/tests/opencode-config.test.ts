@@ -251,6 +251,46 @@ test("config generation: skips copy when node_modules trio already present", () 
   assert.strictEqual(writtenConfig.compaction.auto, false);
 });
 
+test("config generation: thinking budget mode emits thinking_budget option", () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "meridian-config-test-"));
+  const config = makeTestConfig();
+  const paths = makePaths(tmpDir);
+
+  mkdirSync(join(tmpDir, "plugin"), { recursive: true });
+  writeFileSync(join(tmpDir, "plugin", "gate-plugin.ts"), "");
+  mkdirSync(join(tmpDir, "xdg", "opencode", "node_modules", "@opencode-ai", "plugin"), {
+    recursive: true,
+  });
+
+  writeOpencodeConfig(config, paths, join(tmpDir, "plugin", "gate-plugin.ts"));
+
+  const writtenConfig = JSON.parse(readFileSync(paths.opencodeConfigFile, "utf-8"));
+  const modelOptions =
+    writtenConfig.provider[config.baby.providerId].models[config.baby.modelId].options;
+  assert.strictEqual(modelOptions.thinking_budget, 6_000);
+});
+
+test("config generation: thinking disabled mode emits think:false", () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "meridian-config-test-"));
+  const baseConfig = makeTestConfig();
+  const config = { ...baseConfig, baby: { ...baseConfig.baby, thinkingMode: "disabled" as const } };
+  const paths = makePaths(tmpDir);
+
+  mkdirSync(join(tmpDir, "plugin"), { recursive: true });
+  writeFileSync(join(tmpDir, "plugin", "gate-plugin.ts"), "");
+  mkdirSync(join(tmpDir, "xdg", "opencode", "node_modules", "@opencode-ai", "plugin"), {
+    recursive: true,
+  });
+
+  writeOpencodeConfig(config, paths, join(tmpDir, "plugin", "gate-plugin.ts"));
+
+  const writtenConfig = JSON.parse(readFileSync(paths.opencodeConfigFile, "utf-8"));
+  const modelOptions =
+    writtenConfig.provider[config.baby.providerId].models[config.baby.modelId].options;
+  assert.strictEqual(modelOptions.think, false);
+  assert.strictEqual(modelOptions.thinking_budget, undefined);
+});
+
 test("pluginPath resolves to an existing file", () => {
   const path = pluginPath();
   assert.ok(existsSync(path), "pluginPath() must point to an existing gate-plugin.ts");

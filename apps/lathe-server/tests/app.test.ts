@@ -5,7 +5,7 @@ import { acceptRun as acceptRunUc, Config } from "@lathe/core";
 import type { RunMeta } from "@lathe/core";
 import type { Supervisor } from "../src/supervisor.js";
 import { createApp, createEventBus, createTailEventBus } from "../src/app.js";
-import type { LatheEvent, TailEvent, TailSnapshotDto } from "@lathe/contract";
+import type { LatheEvent, TailEvent, TailSnapshotDto, SettingsDto, DecisionDto, OutcomeLedgerDto, ConvergenceLogEntryDto } from "@lathe/contract";
 import { RunNotAnswerableError, RunNotFoundError, NonChainTipError } from "../src/supervisor.js";
 import type { ValidatePacketResult } from "@lathe/core";
 
@@ -347,6 +347,24 @@ test("EnqueueRun returns 400 for bad packet path", async () => {
   const body = await res.json() as { code: string; message: string };
   equal(body.code, "invalid_packet");
   ok(body.message.includes("no such file"));
+});
+
+test("EnqueueRun returns 500 when getRun misses after enqueue", async () => {
+  const supervisor = makeFakeSupervisor({
+    getRun: () => undefined,
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const req = new Request("http://localhost/runs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ packetPath: "my-packet.md" }),
+  });
+  const res = await app.request(req);
+  equal(res.status, 500);
+  const body = await res.json() as { code: string; message: string };
+  equal(body.code, "internal_error");
+  equal(body.message, "enqueue succeeded but run not found");
 });
 
 test("EnqueueChain returns only enqueued runs, not all runs", async () => {
@@ -1486,6 +1504,25 @@ Body
   equal(filenameSeen, "20260101-120000-test-packet.md");
 });
 
+test("POST /runs/content returns 500 when getRun misses after enqueue", async () => {
+  const supervisor = makeFakeSupervisor({
+    enqueueContent: (_c: string, _f: string) => "content-run",
+    getRun: () => undefined,
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const req = new Request("http://localhost/runs/content", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content: "some content", filename: "test-packet.md" }),
+  });
+  const res = await app.request(req);
+  equal(res.status, 500);
+  const body = await res.json() as { code: string; message: string };
+  equal(body.code, "internal_error");
+  equal(body.message, "enqueue succeeded but run not found");
+});
+
 // ---------------------------------------------------------------------------
 // run-to-dto — status mapping
 // ---------------------------------------------------------------------------
@@ -1513,11 +1550,11 @@ test("GET /settings returns full config as JSON", async () => {
 
   const res = await app.request("http://localhost/settings");
   equal(res.status, 200);
-  const body = await res.json() as Record<string, unknown>;
-  ok("baby" in body);
-  ok("daddy" in body);
-  ok("superdaddy" in body);
-  ok("thresholds" in body);
+  const body = await res.json() as SettingsDto;
+  ok(typeof body.baby === "object");
+  ok(typeof body.daddy === "object");
+  ok(typeof body.superdaddy === "object");
+  ok(typeof body.thresholds === "object");
 });
 
 test("PUT /settings validates body and returns parsed config", async () => {
@@ -1531,9 +1568,8 @@ test("PUT /settings validates body and returns parsed config", async () => {
     body: JSON.stringify(body),
   });
   equal(res.status, 200);
-  const parsed = await res.json() as Record<string, unknown>;
-  ok("baby" in parsed);
-  equal((parsed.baby as Record<string, unknown>).modelId, "new-model");
+  const parsed = await res.json() as SettingsDto;
+  equal(parsed.baby.modelId, "new-model");
 });
 
 test("PUT /settings returns 400 for invalid body", async () => {
@@ -1546,8 +1582,9 @@ test("PUT /settings returns 400 for invalid body", async () => {
     body: JSON.stringify({ baby: { modelId: 12345 } }),
   });
   equal(res.status, 400);
-  const body = await res.json() as { error: string };
-  ok(body.error.length > 0);
+  const body = await res.json() as { code: string; message: string };
+  ok(body.code.length > 0);
+  ok(body.message.length > 0);
 });
 
 test("POST /restart calls onRestart and returns 200", async () => {
@@ -1570,8 +1607,9 @@ test("POST /restart returns 400 when onRestart not configured", async () => {
 
   const res = await app.request("http://localhost/restart", { method: "POST" });
   equal(res.status, 400);
-  const body = await res.json() as { error: string };
-  equal(body.error, "restart not available");
+  const body = await res.json() as { code: string; message: string };
+  equal(body.code, "restart_unavailable");
+  equal(body.message, "restart not available");
 });
 
 // ---------------------------------------------------------------------------
@@ -1585,7 +1623,7 @@ test("GET /runs/:runId/decisions returns decisions array for known run", async (
 
   const res = await app.request("http://localhost/runs/test-run/decisions");
   equal(res.status, 200);
-  const body = await res.json() as unknown[];
+  const body = await res.json() as DecisionDto[];
   ok(Array.isArray(body));
 });
 
@@ -1595,8 +1633,9 @@ test("GET /runs/:runId/decisions returns 404 for unknown run", async () => {
 
   const res = await app.request("http://localhost/runs/nonexistent/decisions");
   equal(res.status, 404);
-  const body = await res.json() as { error: string };
-  equal(body.error, "run not found");
+  const body = await res.json() as { code: string; message: string };
+  equal(body.code, "not_found");
+  equal(body.message, "run nonexistent not found");
 });
 
 test("GET /runs/:runId/outcomes returns ledger for known run", async () => {
@@ -1606,7 +1645,7 @@ test("GET /runs/:runId/outcomes returns ledger for known run", async () => {
 
   const res = await app.request("http://localhost/runs/test-run/outcomes");
   equal(res.status, 200);
-  const body = await res.json() as { outcomes: unknown[] };
+  const body = await res.json() as OutcomeLedgerDto;
   ok(Array.isArray(body.outcomes));
 });
 
@@ -1616,8 +1655,9 @@ test("GET /runs/:runId/outcomes returns 404 for unknown run", async () => {
 
   const res = await app.request("http://localhost/runs/nonexistent/outcomes");
   equal(res.status, 404);
-  const body = await res.json() as { error: string };
-  equal(body.error, "run not found");
+  const body = await res.json() as { code: string; message: string };
+  equal(body.code, "not_found");
+  equal(body.message, "run nonexistent not found");
 });
 
 test("GET /runs/:runId/report returns report string for known run", async () => {
@@ -1637,8 +1677,9 @@ test("GET /runs/:runId/report returns 404 for unknown run", async () => {
 
   const res = await app.request("http://localhost/runs/nonexistent/report");
   equal(res.status, 404);
-  const body = await res.json() as { error: string };
-  equal(body.error, "run not found");
+  const body = await res.json() as { code: string; message: string };
+  equal(body.code, "not_found");
+  equal(body.message, "run nonexistent not found");
 });
 
 test("GET /runs/:runId/convergence returns convergence log for known run", async () => {
@@ -1648,7 +1689,7 @@ test("GET /runs/:runId/convergence returns convergence log for known run", async
 
   const res = await app.request("http://localhost/runs/test-run/convergence");
   equal(res.status, 200);
-  const body = await res.json() as unknown[];
+  const body = await res.json() as ConvergenceLogEntryDto[];
   ok(Array.isArray(body));
 });
 
@@ -1658,6 +1699,7 @@ test("GET /runs/:runId/convergence returns 404 for unknown run", async () => {
 
   const res = await app.request("http://localhost/runs/nonexistent/convergence");
   equal(res.status, 404);
-  const body = await res.json() as { error: string };
-  equal(body.error, "run not found");
+  const body = await res.json() as { code: string; message: string };
+  equal(body.code, "not_found");
+  equal(body.message, "run nonexistent not found");
 });

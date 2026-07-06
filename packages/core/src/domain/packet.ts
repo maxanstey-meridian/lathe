@@ -331,3 +331,15 @@ export const extractBaseFromYaml = (raw: string): string | undefined => {
       ? value.slice(1, -1)
       : value || undefined;
 };
+
+export const extractPromotedFromYaml = (raw: string): boolean => {
+  const parts = extractFrontmatter(raw);
+  if (!parts) {
+    return false;
+  }
+  const line = parts.yaml.split("\n").find((l) => /^promoted:\s/.test(l));
+  if (!line) {
+    return false;
+  }
+  return line.replace(/^promoted:\s*/, "").trim() === "true";
+};

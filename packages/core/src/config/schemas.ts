@@ -34,12 +34,14 @@ export const Config = z.object({
       contextWindow: z.number().int().default(114_688),
       timeoutMs: z.number().int().default(1_800_000),
       turnSteps: z.number().int().default(30),
-      // Caps executor per-turn reasoning (oMLX `thinking_budget`, integer tokens):
-      // on hitting it the server forces `</think>` and Baby answers from the
-      // reasoning so far — bounds rumination spirals AND the reasoning tokens'
-      // drain on the rotation budget (they count toward contextWindow). Start
-      // generous and ratchet down in config.json; too low forces premature
-      // answers on genuinely hard turns. null = uncapped (legacy behaviour).
+      // "budget" caps executor per-turn reasoning (oMLX `thinking_budget`,
+      // integer tokens): on hitting it the server forces `</think>` and Baby
+      // answers from the reasoning so far — bounds rumination spirals AND the
+      // reasoning tokens' drain on the rotation budget (they count toward
+      // contextWindow). "disabled" sends `think: false` — no reasoning at all,
+      // every token goes to the answer. Start generous and ratchet down in
+      // config.json; too low forces premature answers on genuinely hard turns.
+      thinkingMode: z.enum(["budget", "disabled"]).default("budget"),
       thinkingBudget: z.number().int().nullable().default(6_000),
       // The model baby's inference is promoted to at a cap (stall recovery OR
       // daddy's final-review rejection) — "one more set of retries on a bigger

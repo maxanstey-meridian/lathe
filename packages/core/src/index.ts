@@ -66,4 +66,5 @@ export { parsePacketShape } from "./domain/packet.js";
 export { isLatched, gateReason } from "./domain/gate.js";
 export type { StagedInfo } from "./domain/chain.js";
 export type { RunMeta } from "./domain/run.js";
+export type { Plan } from "./domain/plan.js";
 export type { ValidatePacketResult } from "./application/use-cases/validate-packet.js";

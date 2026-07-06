@@ -930,6 +930,245 @@
           }
         }
       }
+    },
+    "/plans": {
+      "get": {
+        "operationId": "lathe_listPlans",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "listPlans",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PlanDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "lathe_createPlan",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "createPlan",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePlanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/plans/{planId}": {
+      "get": {
+        "operationId": "lathe_getPlan",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "getPlan",
+        "parameters": [
+          {
+            "name": "planId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanDetailDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "plan not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "lathe_updatePlan",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "updatePlan",
+        "parameters": [
+          {
+            "name": "planId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePlanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "plan not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "lathe_deletePlan",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "deletePlan",
+        "parameters": [
+          {
+            "name": "planId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LatheDeletePlanDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "plan not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/plans/{planId}/queue": {
+      "post": {
+        "operationId": "lathe_queuePlan",
+        "tags": [
+          "Lathe"
+        ],
+        "x-rivet-contract": "lathe",
+        "x-rivet-endpoint": "queuePlan",
+        "parameters": [
+          {
+            "name": "planId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueuePlanResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "plan failed admission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "plan not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1070,6 +1309,27 @@
           "recommend_stop",
           "profile",
           "rationale"
+        ]
+      },
+      "CreatePlanRequest": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "content",
+          "filename"
         ]
       },
       "DecisionDto": {
@@ -1370,6 +1630,95 @@
           "runId",
           "outcomes",
           "updatedAt"
+        ]
+      },
+      "PlanDetailDto": {
+        "type": "object",
+        "properties": {
+          "planId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "queuedRunId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "raw": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "planId",
+          "title",
+          "tags",
+          "queuedRunId",
+          "createdAt",
+          "updatedAt",
+          "raw"
+        ]
+      },
+      "PlanDto": {
+        "type": "object",
+        "properties": {
+          "planId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "queuedRunId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "planId",
+          "title",
+          "tags",
+          "queuedRunId",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "QueuePlanResponse": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId"
         ]
       },
       "ReconciliationDto": {
@@ -2385,6 +2734,20 @@
           "lastSeq"
         ]
       },
+      "UpdatePlanRequest": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "ValidatePacketFrontmatter": {
         "type": "object",
         "properties": {
@@ -2574,6 +2937,17 @@
           "command",
           "exitCode",
           "outputTail"
+        ]
+      },
+      "LatheDeletePlanDto": {
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
         ]
       },
       "FindingSeverityDto": {

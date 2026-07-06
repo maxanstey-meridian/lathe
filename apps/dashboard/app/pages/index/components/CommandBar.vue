@@ -78,6 +78,15 @@ const reviewCount = computed(() => status.status.value?.review.readyForReview ??
       </button>
       <button
         class="flex items-center gap-1.5 border-b-2 px-3 py-1.5 text-sm font-medium transition-colors"
+        :class="activeTab === 'plans'
+          ? 'border-cyan-400 text-cyan-300'
+          : 'border-transparent text-slate-500 hover:text-slate-300'"
+        @click="$emit('update:activeTab', 'plans')"
+      >
+        Plans
+      </button>
+      <button
+        class="flex items-center gap-1.5 border-b-2 px-3 py-1.5 text-sm font-medium transition-colors"
         :class="activeTab === 'settings'
           ? 'border-cyan-400 text-cyan-300'
           : 'border-transparent text-slate-500 hover:text-slate-300'"

@@ -340,6 +340,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["lathe_listPlans"];
+        put?: never;
+        post: operations["lathe_createPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/plans/{planId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["lathe_getPlan"];
+        put: operations["lathe_updatePlan"];
+        post?: never;
+        delete: operations["lathe_deletePlan"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/plans/{planId}/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["lathe_queuePlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -371,6 +419,11 @@ export interface components {
                 p3: number;
             };
             rationale: string;
+        };
+        CreatePlanRequest: {
+            content: string;
+            filename: string;
+            tags?: string[];
         };
         DecisionDto: {
             timestamp: string;
@@ -445,6 +498,26 @@ export interface components {
             runId: string;
             outcomes: components["schemas"]["OutcomeEntryDto"][];
             updatedAt: string;
+        };
+        PlanDetailDto: {
+            planId: string;
+            title: string;
+            tags: string[];
+            queuedRunId: string | null;
+            createdAt: string;
+            updatedAt: string;
+            raw: string;
+        };
+        PlanDto: {
+            planId: string;
+            title: string;
+            tags: string[];
+            queuedRunId: string | null;
+            createdAt: string;
+            updatedAt: string;
+        };
+        QueuePlanResponse: {
+            runId: string;
         };
         ReconciliationDto: {
             fingerprint: string;
@@ -688,6 +761,10 @@ export interface components {
             journal: components["schemas"]["TailJournalLineDto"][];
             lastSeq: number;
         };
+        UpdatePlanRequest: {
+            content?: string;
+            tags?: string[];
+        };
         ValidatePacketFrontmatter: {
             repo: string;
             base: string;
@@ -729,6 +806,9 @@ export interface components {
             command: string;
             exitCode: number;
             outputTail: string;
+        };
+        LatheDeletePlanDto: {
+            deleted: boolean;
         };
         /** @enum {string} */
         FindingSeverityDto: "P0" | "P1" | "P2" | "P3";
@@ -1506,6 +1586,187 @@ export interface operations {
                 };
             };
             /** @description run not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    lathe_listPlans: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanDto"][];
+                };
+            };
+        };
+    };
+    lathe_createPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePlanRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanDto"];
+                };
+            };
+        };
+    };
+    lathe_getPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                planId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanDetailDto"];
+                };
+            };
+            /** @description plan not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    lathe_updatePlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                planId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePlanRequest"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanDto"];
+                };
+            };
+            /** @description plan not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    lathe_deletePlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                planId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LatheDeletePlanDto"];
+                };
+            };
+            /** @description plan not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    lathe_queuePlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                planId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueuePlanResponse"];
+                };
+            };
+            /** @description plan failed admission */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description plan not found */
             404: {
                 headers: {
                     [name: string]: unknown;

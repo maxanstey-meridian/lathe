@@ -1,17 +1,18 @@
 <script setup lang="ts">
 import type { components } from "@lathe/contract";
-import { injectLatheActions } from "../ports/lathe-actions";
+import { injectLathePlans } from "../ports/lathe-plans";
 import { injectPacketValidation } from "../ports/packet-validation";
 
 type ValidatePacketFrontmatter = components["schemas"]["ValidatePacketFrontmatter"];
 
 const { preview, previewError, validatePacket, clearPacket } = injectPacketValidation();
-const actions = injectLatheActions();
+const plans = injectLathePlans();
 
-const emit = defineEmits<{ queued: [] }>();
+const emit = defineEmits<{ done: [] }>();
 
 const selectedFileName = ref<string | null>(null);
 const selectedFileContent = ref<string | null>(null);
+const creating = ref(false);
 
 const selectedFile = async (event: Event): Promise<void> => {
   const target = event.target as HTMLInputElement;
@@ -36,14 +37,25 @@ const selectedFile = async (event: Event): Promise<void> => {
   }
 };
 
-const handleQueue = async (): Promise<void> => {
+const handleSave = async (): Promise<void> => {
   if (!selectedFileContent.value || !selectedFileName.value) {
     return;
   }
-  const ok = await actions.enqueueContent(selectedFileName.value, selectedFileContent.value);
-  if (ok) {
-    emit("queued");
-    handleClear();
+  creating.value = true;
+  try {
+    const { client } = await import("@lathe/contract");
+    const result = await client.POST("/plans", {
+      body: { content: selectedFileContent.value, filename: selectedFileName.value },
+    });
+    if (result.response.ok) {
+      void plans.refresh();
+      emit("done");
+      handleClear();
+    }
+  } catch {
+    previewError.value = "Unable to save plan.";
+  } finally {
+    creating.value = false;
   }
 };
 
@@ -77,11 +89,11 @@ const handleClear = (): void => {
         color="success"
         variant="soft"
         size="sm"
-        :loading="actions.enqueueContentLoading.value"
-        :disabled="actions.enqueueContentLoading.value"
-        @click="handleQueue"
+        :loading="creating"
+        :disabled="creating"
+        @click="handleSave"
       >
-        Queue
+        Save Plan
       </UButton>
 
       <UButton

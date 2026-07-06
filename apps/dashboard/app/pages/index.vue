@@ -3,6 +3,7 @@ import { onMounted, ref } from "vue";
 
 import CommandBar from "./index/components/CommandBar.vue";
 import PacketUpload from "./index/components/PacketUpload.vue";
+import PlansView from "./index/components/PlansView.vue";
 import ReviewList from "./index/components/ReviewList.vue";
 import TailView from "./index/components/TailView.vue";
 import CampaignLadder from "./index/components/CampaignLadder.vue";
@@ -12,6 +13,7 @@ import StagedChains from "./index/components/StagedChains.vue";
 import StoppedList from "./index/components/StoppedList.vue";
 import SettingsView from "./index/components/SettingsView.vue";
 import { useLatheActions } from "./index/composables/useLatheActions";
+import { useLathePlans } from "./index/composables/useLathePlans";
 import { useLatheSettings } from "./index/composables/useLatheSettings";
 import { useLatheStatus } from "./index/composables/useLatheStatus";
 import { useLatheTail } from "./index/composables/useLatheTail";
@@ -19,6 +21,7 @@ import { usePacketValidation } from "./index/composables/usePacketValidation";
 import { useReviewData } from "./index/composables/useReviewData";
 import type { TabId } from "./index/logic/tabs";
 import { provideLatheActions } from "./index/ports/lathe-actions";
+import { provideLathePlans } from "./index/ports/lathe-plans";
 import { provideLatheSettings } from "./index/ports/lathe-settings";
 import { provideLatheStatus } from "./index/ports/lathe-status";
 import { provideLatheTail } from "./index/ports/lathe-tail";
@@ -29,6 +32,7 @@ const latheStatus = provideLatheStatus(useLatheStatus());
 const latheActions = provideLatheActions(useLatheActions(latheStatus.refresh));
 const latheTail = provideLatheTail(useLatheTail());
 provideLatheSettings(useLatheSettings());
+const lathePlans = provideLathePlans(useLathePlans());
 providePacketValidation(usePacketValidation());
 provideReviewData(useReviewData(latheStatus));
 
@@ -38,6 +42,7 @@ const showUpload = ref(false);
 onMounted(() => {
   void latheStatus.refresh();
   void latheTail.refresh();
+  void lathePlans.refresh();
 });
 </script>
 
@@ -84,6 +89,10 @@ onMounted(() => {
         </div>
       </div>
 
+      <div v-show="activeTab === 'plans'" class="h-full">
+        <PlansView />
+      </div>
+
       <div v-show="activeTab === 'settings'" class="h-full">
         <SettingsView />
       </div>
@@ -96,7 +105,7 @@ onMounted(() => {
       @update:open="(val: boolean) => { if (!val) showUpload = false; }"
     >
       <template #body>
-        <PacketUpload @queued="showUpload = false" />
+        <PacketUpload @done="showUpload = false" />
       </template>
     </UModal>
   </div>

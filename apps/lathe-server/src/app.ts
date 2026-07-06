@@ -20,7 +20,7 @@ import contract from "@lathe/contract/generated/api.contract.json" with { type: 
 
 import type { RunMeta } from "@lathe/core";
 import type { RunDtoCtx } from "./run-to-dto.js";
-import { RunNotAnswerableError, RunNotFoundError, NonChainTipError, TerminalRunError } from "./supervisor.js";
+import { RunNotAnswerableError, RunNotFoundError, NonChainTipError, TerminalRunError, PlanNotFoundError } from "./supervisor.js";
 import type { Supervisor } from "./supervisor.js";
 import { configToDto } from "./config-to-dto.js";
 import { runToSummary, runToDetail } from "./run-to-dto.js";
@@ -384,6 +384,74 @@ export const createApp = (
           throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
         }
         return supervisor.getConvergence(params.runId) as ConvergenceLogEntryDto[];
+      },
+
+      // --- Plans shelf ---
+
+      listPlans: async () => {
+        return supervisor.listPlans().map((p) => ({
+          planId: p.planId,
+          title: p.title,
+          tags: p.tags,
+          queuedRunId: p.queuedRunId ?? null,
+          createdAt: p.createdAt,
+          updatedAt: p.updatedAt,
+        }));
+      },
+
+      getPlan: async ({ params }) => {
+        const plan = supervisor.getPlan(params.planId);
+        if (!plan) {
+          throw rivetHttpError(404, { code: "not_found", message: `plan ${params.planId} not found` });
+        }
+        return {
+          planId: plan.planId,
+          title: plan.title,
+          raw: plan.raw,
+          tags: plan.tags,
+          queuedRunId: plan.queuedRunId ?? null,
+          createdAt: plan.createdAt,
+          updatedAt: plan.updatedAt,
+        };
+      },
+
+      createPlan: async ({ body }) => {
+        return supervisor.createPlan(body.content, body.filename, body.tags);
+      },
+
+      updatePlan: async ({ params, body }) => {
+        try {
+          return supervisor.updatePlan(params.planId, body.content, body.tags);
+        } catch (err) {
+          if (err instanceof PlanNotFoundError) {
+            throw rivetHttpError(404, { code: "not_found", message: err.message });
+          }
+          throw err;
+        }
+      },
+
+      deletePlan: async ({ params }) => {
+        try {
+          supervisor.deletePlan(params.planId);
+          return { deleted: true };
+        } catch (err) {
+          if (err instanceof PlanNotFoundError) {
+            throw rivetHttpError(404, { code: "not_found", message: err.message });
+          }
+          throw err;
+        }
+      },
+
+      queuePlan: async ({ params }) => {
+        try {
+          const runId = supervisor.queuePlan(params.planId);
+          return { runId };
+        } catch (err) {
+          if (err instanceof PlanNotFoundError) {
+            throw rivetHttpError(404, { code: "not_found", message: err.message });
+          }
+          throw rivetHttpError(400, { code: "invalid_packet", message: err instanceof Error ? err.message : String(err) });
+        }
       },
     },
   });

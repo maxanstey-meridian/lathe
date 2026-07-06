@@ -448,6 +448,39 @@
       ]
     },
     {
+      "name": "CreatePlanRequest",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "content",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "filename",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "tags",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": true
+        }
+      ]
+    },
+    {
       "name": "DecisionDto",
       "typeParameters": [],
       "properties": [
@@ -913,6 +946,148 @@
         },
         {
           "name": "updatedAt",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "PlanDetailDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "planId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "title",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "tags",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "queuedRunId",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "createdAt",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "updatedAt",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "raw",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "PlanDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "planId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "title",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "tags",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "queuedRunId",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "createdAt",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "updatedAt",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "QueuePlanResponse",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "runId",
           "type": {
             "kind": "primitive",
             "type": "string"
@@ -2591,6 +2766,31 @@
       ]
     },
     {
+      "name": "UpdatePlanRequest",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "content",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": true
+        },
+        {
+          "name": "tags",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": true
+        }
+      ]
+    },
+    {
       "name": "ValidatePacketFrontmatter",
       "typeParameters": [],
       "properties": [
@@ -3758,6 +3958,247 @@
             "name": "ErrorResponse"
           },
           "description": "run not found"
+        }
+      ]
+    },
+    {
+      "name": "listPlans",
+      "httpMethod": "GET",
+      "routeTemplate": "/plans",
+      "params": [],
+      "returnType": {
+        "kind": "array",
+        "element": {
+          "kind": "ref",
+          "name": "PlanDto"
+        }
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "PlanDto"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "getPlan",
+      "httpMethod": "GET",
+      "routeTemplate": "/plans/{planId}",
+      "params": [
+        {
+          "name": "planId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "source": "route",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "ref",
+        "name": "PlanDetailDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "ref",
+            "name": "PlanDetailDto"
+          }
+        },
+        {
+          "statusCode": 404,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "plan not found"
+        }
+      ]
+    },
+    {
+      "name": "createPlan",
+      "httpMethod": "POST",
+      "routeTemplate": "/plans",
+      "params": [
+        {
+          "name": "body",
+          "type": {
+            "kind": "ref",
+            "name": "CreatePlanRequest"
+          },
+          "source": "body",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "ref",
+        "name": "PlanDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 201,
+          "dataType": {
+            "kind": "ref",
+            "name": "PlanDto"
+          }
+        }
+      ]
+    },
+    {
+      "name": "updatePlan",
+      "httpMethod": "PUT",
+      "routeTemplate": "/plans/{planId}",
+      "params": [
+        {
+          "name": "planId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "source": "route",
+          "isOptional": false
+        },
+        {
+          "name": "body",
+          "type": {
+            "kind": "ref",
+            "name": "UpdatePlanRequest"
+          },
+          "source": "body",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "ref",
+        "name": "PlanDto"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "ref",
+            "name": "PlanDto"
+          }
+        },
+        {
+          "statusCode": 404,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "plan not found"
+        }
+      ]
+    },
+    {
+      "name": "deletePlan",
+      "httpMethod": "DELETE",
+      "routeTemplate": "/plans/{planId}",
+      "params": [
+        {
+          "name": "planId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "source": "route",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "inlineObject",
+        "properties": [
+          {
+            "name": "deleted",
+            "type": {
+              "kind": "primitive",
+              "type": "boolean"
+            }
+          }
+        ]
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "inlineObject",
+            "properties": [
+              {
+                "name": "deleted",
+                "type": {
+                  "kind": "primitive",
+                  "type": "boolean"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "statusCode": 404,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "plan not found"
+        }
+      ]
+    },
+    {
+      "name": "queuePlan",
+      "httpMethod": "POST",
+      "routeTemplate": "/plans/{planId}/queue",
+      "params": [
+        {
+          "name": "planId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "source": "route",
+          "isOptional": false
+        }
+      ],
+      "returnType": {
+        "kind": "ref",
+        "name": "QueuePlanResponse"
+      },
+      "controllerName": "lathe",
+      "responses": [
+        {
+          "statusCode": 200,
+          "dataType": {
+            "kind": "ref",
+            "name": "QueuePlanResponse"
+          }
+        },
+        {
+          "statusCode": 400,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "plan failed admission"
+        },
+        {
+          "statusCode": 404,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "plan not found"
         }
       ]
     }

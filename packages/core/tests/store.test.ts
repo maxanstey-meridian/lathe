@@ -1898,3 +1898,143 @@ test("store: sqlite — readJournalSince ordering across runIds", async () => {
 
   await cleanTemp(tmp);
 });
+
+// ---------------------------------------------------------------------------
+// Plans shelf — CRUD round-trip
+// ---------------------------------------------------------------------------
+
+test("store: plan CRUD round-trip", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-plans-crud-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+  const plan = {
+    planId: "20260706-200000-test-plan",
+    title: "Test Plan",
+    raw: "---\nrepo: /tmp\n---\n\n# Body",
+    tags: ["bug", "urgent"],
+    createdAt: clock.nowIso(),
+    updatedAt: clock.nowIso(),
+  };
+  store.writePlan(plan);
+
+  const read = store.readPlan("20260706-200000-test-plan");
+  ok(read, "plan should exist after write");
+  equal(read!.planId, "20260706-200000-test-plan");
+  equal(read!.title, "Test Plan");
+  deepEqual(read!.tags, ["bug", "urgent"]);
+  equal(read!.raw, "---\nrepo: /tmp\n---\n\n# Body");
+
+  const listed = store.listPlans();
+  strictEqual(listed.length, 1);
+  equal(listed[0]!.planId, "20260706-200000-test-plan");
+
+  store.deletePlan("20260706-200000-test-plan");
+  equal(store.readPlan("20260706-200000-test-plan"), undefined, "plan deleted");
+
+  await cleanTemp(tmp);
+});
+
+test("store: plan tags survive JSON round-trip", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-plans-tags-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+  store.writePlan({
+    planId: "p1",
+    title: "T",
+    raw: "x",
+    tags: ["a", "b", "c"],
+    createdAt: clock.nowIso(),
+    updatedAt: clock.nowIso(),
+  });
+
+  const read = store.readPlan("p1")!;
+  deepEqual(read.tags, ["a", "b", "c"]);
+
+  store.writePlan({
+    ...read,
+    tags: [],
+  });
+  deepEqual(store.readPlan("p1")!.tags, []);
+
+  await cleanTemp(tmp);
+});
+
+test("store: plan queuedRunId is optional and round-trips when set", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-plans-queued-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+  store.writePlan({
+    planId: "p1",
+    title: "T",
+    raw: "x",
+    tags: [],
+    createdAt: clock.nowIso(),
+    updatedAt: clock.nowIso(),
+  });
+  ok(!store.readPlan("p1")!.queuedRunId, "no queuedRunId initially");
+
+  store.writePlan({
+    planId: "p1",
+    title: "T",
+    raw: "x",
+    tags: [],
+    queuedRunId: "20260706-200000-test-plan",
+    createdAt: clock.nowIso(),
+    updatedAt: clock.nowIso(),
+  });
+  equal(store.readPlan("p1")!.queuedRunId, "20260706-200000-test-plan");
+
+  await cleanTemp(tmp);
+});
+
+test("store: plan list sorted by createdAt descending", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-plans-sort-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+  const t1 = clock.nowIso();
+  const t2 = clock.nowIso();
+  const t3 = clock.nowIso();
+
+  store.writePlan({ planId: "old", title: "Old", raw: "", tags: [], createdAt: t1, updatedAt: t1 });
+  store.writePlan({
+    planId: "newest",
+    title: "Newest",
+    raw: "",
+    tags: [],
+    createdAt: t3,
+    updatedAt: t3,
+  });
+  store.writePlan({ planId: "mid", title: "Mid", raw: "", tags: [], createdAt: t2, updatedAt: t2 });
+
+  const listed = store.listPlans();
+  equal(listed[0]!.planId, "newest");
+  equal(listed[1]!.planId, "mid");
+  equal(listed[2]!.planId, "old");
+
+  await cleanTemp(tmp);
+});
+
+test("store: importing a plan does NOT create a queued run", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-plans-no-queue-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+  store.writePlan({
+    planId: "20260706-200000-draft",
+    title: "Draft",
+    raw: "---\nrepo: /tmp\nbase: main\n---\n\n# Body",
+    tags: [],
+    createdAt: clock.nowIso(),
+    updatedAt: clock.nowIso(),
+  });
+
+  const queue = store.listQueue();
+  strictEqual(queue.length, 0, "no queued runs after plan import");
+  ok(!store.readMetaIfExists("20260706-200000-draft"), "no run meta exists for plan");
+
+  await cleanTemp(tmp);
+});

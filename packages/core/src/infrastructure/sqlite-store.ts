@@ -49,6 +49,7 @@ import {
   extractBaseFromYaml,
   extractPromotedFromYaml,
 } from "../domain/packet.js";
+import type { Plan } from "../domain/plan.js";
 import { RunMeta as RunMetaSchema } from "../domain/run.js";
 import { ReviewState as ReviewStateSchema } from "../domain/run.js";
 import { Decision as DecisionSchema } from "../domain/run.js";
@@ -739,6 +740,84 @@ export class SqliteStoreAdapter implements Store {
   }
 
   // ---------------------------------------------------------------------------
+  // Plans shelf — pre-queue draft packets
+
+  listPlans(): Plan[] {
+    const rows = this.db
+      .prepare(
+        "SELECT plan_id, title, raw, tags, queued_run_id, created_at, updated_at FROM plans ORDER BY created_at DESC",
+      )
+      .all() as {
+      plan_id: string;
+      title: string;
+      raw: string;
+      tags: string;
+      queued_run_id: string | null;
+      created_at: string;
+      updated_at: string;
+    }[];
+    return rows.map((r) => ({
+      planId: r.plan_id,
+      title: r.title,
+      raw: r.raw,
+      tags: jsonParse(r.tags) as unknown as string[],
+      ...(r.queued_run_id ? { queuedRunId: r.queued_run_id } : {}),
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  readPlan(planId: string): Plan | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT plan_id, title, raw, tags, queued_run_id, created_at, updated_at FROM plans WHERE plan_id = ?",
+      )
+      .get(planId) as
+      | {
+          plan_id: string;
+          title: string;
+          raw: string;
+          tags: string;
+          queued_run_id: string | null;
+          created_at: string;
+          updated_at: string;
+        }
+      | undefined;
+    if (!row) {
+      return undefined;
+    }
+    return {
+      planId: row.plan_id,
+      title: row.title,
+      raw: row.raw,
+      tags: jsonParse(row.tags) as unknown as string[],
+      ...(row.queued_run_id ? { queuedRunId: row.queued_run_id } : {}),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  writePlan(plan: Plan): void {
+    this.db
+      .prepare(
+        "INSERT OR REPLACE INTO plans (plan_id, title, raw, tags, queued_run_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        plan.planId,
+        plan.title,
+        plan.raw,
+        jsonStringify(plan.tags),
+        plan.queuedRunId ?? null,
+        plan.createdAt,
+        plan.updatedAt,
+      );
+  }
+
+  deletePlan(planId: string): void {
+    this.db.prepare("DELETE FROM plans WHERE plan_id = ?").run(planId);
+  }
+
+  // ---------------------------------------------------------------------------
   // Journal (append-only event log) — stored in SQLite events table
 
   appendJournal(runId: string, event: JournalEvent): void {
@@ -868,6 +947,16 @@ function createSchema(db: DatabaseSync): void {
       run_id TEXT PRIMARY KEY,
       raw TEXT NOT NULL,
       problems TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS plans(
+      plan_id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      raw TEXT NOT NULL,
+      tags TEXT NOT NULL,
+      queued_run_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
     );
   `);
 }

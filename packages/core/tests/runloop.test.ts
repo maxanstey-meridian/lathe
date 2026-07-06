@@ -1357,6 +1357,14 @@ test("runLoop: excludedRepos is built from listActiveRuns and listActiveConverge
       clearResumeArtifacts: () => {
         throw new Error("not called");
       },
+      listPlans: () => [],
+      readPlan: () => undefined,
+      writePlan: () => {
+        throw new Error("not called");
+      },
+      deletePlan: () => {
+        throw new Error("not called");
+      },
     };
 
     const stopController = new AbortController();

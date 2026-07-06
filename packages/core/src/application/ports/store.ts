@@ -20,6 +20,7 @@ import type {
   SubmitReport,
 } from "../../domain/index.js";
 import type { JournalEvent } from "../../domain/journal.js";
+import type { Plan } from "../../domain/plan.js";
 import type { VerificationResult } from "./verify.js";
 
 // Queue entry — inline; no domain function consumes it.
@@ -143,4 +144,10 @@ export type Store = {
   // that a prior session wrote — a fresh attempt must not inherit resume-only
   // durable state for a later unchanged-packet pickup to mistake for in-progress.
   clearResumeArtifacts(runId: string): void;
+
+  // Plans shelf — pre-queue draft packets stored in SQLite
+  listPlans(): Plan[];
+  readPlan(planId: string): Plan | undefined;
+  writePlan(plan: Plan): void;
+  deletePlan(planId: string): void;
 };

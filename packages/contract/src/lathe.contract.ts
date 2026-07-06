@@ -537,6 +537,36 @@ export type LatheEvent =
   | { kind: "verdict"; runId: string; reviewer: Reviewer; verdict: string; at: string }
   | { kind: "log"; runId: string; line: string; at: string };
 
+/* ------------------------------- plan DTOs ------------------------------- */
+
+export interface PlanDto {
+  planId: string;
+  title: string;
+  tags: string[];
+  queuedRunId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlanDetailDto extends PlanDto {
+  raw: string;
+}
+
+export interface CreatePlanRequest {
+  content: string;
+  filename: string;
+  tags?: string[];
+}
+
+export interface UpdatePlanRequest {
+  content?: string;
+  tags?: string[];
+}
+
+export interface QueuePlanResponse {
+  runId: string;
+}
+
 /* ------------------------------- contract ------------------------------- */
 
 export interface LatheContract extends Contract<"LatheContract"> {
@@ -738,5 +768,59 @@ export interface LatheContract extends Contract<"LatheContract"> {
     params: { runId: string };
     response: ConvergenceLogEntryDto[];
     errors: [{ status: 404; response: ErrorResponse; description: "run not found" }];
+  }>;
+
+  // --- Plans shelf ---
+
+  listPlans: Endpoint<{
+    method: "GET";
+    route: "/plans";
+    response: PlanDto[];
+  }>;
+
+  getPlan: Endpoint<{
+    method: "GET";
+    route: "/plans/{planId}";
+    params: { planId: string };
+    response: PlanDetailDto;
+    errors: [{ status: 404; response: ErrorResponse; description: "plan not found" }];
+  }>;
+
+  createPlan: Endpoint<{
+    method: "POST";
+    route: "/plans";
+    input: CreatePlanRequest;
+    response: PlanDto;
+    successStatus: 201;
+  }>;
+
+  updatePlan: Endpoint<{
+    method: "PUT";
+    route: "/plans/{planId}";
+    input: UpdatePlanRequest;
+    params: { planId: string };
+    response: PlanDto;
+    errors: [{ status: 404; response: ErrorResponse; description: "plan not found" }];
+  }>;
+
+  deletePlan: Endpoint<{
+    method: "DELETE";
+    route: "/plans/{planId}";
+    params: { planId: string };
+    response: { deleted: boolean };
+    successStatus: 200;
+    errors: [{ status: 404; response: ErrorResponse; description: "plan not found" }];
+  }>;
+
+  queuePlan: Endpoint<{
+    method: "POST";
+    route: "/plans/{planId}/queue";
+    params: { planId: string };
+    response: QueuePlanResponse;
+    successStatus: 200;
+    errors: [
+      { status: 404; response: ErrorResponse; description: "plan not found" },
+      { status: 400; response: ErrorResponse; description: "plan failed admission" },
+    ];
   }>;
 }

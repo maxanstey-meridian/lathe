@@ -131,6 +131,10 @@ const _storeContract: Store = {
   readJournal: () => [],
   readJournalSince: () => [],
   clearResumeArtifacts: () => {},
+  listPlans: () => [],
+  readPlan: () => undefined,
+  writePlan: () => {},
+  deletePlan: () => {},
 };
 
 const _plannerContract: Planner = {

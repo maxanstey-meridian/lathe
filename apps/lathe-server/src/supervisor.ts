@@ -19,6 +19,7 @@ import type {
   JournalEvent,
   RunLoopSeams,
   ValidatePacketResult,
+  Plan,
 } from "@lathe/core";
 import {
   SqliteStoreAdapter,
@@ -62,6 +63,34 @@ export class NonChainTipError extends Error {
     this.chainTip = chainTip;
   }
 }
+
+export class PlanNotFoundError extends Error {
+  constructor(planId: string) {
+    super(`plan not found: ${planId}`);
+    this.name = "PlanNotFoundError";
+  }
+}
+
+const extractTitle = (raw: string, fallback: string): string => {
+  const shape = parsePacketShape(raw);
+  if (shape.ok && shape.packet.frontmatter.summary) {
+    return shape.packet.frontmatter.summary;
+  }
+  const headingMatch = raw.match(/^#\s+(.+)$/m);
+  if (headingMatch) {
+    return headingMatch[1]!.trim();
+  }
+  return fallback;
+};
+
+const toDto = (plan: Plan): { planId: string; title: string; tags: string[]; queuedRunId: string | null; createdAt: string; updatedAt: string } => ({
+  planId: plan.planId,
+  title: plan.title,
+  tags: plan.tags,
+  queuedRunId: plan.queuedRunId ?? null,
+  createdAt: plan.createdAt,
+  updatedAt: plan.updatedAt,
+});
 
 export class TerminalRunError extends Error {
   constructor(runId: string, status: string) {
@@ -157,6 +186,13 @@ export type Supervisor = {
   getReport(runId: string): string;
   /** Convergence log for a run. */
   getConvergence(runId: string): ReturnType<Store["readConvergence"]>;
+  // -- Plans shelf --
+  listPlans(): ReturnType<Store["listPlans"]>;
+  getPlan(planId: string): ReturnType<Store["readPlan"]>;
+  createPlan(content: string, filename: string, tags?: string[]): { planId: string; title: string; tags: string[]; queuedRunId: string | null; createdAt: string; updatedAt: string };
+  updatePlan(planId: string, content?: string, tags?: string[]): { planId: string; title: string; tags: string[]; queuedRunId: string | null; createdAt: string; updatedAt: string };
+  deletePlan(planId: string): void;
+  queuePlan(planId: string): string;
 };
 
 export type RunReadModel = {
@@ -1079,6 +1115,71 @@ export const createSupervisor = (
 
     getConvergence(runId: string): ReturnType<Store["readConvergence"]> {
       return store.readConvergence(runId);
+    },
+
+    // -- Plans shelf --
+
+    listPlans(): Plan[] {
+      return store.listPlans();
+    },
+
+    getPlan(planId: string): Plan | undefined {
+      return store.readPlan(planId);
+    },
+
+    createPlan(content: string, filename: string, tags?: string[]) {
+      const planId = basename(filename).replace(/\.md$/, "");
+      const existing = store.readPlan(planId);
+      const title = extractTitle(content, planId);
+      const now = clock.nowIso();
+      const plan: Plan = {
+        planId,
+        title,
+        raw: content,
+        tags: tags ?? [],
+        ...(existing?.queuedRunId ? { queuedRunId: existing.queuedRunId } : {}),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+      store.writePlan(plan);
+      return toDto(plan);
+    },
+
+    updatePlan(planId: string, content?: string, tags?: string[]) {
+      const existing = store.readPlan(planId);
+      if (!existing) {
+        throw new PlanNotFoundError(planId);
+      }
+      const updated: Plan = {
+        ...existing,
+        ...(content !== undefined ? { raw: content, title: extractTitle(content, planId) } : {}),
+        ...(tags !== undefined ? { tags } : {}),
+        updatedAt: clock.nowIso(),
+      };
+      store.writePlan(updated);
+      return toDto(updated);
+    },
+
+    deletePlan(planId: string): void {
+      const existing = store.readPlan(planId);
+      if (!existing) {
+        throw new PlanNotFoundError(planId);
+      }
+      store.deletePlan(planId);
+    },
+
+    queuePlan(planId: string): string {
+      const plan = store.readPlan(planId);
+      if (!plan) {
+        throw new PlanNotFoundError(planId);
+      }
+      admitPacket(store, planId, plan.raw);
+      const meta = store.readMetaIfExists(planId);
+      if (!meta || meta.status !== "queued") {
+        throw new Error(`plan "${planId}" rejected during admission`);
+      }
+      store.writePlan({ ...plan, queuedRunId: planId });
+      return planId;
     },
   };
 };

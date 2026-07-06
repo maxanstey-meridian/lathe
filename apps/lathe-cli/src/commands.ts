@@ -16,8 +16,8 @@ import type { paths } from "@lathe/contract";
 import type { ReviewDto, RunDetailDto, StatusDto, TailEvent, TailSnapshotDto } from "@lathe/contract";
 import { loadConfig } from "@lathe/core";
 import { runTailUi } from "@lathe/core/tail";
-import { existsSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { basename, resolve } from "node:path";
 import { createDaemonClient, type DaemonClient } from "./client.js";
 import { cmdDb } from "./db.js";
 
@@ -722,6 +722,139 @@ export const cmdTail = async (env: CliEnv, args: string[], deps = openTailDeps()
 };
 
 // ---------------------------------------------------------------------------
+// Plan commands — pre-queue draft shelf (via daemon)
+// ---------------------------------------------------------------------------
+
+export const cmdPlanAdd = (env: CliEnv, packetPath: string): Promise<number> => {
+  if (!packetPath) {
+    env.err("usage: lathe plan add <file.md>");
+    return Promise.resolve(1);
+  }
+  const resolved = resolve(packetPath);
+  if (!existsSync(resolved)) {
+    env.err(`no such file: ${resolved}`);
+    return Promise.resolve(1);
+  }
+  const content = readFileSync(resolved, "utf-8");
+  const filename = basename(resolved);
+
+  return runDaemon<PathJsonResponse<"/plans", "post", 201>>(
+    env,
+    (client) => client.POST("/plans", { body: { content, filename } }),
+    (data) => env.log(`plan added: ${data.planId} (${data.title})`),
+  );
+};
+
+export const cmdPlanList = (env: CliEnv): Promise<number> =>
+  runDaemon<PathJsonResponse<"/plans", "get", 200>>(
+    env,
+    (client) => client.GET("/plans"),
+    (data) => {
+      if (data.length === 0) {
+        env.log("no plans");
+        return;
+      }
+      for (const plan of data) {
+        const queued = plan.queuedRunId ? " [queued]" : "";
+        const tags = plan.tags.length > 0 ? ` (${plan.tags.join(", ")})` : "";
+        env.log(`  ${plan.planId} — ${plan.title}${tags}${queued}`);
+      }
+    },
+  );
+
+export const cmdPlanShow = (env: CliEnv, planId: string): Promise<number> => {
+  if (!planId) {
+    env.err("usage: lathe plan show <planId>");
+    return Promise.resolve(1);
+  }
+
+  return runDaemon<PathJsonResponse<"/plans/{planId}", "get", 200>>(
+    env,
+    (client) => client.GET("/plans/{planId}", { params: { path: { planId } } }),
+    (data) => {
+      env.log(`plan: ${data.planId}`);
+      env.log(`title: ${data.title}`);
+      env.log(`tags: ${data.tags.join(", ") || "(none)"}`);
+      env.log(`queued: ${data.queuedRunId ?? "no"}`);
+      env.log("");
+      env.log(data.raw);
+    },
+    (status) => {
+      if (status === 404) {
+        env.err(`plan ${planId} not found`);
+        return true;
+      }
+      return false;
+    },
+  );
+};
+
+export const cmdPlanQueue = (env: CliEnv, planId: string): Promise<number> => {
+  if (!planId) {
+    env.err("usage: lathe plan queue <planId>");
+    return Promise.resolve(1);
+  }
+
+  return runDaemon<PathJsonResponse<"/plans/{planId}/queue", "post", 200>>(
+    env,
+    (client) => client.POST("/plans/{planId}/queue", { params: { path: { planId } } }),
+    (data) => env.log(`queued: ${data.runId}`),
+    (status) => {
+      if (status === 404) {
+        env.err(`plan ${planId} not found`);
+        return true;
+      }
+      if (status === 400) {
+        env.err(`plan ${planId} failed admission`);
+        return true;
+      }
+      return false;
+    },
+  );
+};
+
+export const cmdPlanDelete = (env: CliEnv, planId: string): Promise<number> => {
+  if (!planId) {
+    env.err("usage: lathe plan delete <planId>");
+    return Promise.resolve(1);
+  }
+
+  return runDaemon<PathJsonResponse<"/plans/{planId}", "delete", 200>>(
+    env,
+    (client) => client.DELETE("/plans/{planId}", { params: { path: { planId } } }),
+    () => env.log(`deleted: ${planId}`),
+    (status) => {
+      if (status === 404) {
+        env.err(`plan ${planId} not found`);
+        return true;
+      }
+      return false;
+    },
+  );
+};
+
+export const cmdPlan = (env: CliEnv, args: string[]): Promise<number> => {
+  const sub = args[0];
+  if (sub === "add") {
+    return cmdPlanAdd(env, args[1] ?? "");
+  }
+  if (sub === "list") {
+    return cmdPlanList(env);
+  }
+  if (sub === "show") {
+    return cmdPlanShow(env, args[1] ?? "");
+  }
+  if (sub === "queue") {
+    return cmdPlanQueue(env, args[1] ?? "");
+  }
+  if (sub === "delete") {
+    return cmdPlanDelete(env, args[1] ?? "");
+  }
+  env.err("usage: lathe plan <add|list|show|queue|delete> [args]");
+  return Promise.resolve(1);
+};
+
+// ---------------------------------------------------------------------------
 // Dispatch — returns an exit code; never calls process.exit (testable).
 // `serve` and `tail` are handled by index.ts (they don't return an exit code).
 // ---------------------------------------------------------------------------
@@ -738,6 +871,7 @@ export const usage = `lathe — sequential overnight executor of human-written s
   lathe status                 what is running / queued / parked + campaign convergence
   lathe review                 morning triage: terminal statuses, outcomes, questions
   lathe queue [add|drop]       list the queue / add or drop a packet (via daemon)
+  lathe plan <add|list|show|queue|delete> [args]  manage draft plans (via daemon)
   lathe get <runId>            show run details (via daemon)
   lathe tail [runId]           live journal stream for a run (via daemon)
   lathe db <command> [args]    read-only SQLite inspector (defaults to active run; --json for raw)
@@ -771,6 +905,8 @@ export const runCommand = async (env: CliEnv, command: string, args: string[]): 
       return cmdReview(env);
     case "queue":
       return cmdQueue(env, args);
+    case "plan":
+      return cmdPlan(env, args);
     case "get":
       return cmdGet(env, args[0] ?? "");
     case "db":

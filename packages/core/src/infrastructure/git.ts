@@ -114,8 +114,12 @@ export const worktreeIsDirty = (worktree: string): boolean =>
   git(worktree, ["status", "--porcelain"]).length > 0;
 
 // One WIP commit per run attempt (R3): at terminal status, park, or crash
-// recovery. Returns undefined when there is nothing to commit.
+// recovery. Returns undefined when the worktree is absent or there is nothing
+// to commit.
 export const wipCommit = (worktree: string, message: string): string | undefined => {
+  if (!existsSync(worktree)) {
+    return undefined;
+  }
   if (!worktreeIsDirty(worktree)) {
     return undefined;
   }

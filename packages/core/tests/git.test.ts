@@ -229,6 +229,14 @@ test("wipCommit: dirty → returns SHA; clean → undefined", () => {
   }
 });
 
+test("wipCommit: missing worktree dir → undefined, no throw", () => {
+  // Regression: meta.worktree is stamped at admission before the sandbox is
+  // created, so a terminal status reached pre-sandbox (e.g. bad packet shape)
+  // hands wipCommit a path with no directory. It must no-op, not crash git.
+  const missing = join(tmpdir(), `meridian-absent-${process.pid}-${Date.now()}`);
+  assert.strictEqual(wipCommit(missing, "WIP test"), undefined);
+});
+
 test("amendCommit: rewords HEAD and returns new SHA", () => {
   const tmp = mkdtempSync(join(tmpdir(), "meridian-amend-"));
   try {

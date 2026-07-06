@@ -10,6 +10,7 @@ import type { Store } from "../src/application/ports/store.js";
 import {
   recoverOrphanedRuns,
   recoverStaleActiveRuns,
+  recoverStaleActiveConvergences,
   recoverStalledRun,
   recoverStalledRunsAtStartup,
   runLoop,
@@ -268,6 +269,70 @@ test("recoverStaleActiveRuns: after cleanup, queued run is claimable (no self-ex
     const claimed = store.claimNextQueuedRun(excludedRepos);
     ok(claimed, "queued run claimed after stale active pointer cleanup");
     equal(claimed!.runId, "20260101-000000-reclaim");
+    await cleanTemp(tmp);
+  })();
+});
+
+// ---------------------------------------------------------------------------
+// recoverStaleActiveConvergences — clear ALL active_convergence pointers on boot
+
+test("recoverStaleActiveConvergences: clears stale convergence pointer", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "runloop-stale-conv-"));
+    const clock = fixedClock();
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+    store.addActiveConvergence({
+      runId: "20260101-000000-conv-stale",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    equal(store.listActiveConvergences().length, 1, "convergence pointer exists before recovery");
+
+    recoverStaleActiveConvergences(store);
+
+    equal(store.listActiveConvergences().length, 0, "convergence pointer cleared after recovery");
+    await cleanTemp(tmp);
+  })();
+});
+
+test("recoverStaleActiveConvergences: empty when no convergences exist", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "runloop-stale-conv-empty-"));
+    const clock = fixedClock();
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+    recoverStaleActiveConvergences(store);
+
+    equal(store.listActiveConvergences().length, 0, "no convergences after recovery");
+    await cleanTemp(tmp);
+  })();
+});
+
+test("recoverStaleActiveConvergences: multiple convergences all cleared", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "runloop-stale-conv-multi-"));
+    const clock = fixedClock();
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+    store.addActiveConvergence({
+      runId: "20260101-000000-conv-a",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+    store.addActiveConvergence({
+      runId: "20260101-000000-conv-b",
+      startedAt: "2026-01-01T00:00:01.000Z",
+    });
+    store.addActiveConvergence({
+      runId: "20260101-000000-conv-c",
+      startedAt: "2026-01-01T00:00:02.000Z",
+    });
+
+    equal(store.listActiveConvergences().length, 3, "3 convergence pointers before recovery");
+
+    recoverStaleActiveConvergences(store);
+
+    equal(store.listActiveConvergences().length, 0, "all convergence pointers cleared");
     await cleanTemp(tmp);
   })();
 });
@@ -1326,7 +1391,8 @@ test("runLoop: excludedRepos is built from listActiveRuns and listActiveConverge
         throw new Error("not called");
       },
       removeActiveConvergence: () => {
-        throw new Error("not called");
+        // Called by recoverStaleActiveConvergences at boot — no-op so the
+        // mock store still returns the convergence for excludedRepos testing.
       },
       writeCampaign: () => {
         throw new Error("not called");

@@ -78,6 +78,7 @@ export const runLoop = async <Ref>(
   // Recovery sweeps — behind the lock, before draining.
   recoverOrphanedRuns(store, repo, clock);
   recoverStaleActiveRuns(store);
+  recoverStaleActiveConvergences(store);
   recoverStalledRunsAtStartup(
     store,
     config.thresholds.maxStallRetries,
@@ -396,6 +397,15 @@ export const recoverStaleActiveRuns = (store: Store): void => {
     if (!meta || meta.status !== "running") {
       store.removeActiveRun(active.runId);
     }
+  }
+};
+
+// Clear ALL active_convergence pointers on boot. No convergence can be running
+// at startup — the daemon was just started. If left, the worker loop's
+// repo-exclusion logic skips the repo, soft-locking all queued runs on it.
+export const recoverStaleActiveConvergences = (store: Store): void => {
+  for (const conv of store.listActiveConvergences()) {
+    store.removeActiveConvergence(conv.runId);
   }
 };
 

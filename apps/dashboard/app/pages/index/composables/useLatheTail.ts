@@ -1,4 +1,4 @@
-import { client, type TailEvent } from "@lathe/contract";
+import { client, type TailEvent, type TailRunStatus } from "@lathe/contract";
 import { onUnmounted, ref, watch } from "vue";
 
 import { daemonTailEventsUrl, daemonTailRunEventsUrl } from "../logic/daemon-url";
@@ -14,6 +14,13 @@ const TAIL_EVENT_KINDS = [
   "tail.run.changed",
   "tail.ping",
 ] as const;
+
+const TERMINAL_STATUSES: readonly TailRunStatus[] = [
+  "ready_for_review",
+  "blocked",
+  "failed",
+  "accepted",
+];
 
 export const useLatheTail = (): LatheTail => {
   const runtimeConfig = useRuntimeConfig();
@@ -68,6 +75,14 @@ export const useLatheTail = (): LatheTail => {
     for (const kind of TAIL_EVENT_KINDS) {
       source.addEventListener(kind, (raw: MessageEvent) => {
         const event = JSON.parse(raw.data) as TailEvent;
+        if (
+          event.kind === "tail.stats" &&
+          TERMINAL_STATUSES.includes(event.status) &&
+          selectedRunId.value === null
+        ) {
+          state.value = tailStateFromSnapshot(null);
+          return;
+        }
         state.value = applyTailEvent(state.value, event, Date.now());
       });
     }

@@ -225,6 +225,59 @@ test("config generation: MCP bridge wired in", () => {
   assert.ok(writtenConfig.mcp["meridian-bridge"].url.includes("4197"));
 });
 
+test("config generation: registry entries merge by providerId and conflict on baseUrl is skipped", () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "meridian-config-test-"));
+  const config = Config.parse({
+    ...makeTestConfig(),
+    baby: {
+      ...makeTestConfig().baby,
+      models: {
+        fast: {
+          providerId: "omlx",
+          modelId: "Qwen3.6-35B-A3B-UD-MLX-8bit",
+          baseUrl: "http://localhost:8000/v1",
+          contextWindow: 131_072,
+        },
+        broken: {
+          providerId: "omlx",
+          modelId: "Qwen3.6-35B-A3B-UD-MLX-broken",
+          baseUrl: "http://localhost:9000/v1",
+          contextWindow: 65_536,
+        },
+      },
+    },
+  });
+  const paths = makePaths(tmpDir);
+
+  mkdirSync(join(tmpDir, "plugin"), { recursive: true });
+  writeFileSync(join(tmpDir, "plugin", "gate-plugin.ts"), "");
+  mkdirSync(join(tmpDir, "xdg", "opencode", "node_modules", "@opencode-ai", "plugin"), {
+    recursive: true,
+  });
+
+  const warnings: string[] = [];
+  const warn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map(String).join(" "));
+  };
+  try {
+    writeOpencodeConfig(config, paths, join(tmpDir, "plugin", "gate-plugin.ts"));
+  } finally {
+    console.warn = warn;
+  }
+
+  const writtenConfig = JSON.parse(readFileSync(paths.opencodeConfigFile, "utf-8"));
+  assert.ok(writtenConfig.provider.omlx.models[config.baby.modelId]);
+  assert.ok(writtenConfig.provider.omlx.models["Qwen3.6-35B-A3B-UD-MLX-8bit"]);
+  assert.strictEqual(
+    writtenConfig.provider.omlx.models["Qwen3.6-35B-A3B-UD-MLX-broken"],
+    undefined,
+  );
+  assert.ok(
+    warnings.some((warning) => warning.includes("conflicts with already-declared baseUrl")),
+  );
+});
+
 test("config generation: skips copy when node_modules trio already present", () => {
   const tmpDir = mkdtempSync(join(tmpdir(), "meridian-config-test-"));
   const config = makeTestConfig();

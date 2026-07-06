@@ -52,6 +52,11 @@ export const PacketFrontmatter = z.object({
   // existing packets and the whole test corpus still parse unchanged. Stripped by
   // redactPacketInfra (INFRA_KEYS_RE) so the models never see it.
   promoted: z.boolean().default(false),
+  // Optional named model key into `baby.models` config registry. When present and
+  // the key exists in the registry, Baby uses that model instead of the default.
+  // Falls back to default when absent or not in registry (with a journal warning).
+  // Stripped from model-visible content by redactPacketInfra.
+  baby_model: z.string().optional(),
 });
 export type PacketFrontmatter = z.infer<typeof PacketFrontmatter>;
 
@@ -81,7 +86,7 @@ export type AdmissionResult = { ok: true; packet: Packet } | { ok: false; proble
 
 export const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/;
 const RUNID_RE = /^\d{8}-\d{6}-[a-z0-9-]+$/;
-const INFRA_KEYS_RE = /^(repo|base|campaign_id|parent_run_id|pass|promoted):/;
+const INFRA_KEYS_RE = /^(repo|base|campaign_id|parent_run_id|pass|promoted|baby_model):/;
 
 // ---------------------------------------------------------------------------
 // Tolerant frontmatter extraction (CONTRACT §4 K3) — the ONE place every caller

@@ -664,6 +664,153 @@ test("runLoop: wedged run → recoverStalledRun → requeued", () => {
   })();
 });
 
+test("runLoop: blocked recovery uses override model label", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "runloop-blocked-promo-"));
+    const clock = fixedClock();
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const runId = "20260101-000000-blocked-promo";
+
+    store.writeMeta(
+      makeMeta({
+        runId,
+        status: "queued" as const,
+        babyModel: "registry-fast",
+      }),
+    );
+
+    const stopController = new AbortController();
+    const executeRun: ExecuteRunCallback = async (id, _meta, _ref, runClock) => {
+      const meta = store.readMeta(id);
+      store.writeMeta({
+        ...meta,
+        status: "blocked" as const,
+        blockedReason: "wedged" as const,
+        stallRetries: 2,
+        updatedAt: runClock.nowIso(),
+      });
+      stopController.abort();
+    };
+    const convergeStep: ConvergeCallback = async () => {};
+    const waitForWork: WaitForWorkCallback = async () => {};
+    const bridge: BridgePort = {
+      bind: () => Promise.resolve({ byRunId: new Map() }),
+      clearActive: (_ref, _runId) => undefined,
+      close: () => undefined,
+    };
+
+    const config = Config.parse({
+      baby: {
+        models: {
+          "registry-fast": {
+            providerId: "alt-provider",
+            modelId: "alt-model",
+            baseUrl: "http://alt-provider.local/v1",
+            contextWindow: 200_000,
+          },
+        },
+      },
+    });
+
+    await runLoop(
+      config,
+      store,
+      fakeRepo(),
+      { holdPowerAssertion: async () => {} },
+      clock,
+      bridge,
+      executeRun,
+      convergeStep,
+      waitForWork,
+      { stopSignal: stopController.signal },
+    );
+
+    const journal = store.readJournal(runId);
+    const promoEvent = journal.find((e) => e.event === "model_promoted");
+    ok(promoEvent, "startup promotion should be journaled");
+    if (promoEvent?.event === "model_promoted") {
+      equal(promoEvent.from, "alt-provider/alt-model");
+    }
+
+    await cleanTemp(tmp);
+  })();
+});
+
+test("runLoop: post-run promotion uses override model label", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "runloop-postrun-promo-"));
+    const clock = fixedClock();
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+    const runId = "20260101-000000-postrun-promo";
+
+    store.writeMeta(
+      makeMeta({
+        runId,
+        status: "queued" as const,
+        babyModel: "registry-fast",
+      }),
+    );
+
+    const stopController = new AbortController();
+    const executeRun: ExecuteRunCallback = async (id, _meta, _ref, runClock) => {
+      const meta = store.readMeta(id);
+      store.writeMeta({ ...meta, status: "accepted" as const, updatedAt: runClock.nowIso() });
+    };
+    const convergeStep: ConvergeCallback = async (id) => {
+      const meta = store.readMeta(id);
+      store.writeMeta({
+        ...meta,
+        status: "blocked" as const,
+        blockedReason: "wedged" as const,
+        stallRetries: 2,
+        updatedAt: clock.nowIso(),
+      });
+      stopController.abort();
+    };
+    const waitForWork: WaitForWorkCallback = async () => {};
+    const bridge: BridgePort = {
+      bind: () => Promise.resolve({ byRunId: new Map() }),
+      clearActive: (_ref, _runId) => undefined,
+      close: () => undefined,
+    };
+
+    const config = Config.parse({
+      baby: {
+        models: {
+          "registry-fast": {
+            providerId: "alt-provider",
+            modelId: "alt-model",
+            baseUrl: "http://alt-provider.local/v1",
+            contextWindow: 200_000,
+          },
+        },
+      },
+    });
+
+    await runLoop(
+      config,
+      store,
+      fakeRepo(),
+      { holdPowerAssertion: async () => {} },
+      clock,
+      bridge,
+      executeRun,
+      convergeStep,
+      waitForWork,
+      { stopSignal: stopController.signal },
+    );
+
+    const journal = store.readJournal(runId);
+    const promoEvent = journal.find((e) => e.event === "model_promoted");
+    ok(promoEvent, "post-run promotion should be journaled");
+    if (promoEvent?.event === "model_promoted") {
+      equal(promoEvent.from, "alt-provider/alt-model");
+    }
+
+    await cleanTemp(tmp);
+  })();
+});
+
 // ---------------------------------------------------------------------------
 // decideCrashRecovery usage in run-loop crash branch
 

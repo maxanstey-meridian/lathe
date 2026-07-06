@@ -89,6 +89,9 @@ export const RunMeta = z.object({
   // stall cycle can promote again. Only the inference changes — the agent stays
   // "baby".
   promoted: z.boolean().default(false),
+  // Per-packet baby model override key (from frontmatter.baby_model). Resolved
+  // at admission and carried into the turn loop for model selection.
+  babyModel: z.string().optional(),
   startedAt: z.string().optional(),
   endedAt: z.string().optional(),
   updatedAt: z.string(),

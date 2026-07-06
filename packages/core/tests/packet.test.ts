@@ -203,6 +203,50 @@ body
   }
 });
 
+test("parse: baby_model parses and round-trips", () => {
+  const rawWithBabyModel = `---
+repo: /tmp/repo
+base: main
+compare_commit: main
+baby_model: codestral-latest
+outcomes:
+  - id: feature-a
+    description: Adds feature A
+expected_surface:
+  - src/**
+verification:
+  - command: pnpm test
+---
+body
+`;
+  const result = parsePacketShape(rawWithBabyModel);
+  assert.strictEqual(result.ok, true);
+  if (result.ok) {
+    assert.strictEqual(result.packet.frontmatter.baby_model, "codestral-latest");
+  }
+
+  // Omitted baby_model defaults to undefined.
+  const rawWithoutBabyModel = `---
+repo: /tmp/repo
+base: main
+compare_commit: main
+outcomes:
+  - id: feature-a
+    description: Adds feature A
+expected_surface:
+  - src/**
+verification:
+  - command: pnpm test
+---
+body
+`;
+  const result2 = parsePacketShape(rawWithoutBabyModel);
+  assert.strictEqual(result2.ok, true);
+  if (result2.ok) {
+    assert.strictEqual(result2.packet.frontmatter.baby_model, undefined);
+  }
+});
+
 test("parse: negative outcomes count rejected by schema", () => {
   const raw = `---
 repo: /tmp/repo
@@ -222,7 +266,7 @@ body
 
 // ---- redactPacketInfra ----
 
-test("redact: strips all six infra keys", () => {
+test("redact: strips all seven infra keys", () => {
   const raw = `---
 repo: /home/user/proj
 base: main
@@ -231,6 +275,7 @@ campaign_id: my-campaign
 parent_run_id: 20260617-010000-parent
 pass: 2
 promoted: true
+baby_model: codestral-latest
 summary: test packet
 outcomes:
   - id: feature-a
@@ -249,6 +294,7 @@ body content
   assert(!result.includes("parent_run_id:"));
   assert(!result.includes("pass:"));
   assert(!result.includes("promoted:"));
+  assert(!result.includes("baby_model:"));
   assert(result.includes("summary:"));
   assert(result.includes("outcomes:"));
   assert(result.includes("expected_surface:"));
@@ -310,6 +356,34 @@ test("redact: returns raw when no frontmatter", () => {
   const raw = "just some text\nno yaml delimiters";
   const result = redactPacketInfra(raw);
   assert.strictEqual(result, raw);
+});
+
+test("redact: strips baby_model from model-visible content but parsed packet carries it", () => {
+  const raw = `---
+repo: /tmp/repo
+base: main
+compare_commit: main
+baby_model: codestral-latest
+summary: test packet
+outcomes:
+  - id: feature-a
+    description: Does things
+expected_surface:
+  - src/**
+verification:
+  - command: pnpm test
+---
+body content
+`;
+  // Path 1: parse the original — baby_model is present.
+  const parsed = parsePacketShape(raw);
+  assert.strictEqual(parsed.ok, true);
+  if (parsed.ok) {
+    assert.strictEqual(parsed.packet.frontmatter.baby_model, "codestral-latest");
+  }
+  // Path 2: redaction strips baby_model from the raw text.
+  const redacted = redactPacketInfra(raw);
+  assert(!redacted.includes("baby_model:"));
 });
 
 // ---- stampBase ----

@@ -11,7 +11,6 @@
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { babyContextBudget } from "../../config/config.js";
 import type { Config } from "../../config/schemas.js";
 import {
   extractText,
@@ -354,13 +353,40 @@ const reseedFromCheckpoint = (
 };
 
 // ---------------------------------------------------------------------------
-// Model helpers — baby's normal model and the promoteTo fallback.
+// Model helpers — baby's normal model, per-packet override, and promoteTo fallback.
 
 export const babyModelConfig = (config: Config): ModelConfig => ({
   providerId: config.baby.providerId,
   modelId: config.baby.modelId,
   agent: config.baby.agent,
 });
+
+// Resolve baby model from config, optionally overridden by a named key from
+// baby.models registry. Falls back to default when key is absent or not in
+// registry. Returns both the ModelConfig and the contextWindow for budget math.
+export const resolveBabyModel = (
+  config: Config,
+  overrideKey?: string,
+): { model: ModelConfig; contextWindow: number } => {
+  const entry = overrideKey ? config.baby.models[overrideKey] : undefined;
+  if (entry) {
+    return {
+      model: { providerId: entry.providerId, modelId: entry.modelId, agent: config.baby.agent },
+      contextWindow: entry.contextWindow,
+    };
+  }
+  return {
+    model: {
+      providerId: config.baby.providerId,
+      modelId: config.baby.modelId,
+      agent: config.baby.agent,
+    },
+    contextWindow: config.baby.contextWindow,
+  };
+};
+
+// Build a "providerId/modelId" label string from a ModelConfig.
+export const modelLabel = (model: ModelConfig): string => `${model.providerId}/${model.modelId}`;
 
 // The promoted (strong) model: baby's promoteTo override if set, else daddy's
 // configured model — so promotion can't drift onto a stale/unavailable model
@@ -441,12 +467,27 @@ export const turnLoop = async (
   // review-reject promotion latched in meta and carried across the requeue.
   // Otherwise we start on Baby's normal model and may still promote mid-loop below.
   let promoted = packet.frontmatter.promoted || (store.readMetaIfExists(runId)?.promoted ?? false);
-  let babyModel = promoted ? promotedModelConfig(config) : babyModelConfig(config);
-  const contextBudget = babyContextBudget(config);
+  const meta = store.readMetaIfExists(runId);
+  const overrideKey = meta?.babyModel;
+  const prePromotionResolved = resolveBabyModel(config, overrideKey);
+  const resolved = promoted
+    ? { model: promotedModelConfig(config), contextWindow: config.baby.contextWindow }
+    : prePromotionResolved;
+  let babyModel = resolved.model;
+  const contextBudget = Math.floor(resolved.contextWindow * config.thresholds.rotationFraction);
 
   let next = seed;
   let sessionId = babySessionId;
   let turn = 0;
+
+  // Warn when a per-packet model override was requested but the key is not in
+  // the registry — fall back to default without blocking the run.
+  if (overrideKey && overrideKey in config.baby.models === false && !promoted) {
+    journal(ports, runId, turn, {
+      event: "driver_note",
+      note: `per-packet model override "${overrideKey}" not found in baby.models — using default ${config.baby.providerId}/${config.baby.modelId}`,
+    });
+  }
   let ladder = 0;
   let sendFailures = 0;
   let consecutiveContextOverflows = 0;
@@ -475,7 +516,7 @@ export const turnLoop = async (
   if (promoted) {
     journal(ports, runId, turn, {
       event: "model_promoted",
-      from: `${config.baby.providerId}/${config.baby.modelId}`,
+      from: modelLabel(prePromotionResolved.model),
       to: promotedModelLabel(config),
     });
   }
@@ -707,6 +748,7 @@ export const turnLoop = async (
         // baby one more set of retries. Ephemeral — the next run starts fresh
         // on baby's normal model. Only fires once per run.
         promoted = true;
+        const prevBabyModel = babyModel;
         babyModel = promotedModelConfig(config);
         channel.reportRejectionCount = 0;
         const pm = store.readMetaIfExists(runId);
@@ -715,7 +757,7 @@ export const turnLoop = async (
         }
         journal(ports, runId, turn, {
           event: "model_promoted",
-          from: `${config.baby.providerId}/${config.baby.modelId}`,
+          from: modelLabel(prevBabyModel),
           to: promotedModelLabel(config),
         });
         const {
@@ -873,11 +915,12 @@ export const turnLoop = async (
           }
 
           promoted = true;
+          const prevBabyModel = babyModel;
           babyModel = promotedModelConfig(config);
           store.writeMeta({ ...meta, promoted: true, updatedAt: clock.nowIso() });
           journal(ports, runId, turn, {
             event: "model_promoted",
-            from: `${config.baby.providerId}/${config.baby.modelId}`,
+            from: modelLabel(prevBabyModel),
             to: promotedModelLabel(config),
           });
           sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, false);
@@ -985,6 +1028,7 @@ export const turnLoop = async (
             // run starts fresh on baby's normal model. Only fires once per run.
             if (!promoted && config.thresholds.promoteAtCap) {
               promoted = true;
+              const prevBabyModel = babyModel;
               babyModel = promotedModelConfig(config);
               channel.reportRejectionCount = 0;
               // Latch the promotion in meta so it survives any later requeue and a
@@ -995,7 +1039,7 @@ export const turnLoop = async (
               }
               journal(ports, runId, turn, {
                 event: "model_promoted",
-                from: `${config.baby.providerId}/${config.baby.modelId}`,
+                from: modelLabel(prevBabyModel),
                 to: promotedModelLabel(config),
               });
               const {
@@ -1094,6 +1138,7 @@ export const turnLoop = async (
         if (consecutiveContextOverflows >= 2) {
           if (!promoted && config.thresholds.promoteAtCap) {
             promoted = true;
+            const prevBabyModel = babyModel;
             babyModel = promotedModelConfig(config);
             consecutiveContextOverflows = 0;
             const pm = store.readMetaIfExists(runId);
@@ -1102,7 +1147,7 @@ export const turnLoop = async (
             }
             journal(ports, runId, turn, {
               event: "model_promoted",
-              from: `${config.baby.providerId}/${config.baby.modelId}`,
+              from: modelLabel(prevBabyModel),
               to: promotedModelLabel(config),
             });
           } else {

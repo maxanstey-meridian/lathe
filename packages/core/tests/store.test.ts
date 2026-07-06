@@ -1026,6 +1026,61 @@ verification:
   await cleanTemp(tmp);
 });
 
+test("store: admitQueue stamps babyModel from frontmatter", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-adm-babymodel-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const packet = `---
+repo: /tmp/test-repo
+base: main
+compare_commit: main
+baby_model: codestral-latest
+summary: baby model packet
+outcomes:
+  - id: o1
+    description: outcome 1
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+`;
+  store.admitQueue("20260101-000000-babymodel", packet);
+  const meta = store.readMetaIfExists("20260101-000000-babymodel");
+  ok(meta, "meta should exist after admit");
+  strictEqual(meta!.babyModel, "codestral-latest", "babyModel should be set from frontmatter");
+  await cleanTemp(tmp);
+});
+
+test("store: admitQueue omits babyModel when absent from frontmatter", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-adm-nobabymodel-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const packet = `---
+repo: /tmp/test-repo
+base: main
+compare_commit: main
+summary: no baby model
+outcomes:
+  - id: o1
+    description: outcome 1
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+`;
+  store.admitQueue("20260101-000000-nobabymodel", packet);
+  const meta = store.readMetaIfExists("20260101-000000-nobabymodel");
+  ok(meta, "meta should exist after admit");
+  strictEqual(
+    (meta as any).babyModel,
+    undefined,
+    "babyModel should be absent when frontmatter lacks baby_model",
+  );
+  await cleanTemp(tmp);
+});
+
 test("store: admitQueue defaults promoted:false when absent from frontmatter", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-adm-nopromo-"));
   const clock = fixedClock();
@@ -1074,6 +1129,32 @@ verification:
   const meta = store.initMetaFromQueue("20260101-000000-meta-promo");
   ok(meta, "initMetaFromQueue should produce a RunMeta");
   strictEqual(meta!.promoted, true, "promoted should be true from frontmatter");
+  await cleanTemp(tmp);
+});
+
+test("store: initMetaFromQueue stamps babyModel from frontmatter", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-meta-babymodel-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const packet = `---
+repo: /tmp/test-repo
+base: main
+compare_commit: main
+baby_model: codestral-latest
+summary: baby model packet
+outcomes:
+  - id: o1
+    description: outcome 1
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+`;
+  store.admitQueue("20260101-000000-meta-babymodel", packet);
+  const meta = store.initMetaFromQueue("20260101-000000-meta-babymodel");
+  ok(meta, "initMetaFromQueue should produce a RunMeta");
+  strictEqual(meta!.babyModel, "codestral-latest", "babyModel should be set from frontmatter");
   await cleanTemp(tmp);
 });
 

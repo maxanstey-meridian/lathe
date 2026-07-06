@@ -54,8 +54,35 @@ export const writeOpencodeConfig = (
     // before the daddy timeout itself would — both ceilings are now 1h.
     experimental: { mcp_timeout: 3_600_000 },
     model: `${config.baby.providerId}/${config.baby.modelId}`,
-    provider: {
-      [config.baby.providerId]: {
+    provider: (() => {
+      type ProviderEntry = {
+        npm?: string;
+        name?: string;
+        options: Record<string, unknown>;
+        models?: Record<
+          string,
+          {
+            name: string;
+            limit: { context: number; output: number };
+            options?: Record<string, unknown>;
+          }
+        >;
+      };
+
+      const providerMap = new Map<string, ProviderEntry>();
+
+      const defaultProviderId = config.baby.providerId;
+      const defaultModelId = config.baby.modelId;
+      const defaultContextWindow = config.baby.contextWindow;
+
+      const thinkingOptions =
+        config.baby.thinkingMode === "disabled"
+          ? { options: { think: false } }
+          : config.baby.thinkingBudget !== null
+            ? { options: { thinking_budget: config.baby.thinkingBudget } }
+            : {};
+
+      providerMap.set(defaultProviderId, {
         npm: "@ai-sdk/openai-compatible",
         name: "Baby inference",
         options: {
@@ -65,47 +92,79 @@ export const writeOpencodeConfig = (
           chunkTimeout: 600_000,
         },
         models: {
-          [config.baby.modelId]: {
-            name: config.baby.modelId,
-            limit: { context: config.baby.contextWindow, output: 16_384 },
-            // Forwarded into oMLX's ChatCompletionRequest body (grounded in its
-            // OpenAPI schema). "disabled" sends think:false — no reasoning at
-            // all. "budget" sends thinking_budget:N — server forces </think> on
-            // hitting it. Omitted entirely when budget mode + null budget.
-            ...(config.baby.thinkingMode === "disabled"
-              ? { options: { think: false } }
-              : config.baby.thinkingBudget !== null
-                ? { options: { thinking_budget: config.baby.thinkingBudget } }
-                : {}),
+          [defaultModelId]: {
+            name: defaultModelId,
+            limit: { context: defaultContextWindow, output: 16_384 },
+            ...thinkingOptions,
           },
         },
-      },
-      // Daddy's provider (zai-coding-plan by default) is NOT declared here:
-      // it resolves through opencode's provider registry + global auth
-      // (~/.local/share/opencode/auth.json), same as v1.
-      //
-      // Super-daddy's provider (openai by default) ALSO resolves via global auth.
-      // Pin its baseURL to the Codex backend — the endpoint a direct curl with
-      // this ChatGPT-OAuth token answers in ~0.5s even on a 100K-char prompt.
-      // Credentials/headers still come from opencode's openai-oauth handling;
-      // only the host is fixed. Guarded so it never clobbers Baby's full provider
-      // declaration when the two share a providerId.
-      ...(config.superdaddy.providerId !== config.baby.providerId
-        ? {
-            [config.superdaddy.providerId]: {
-              options: {
-                baseURL: config.superdaddy.baseUrl,
-                headerTimeout: config.superdaddy.headerTimeoutMs,
-                // Present only for a local proxy provider (e.g. claude-max-proxy);
-                // openai/codex omits it and uses opencode's ChatGPT-OAuth instead.
-                ...(typeof config.superdaddy.apiKey === "string"
-                  ? { apiKey: config.superdaddy.apiKey }
+      });
+
+      for (const [key, entry] of Object.entries(config.baby.models)) {
+        const existing = providerMap.get(entry.providerId);
+        if (existing) {
+          if ((existing.options.baseURL as string) !== entry.baseUrl) {
+            console.warn(
+              `opencode config: baby.models[${key}] has providerId "${entry.providerId}" ` +
+                `but baseUrl "${entry.baseUrl}" conflicts with already-declared baseUrl ` +
+                `"${existing.options.baseURL}" — skipping this model entry`,
+            );
+            continue;
+          }
+          existing.models![entry.modelId] = {
+            name: entry.modelId,
+            limit: { context: entry.contextWindow, output: 16_384 },
+            ...(entry.thinkingBudget !== null
+              ? { options: { thinking_budget: entry.thinkingBudget } }
+              : {}),
+          };
+        } else {
+          providerMap.set(entry.providerId, {
+            npm: "@ai-sdk/openai-compatible",
+            name: "Baby inference",
+            options: {
+              baseURL: entry.baseUrl,
+              apiKey: entry.apiKey,
+              timeout: entry.timeoutMs,
+              chunkTimeout: 600_000,
+            },
+            models: {
+              [entry.modelId]: {
+                name: entry.modelId,
+                limit: { context: entry.contextWindow, output: 16_384 },
+                ...(entry.thinkingBudget !== null
+                  ? { options: { thinking_budget: entry.thinkingBudget } }
                   : {}),
               },
             },
-          }
-        : {}),
-    },
+          });
+        }
+      }
+
+      const providerObj: Record<string, ProviderEntry> = {};
+      for (const [providerId, entry] of providerMap) {
+        providerObj[providerId] = entry;
+      }
+
+      // Daddy resolves through opencode's global auth, so it is intentionally
+      // not declared in the generated provider map.
+      if (!providerMap.has(config.superdaddy.providerId)) {
+        // Super-daddy only joins when its providerId is unused by baby entries.
+        providerObj[config.superdaddy.providerId] = {
+          options: {
+            baseURL: config.superdaddy.baseUrl,
+            headerTimeout: config.superdaddy.headerTimeoutMs,
+            // Present only for a local proxy provider (e.g. claude-max-proxy);
+            // openai/codex omits it and uses opencode's ChatGPT-OAuth instead.
+            ...(typeof config.superdaddy.apiKey === "string"
+              ? { apiKey: config.superdaddy.apiKey }
+              : {}),
+          },
+        };
+      }
+
+      return providerObj;
+    })(),
     mcp: {
       "meridian-bridge": {
         type: "remote",

@@ -26,6 +26,7 @@ const PACKET_RAW = `---
 repo: /tmp/test-repo
 base: main
 compare_commit: main
+baby_model: codestral-latest
 summary: execute-run fixture
 outcomes:
   - id: test-outcome
@@ -349,6 +350,7 @@ test("makeExecuteRun: real fresh queue path — reads the live run packet", () =
     equal(meta.base, "main");
     equal(meta.branch, `meridian/${RUN_ID}`);
     equal(meta.worktree, join(tmp, "runs", RUN_ID, "worktree"));
+    equal(meta.babyModel, "codestral-latest", "babyModel persisted from queue packet into meta");
     store.writeMeta({ ...meta, status: "running" as const, updatedAt: "2026-01-01T00:00:00.000Z" });
 
     const channel = emptyChannel();
@@ -387,6 +389,11 @@ test("makeExecuteRun: real fresh queue path — reads the live run packet", () =
     const metaAfter = store.readMeta(RUN_ID);
     equal(metaAfter.status, "blocked");
     equal(metaAfter.blockedReason, "human_decision");
+    equal(
+      metaAfter.babyModel,
+      "codestral-latest",
+      "babyModel preserved through executeRun meta transition",
+    );
     // The ledger + gate were initialised on the fresh attempt.
     equal(store.readLedger(RUN_ID).outcomes.length, 1);
     ok(store.readGateState(RUN_ID));

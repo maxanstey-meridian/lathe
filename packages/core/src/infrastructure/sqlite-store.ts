@@ -558,6 +558,7 @@ export class SqliteStoreAdapter implements Store {
     // Campaign fields from packet frontmatter (optional campaign_id, pass defaults to 1).
     const campaignId = shape.packet.frontmatter.campaign_id;
     const pass = shape.packet.frontmatter.pass ?? 1;
+    const babyModel = shape.packet.frontmatter.baby_model;
     this.writeMeta({
       runId,
       status: "queued",
@@ -568,6 +569,7 @@ export class SqliteStoreAdapter implements Store {
       worktree: join(this.paths.runDir(runId), "worktree"),
       ...(campaignId !== undefined ? { campaignId } : {}),
       pass,
+      ...(babyModel !== undefined ? { babyModel } : {}),
       stallRetries: 0,
       crashRetries: 0,
       reorientRetries: 0,
@@ -619,6 +621,8 @@ export class SqliteStoreAdapter implements Store {
     if (!repo || !base) {
       return undefined;
     }
+    const shape = parsePacketShape(raw, runId);
+    const babyModel = shape.ok ? shape.packet.frontmatter.baby_model : undefined;
     return {
       runId,
       status: "queued",
@@ -628,6 +632,7 @@ export class SqliteStoreAdapter implements Store {
       branch: `meridian/${runId}`,
       worktree: join(this.paths.runDir(runId), "worktree"),
       pass: 1,
+      ...(babyModel !== undefined ? { babyModel } : {}),
       stallRetries: 0,
       crashRetries: 0,
       reorientRetries: 0,

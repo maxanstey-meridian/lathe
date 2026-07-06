@@ -24,7 +24,7 @@ import type { Store } from "../ports/store.js";
 import type { QueueEntry } from "../ports/store.js";
 import { promoteStaged } from "./chain-promotion.js";
 import { journal } from "./run-runtime.js";
-import { promotedModelLabel } from "./turn-loop.js";
+import { modelLabel, promotedModelLabel, resolveBabyModel } from "./turn-loop.js";
 
 // ---------------------------------------------------------------------------
 // Callback interfaces — owned by the caller (future CLI entry point or
@@ -298,9 +298,10 @@ export const runLoop = async <Ref>(
           config.thresholds.promoteAtCap,
         );
         if (stall.action === "promote") {
+          const fromLabel = modelLabel(resolveBabyModel(config, terminalMeta.babyModel).model);
           journal({ store, clock }, runId, 0, {
             event: "model_promoted",
-            from: `${config.baby.providerId}/${config.baby.modelId}`,
+            from: fromLabel,
             to: promotedModelLabel(config),
           });
         }
@@ -347,9 +348,10 @@ export const runLoop = async <Ref>(
       config.thresholds.promoteAtCap,
     );
     if (stall.action === "promote") {
+      const fromLabel = modelLabel(resolveBabyModel(config, terminalMeta.babyModel).model);
       journal({ store, clock }, runId, 0, {
         event: "model_promoted",
-        from: `${config.baby.providerId}/${config.baby.modelId}`,
+        from: fromLabel,
         to: promotedModelLabel(config),
       });
     }

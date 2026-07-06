@@ -57,6 +57,24 @@ export const Config = z.object({
           modelId: z.string(),
         })
         .optional(),
+      // Named model overrides the packet can select via `baby_model` frontmatter.
+      // Entries share providerId → baseUrl/apiKey/timeout; each provider gets one
+      // declaration in the opencode config with all its models listed. Defaults to
+      // {} so existing config.json files parse unchanged.
+      models: z
+        .record(
+          z.string(),
+          z.object({
+            providerId: z.string(),
+            modelId: z.string(),
+            baseUrl: z.string(),
+            contextWindow: z.number().int(),
+            apiKey: z.string().default("api-key"),
+            timeoutMs: z.number().int().default(1_800_000),
+            thinkingBudget: z.number().int().nullable().default(6_000),
+          }),
+        )
+        .default({}),
     })
     .default({}),
   // Super-daddy: the convergence reviewer. It must execute (bash enabled). Default is

@@ -218,6 +218,7 @@ export const makeExecuteRun =
       // Carry the strong-model promotion across the requeue/resume — turn-loop
       // reads this to start on the promoted model.
       promoted: priorMeta?.promoted ?? false,
+      babyModel: priorMeta?.babyModel,
       startedAt: priorMeta?.startedAt ?? clock.nowIso(),
       updatedAt: clock.nowIso(),
     });

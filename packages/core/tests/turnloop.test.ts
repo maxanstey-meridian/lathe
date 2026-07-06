@@ -643,6 +643,153 @@ test("turnLoop: 3 final-review rejections → model_promoted → accept on promo
   })();
 });
 
+test("turnLoop: registry override drives runtime send and promotion label", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-override-"));
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+
+    const overrideKey = "registry-fast";
+    const overrideLabel = "alt-provider/alt-model";
+    store.writeMeta({
+      ...store.readMeta(RUN_ID),
+      babyModel: overrideKey,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const channel = emptyChannel();
+    const report = aSubmitReport();
+    let reviewCalls = 0;
+    const modelsUsed: string[] = [];
+    const planner = fakePlanner({
+      finalReview: async () => {
+        reviewCalls += 1;
+        return reviewCalls <= 3
+          ? {
+              verdict: "request_changes",
+              findings: ["add a test"],
+              notes: "",
+              human_decision_needed: null,
+            }
+          : ACCEPT_REVIEW;
+      },
+    });
+    const executor: Executor = {
+      createSession: async () => "baby-overridden",
+      sendMessage: async (_sid, _text, model) => {
+        modelsUsed.push(`${model.providerId}/${model.modelId}`);
+        channel.pendingFinalReview = report;
+        channel.intents.push({ kind: "final-review-requested" });
+        return { info: { id: `m${modelsUsed.length}`, sessionID: _sid, tokens: {} }, parts: [] };
+      },
+      listMessages: async () => [],
+      deleteSession: async () => {},
+      abortSession: async () => {},
+    };
+    const ports = makePorts(
+      store,
+      fakeRepo(),
+      executor,
+      planner,
+      Config.parse({
+        baby: {
+          models: {
+            [overrideKey]: {
+              providerId: "alt-provider",
+              modelId: "alt-model",
+              baseUrl: "http://alt-provider.local/v1",
+              contextWindow: 200_000,
+            },
+          },
+        },
+      }),
+    );
+
+    const result = await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    equal(result.outcome.status, "ready_for_review");
+    equal(reviewCalls, 4);
+    equal(modelsUsed[0], overrideLabel);
+    equal(modelsUsed[modelsUsed.length - 1], "zai-coding-plan/glm-5.1");
+
+    const journal = store.readJournal(RUN_ID);
+    const promoEvent = journal.find((e) => e.event === "model_promoted");
+    ok(promoEvent, "model_promoted journal event must be emitted");
+    if (promoEvent?.event === "model_promoted") {
+      equal(promoEvent.from, overrideLabel);
+      equal(promoEvent.to, "zai-coding-plan/glm-5.1");
+    }
+
+    await cleanTemp(tmp);
+  })();
+});
+
+test("turnLoop: missing registry override falls back to default and warns", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "tl-override-miss-"));
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+
+    store.writeMeta({
+      ...store.readMeta(RUN_ID),
+      babyModel: "missing-key",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const channel = emptyChannel();
+    const modelsUsed: string[] = [];
+    const executor: Executor = {
+      createSession: async () => "baby-default",
+      sendMessage: async (_sid, _text, model) => {
+        modelsUsed.push(`${model.providerId}/${model.modelId}`);
+        channel.pendingFinalReview = aSubmitReport();
+        channel.intents.push({ kind: "final-review-requested" });
+        return { info: { id: `m${modelsUsed.length}`, sessionID: _sid, tokens: {} }, parts: [] };
+      },
+      listMessages: async () => [],
+      deleteSession: async () => {},
+      abortSession: async () => {},
+    };
+    const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
+
+    const result = await turnLoop(
+      ports,
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+    );
+
+    equal(result.outcome.status, "ready_for_review");
+    equal(modelsUsed[0], "omlx/Qwen3.6-35B-A3B-UD-MLX-4bit");
+
+    const journal = store.readJournal(RUN_ID);
+    ok(
+      journal.some(
+        (e) =>
+          e.event === "driver_note" &&
+          typeof e.note === "string" &&
+          e.note.includes('per-packet model override "missing-key" not found in baby.models'),
+      ),
+      "missing registry key should be journaled as a warning",
+    );
+
+    await cleanTemp(tmp);
+  })();
+});
+
 test("turnLoop: promoted model also rejected → run fails (no double promotion)", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "tl-promo-fail-"));

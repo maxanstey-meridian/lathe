@@ -47,6 +47,7 @@ export { promoteStaged } from "./application/use-cases/chain-promotion.js";
 export {
   runLoop,
   recoverOrphanedRuns,
+  recoverStaleActiveRuns,
   recoverStalledRunsAtStartup,
 } from "./application/use-cases/run-loop.js";
 export type {

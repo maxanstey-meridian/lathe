@@ -9,6 +9,7 @@ import type { Repo } from "../src/application/ports/repo.js";
 import type { Store } from "../src/application/ports/store.js";
 import {
   recoverOrphanedRuns,
+  recoverStaleActiveRuns,
   recoverStalledRun,
   recoverStalledRunsAtStartup,
   runLoop,
@@ -156,6 +157,117 @@ test("recoverOrphanedRuns: non-running runs left alone", () => {
     equal(store.readMeta("20260101-000000-wedged").blockedReason, "wedged");
     equal(store.readMeta("20260101-000000-crashed").blockedReason, "crashed");
     equal(store.readMeta("20260101-000000-failed").status, "failed");
+    await cleanTemp(tmp);
+  })();
+});
+
+// ---------------------------------------------------------------------------
+// recoverStaleActiveRuns — clear stale active_run pointers on boot
+
+test("recoverStaleActiveRuns: active pointer with queued meta → pointer cleared", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "runloop-stale-queued-"));
+    const clock = fixedClock();
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+    const meta = makeMeta({ runId: "20260101-000000-stale", status: "queued" as const });
+    store.writeMeta(meta);
+    store.addActiveRun({
+      runId: "20260101-000000-stale",
+      runDir: join(tmp, "runs", "20260101-000000-stale"),
+      worktree: join(tmp, "runs", "20260101-000000-stale", "worktree"),
+      babySessionId: "ses_stale",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    ok(store.listActiveRuns().length === 1, "active pointer exists before recovery");
+
+    recoverStaleActiveRuns(store);
+
+    equal(store.listActiveRuns().length, 0, "active pointer cleared after recovery");
+    equal(store.readMeta("20260101-000000-stale").status, "queued", "meta untouched");
+    await cleanTemp(tmp);
+  })();
+});
+
+test("recoverStaleActiveRuns: active pointer with running meta → pointer NOT cleared", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "runloop-stale-running-"));
+    const clock = fixedClock();
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+    const meta = makeMeta({ runId: "20260101-000000-live", status: "running" as const });
+    store.writeMeta(meta);
+    store.addActiveRun({
+      runId: "20260101-000000-live",
+      runDir: join(tmp, "runs", "20260101-000000-live"),
+      worktree: join(tmp, "runs", "20260101-000000-live", "worktree"),
+      babySessionId: "ses_live",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    recoverStaleActiveRuns(store);
+
+    equal(store.listActiveRuns().length, 1, "active pointer preserved for running run");
+    await cleanTemp(tmp);
+  })();
+});
+
+test("recoverStaleActiveRuns: active pointer with missing run → pointer cleared", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "runloop-stale-missing-"));
+    const clock = fixedClock();
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+    store.addActiveRun({
+      runId: "20260101-000000-gone",
+      runDir: join(tmp, "runs", "20260101-000000-gone"),
+      worktree: join(tmp, "runs", "20260101-000000-gone", "worktree"),
+      babySessionId: "ses_gone",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    ok(store.readMetaIfExists("20260101-000000-gone") === undefined, "no run meta");
+
+    recoverStaleActiveRuns(store);
+
+    equal(store.listActiveRuns().length, 0, "orphaned active pointer cleared");
+    await cleanTemp(tmp);
+  })();
+});
+
+test("recoverStaleActiveRuns: after cleanup, queued run is claimable (no self-exclusion)", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "runloop-stale-claim-"));
+    const clock = fixedClock();
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+
+    const meta = makeMeta({
+      runId: "20260101-000000-reclaim",
+      status: "queued" as const,
+      repo: "/tmp/repo",
+    });
+    store.writeMeta(meta);
+    store.addActiveRun({
+      runId: "20260101-000000-reclaim",
+      runDir: join(tmp, "runs", "20260101-000000-reclaim"),
+      worktree: join(tmp, "runs", "20260101-000000-reclaim", "worktree"),
+      babySessionId: "ses_reclaim",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    recoverStaleActiveRuns(store);
+
+    // claimNextQueuedRun uses excludedRepos derived from listActiveRuns.
+    // After cleanup, there should be no excluded repos, so the queued run is claimable.
+    const excludedRepos = store
+      .listActiveRuns()
+      .map((r) => store.readMetaIfExists(r.runId)?.repo)
+      .filter((r): r is string => r !== undefined);
+
+    const claimed = store.claimNextQueuedRun(excludedRepos);
+    ok(claimed, "queued run claimed after stale active pointer cleanup");
+    equal(claimed!.runId, "20260101-000000-reclaim");
     await cleanTemp(tmp);
   })();
 });

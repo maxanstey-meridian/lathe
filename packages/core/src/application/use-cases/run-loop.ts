@@ -77,6 +77,7 @@ export const runLoop = async <Ref>(
 
   // Recovery sweeps — behind the lock, before draining.
   recoverOrphanedRuns(store, repo, clock);
+  recoverStaleActiveRuns(store);
   recoverStalledRunsAtStartup(
     store,
     config.thresholds.maxStallRetries,
@@ -382,6 +383,19 @@ export const recoverOrphanedRuns = (store: Store, repo: Repo, clock: Clock): voi
       status: "queued" as const,
       updatedAt: clock.nowIso(),
     });
+  }
+};
+
+// Clear stale active_run pointers on boot. An active_run row whose meta is
+// not "running" (or whose run row is gone) is stale — the driver died between
+// requeuing the run and clearing the pointer. If left, the worker loop's
+// repo-exclusion logic skips the repo, and the queued run can never be claimed.
+export const recoverStaleActiveRuns = (store: Store): void => {
+  for (const active of store.listActiveRuns()) {
+    const meta = store.readMetaIfExists(active.runId);
+    if (!meta || meta.status !== "running") {
+      store.removeActiveRun(active.runId);
+    }
   }
 };
 

@@ -26,6 +26,7 @@ import {
   buildRepo,
   runDriver,
   recoverOrphanedRuns,
+  recoverStaleActiveRuns,
   recoverStalledRunsAtStartup,
   admitPacket,
   validatePacket as validatePacketUc,
@@ -485,6 +486,7 @@ export const createSupervisor = (
 
   // Run existing recovery use-cases before the loop accepts new work.
   recoverOrphanedRuns(store, repo, clock);
+  recoverStaleActiveRuns(store);
   recoverStalledRunsAtStartup(store, config.thresholds.maxStallRetries, clock);
 
   // --- Event buses ---

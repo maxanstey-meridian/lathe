@@ -76,6 +76,15 @@ const reviewCount = computed(() => status.status.value?.review.readyForReview ??
           class="flex h-4 min-w-4 items-center justify-center rounded-full bg-fuchsia-500/20 px-1 text-xs font-semibold text-fuchsia-400"
         >{{ reviewCount }}</span>
       </button>
+      <button
+        class="flex items-center gap-1.5 border-b-2 px-3 py-1.5 text-sm font-medium transition-colors"
+        :class="activeTab === 'settings'
+          ? 'border-cyan-400 text-cyan-300'
+          : 'border-transparent text-slate-500 hover:text-slate-300'"
+        @click="$emit('update:activeTab', 'settings')"
+      >
+        Settings
+      </button>
     </nav>
 
     <div class="ml-auto flex items-center gap-2">

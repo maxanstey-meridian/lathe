@@ -1,1 +1,1 @@
-export type TabId = "console" | "runs" | "review";
+export type TabId = "console" | "runs" | "review" | "settings";

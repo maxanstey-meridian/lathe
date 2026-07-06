@@ -10,13 +10,16 @@ import ParkedList from "./index/components/ParkedList.vue";
 import QueueList from "./index/components/QueueList.vue";
 import StagedChains from "./index/components/StagedChains.vue";
 import StoppedList from "./index/components/StoppedList.vue";
+import SettingsView from "./index/components/SettingsView.vue";
 import { useLatheActions } from "./index/composables/useLatheActions";
+import { useLatheSettings } from "./index/composables/useLatheSettings";
 import { useLatheStatus } from "./index/composables/useLatheStatus";
 import { useLatheTail } from "./index/composables/useLatheTail";
 import { usePacketValidation } from "./index/composables/usePacketValidation";
 import { useReviewData } from "./index/composables/useReviewData";
 import type { TabId } from "./index/logic/tabs";
 import { provideLatheActions } from "./index/ports/lathe-actions";
+import { provideLatheSettings } from "./index/ports/lathe-settings";
 import { provideLatheStatus } from "./index/ports/lathe-status";
 import { provideLatheTail } from "./index/ports/lathe-tail";
 import { providePacketValidation } from "./index/ports/packet-validation";
@@ -25,6 +28,7 @@ import { provideReviewData } from "./index/ports/review-data";
 const latheStatus = provideLatheStatus(useLatheStatus());
 const latheActions = provideLatheActions(useLatheActions(latheStatus.refresh));
 const latheTail = provideLatheTail(useLatheTail());
+provideLatheSettings(useLatheSettings());
 providePacketValidation(usePacketValidation());
 provideReviewData(useReviewData(latheStatus));
 
@@ -78,6 +82,10 @@ onMounted(() => {
         <div class="mx-auto max-w-5xl">
           <ReviewList />
         </div>
+      </div>
+
+      <div v-show="activeTab === 'settings'" class="h-full">
+        <SettingsView />
       </div>
     </div>
 

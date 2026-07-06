@@ -21,6 +21,17 @@ The job is to make:
 - provenance obvious
 - dependency direction obvious
 
+## Coding Style
+
+Non-negotiable preferences:
+
+- **Data transforms over object hierarchies** — plain `type` (TS), `sealed record` (C#), object spread, pure functions. Not entities with methods, not inheritance.
+- **Minimal dependencies** — every package must earn its place. The absence of a dependency is a feature, not a gap.
+- **Let patterns prove themselves** — prefer duplication over premature extraction. Three similar lines beats a premature helper. Extract when the pattern is real, not when it first appears.
+- **Readability over abstraction** — procedural scripts that read top-to-bottom beat clever composition. A reader should understand each line without holding the abstraction in their head.
+- **No `process.env` directly** — use the validated config object. Add new env vars to the Zod schema (`src/config.ts` or equivalent). Ambient config access is untraceable.
+- **No self-narrating comments** — do not add comments that restate what the code plainly says. A comment earns its place only by explaining WHY: a non-obvious constraint, a design decision, or a real gotcha. Stream-of-consciousness narration ("now loop over the items") and notes-to-self are noise. When in doubt, leave it out.
+
 ## Decision Rule
 
 When asked what is right, better, best, default, or proper:
@@ -115,6 +126,27 @@ Avoid:
 
 Where runtime DI identity is needed, prefer abstract-class tokens with interface-like shape.
 
+## Type Safety (All Stacks)
+
+No `object`, `object?`, `dynamic`, `any`, or `unknown` as value carriers. Model the actual type.
+
+If a value can be string, bool, or number — make a discriminated union, not `object?`.
+
+`Dictionary` / `Record<string, unknown>` only for truly dynamic data — user-provided key-value pairs, JSON blobs from external APIs, config maps with unknown keys. If the keys are known at compile time, use a record or named type instead.
+
+Always prefer stronger typing over flexibility. If a design choice introduces `object?` or untyped dictionaries, that is a signal to model better, not to weaken the type.
+
+## C# / .NET Defaults
+
+Review-time coding rules (Baby should not be scaffolding .NET projects — these apply when reviewing or writing C# in an existing codebase):
+
+- `sealed` on all concrete types by default
+- `record` for DTOs and value objects
+- Dapper over EF Core for data access — never raw ADO.NET
+- `ILogger<T>` directly — no custom logging facades
+- Never fetch an entity just to check existence. Do not use `_ = await repo.FindByIdAsync(...) ?? throw`. Use or add an `ExistsAsync` that issues `SELECT EXISTS(...)` / `AnyAsync` instead.
+- Use cases registered as Scoped; caches and config as Singleton
+
 ## Furniture Dependencies
 
 (Settled 2026-06-11.) A small blessed set of libraries is **furniture** — part
@@ -166,6 +198,18 @@ Be suspicious of:
 - reflection-heavy conventions
 - smart wrappers that hide where work really happens
 
+## Review Discipline
+
+When reviewing a diff or change:
+
+1. **Enum/value completeness tracing.** When adding a new enum value, status, or type constant — trace every consumer (switch/case, filter arrays, display logic, serialisation). Verify the new value is handled everywhere. Pure diff review is not enough — read outside the diff.
+
+2. **Two-pass priority.** Data safety and race conditions first (TOCTOU, check-then-write without atomic WHERE, find-or-create without unique index). Style and consistency second. Do not interleave severities.
+
+3. **Fix-first heuristic.** Mechanical fixes (dead code, stale comments, missing includes, unused variables) — just fix them, do not ask. Ambiguous fixes (security, design decisions, removing functionality, >20 lines) — batch into one question with recommendations.
+
+4. **Suppress noise.** Do not flag: harmless redundancy that aids readability, threshold values tuned empirically, assertions that could theoretically be tighter but already cover the behaviour.
+
 ## Smell Checks
 
 The code is probably drifting if:
@@ -180,10 +224,13 @@ The code is probably drifting if:
 
 The intended coding style is:
 
+- data transforms over object hierarchies
 - principle-first decisions
 - explicit seams only where earned
 - local-first structure
 - root-cause fixes over shims
-- strict, honest TypeScript
+- strict, honest types — no `unknown`, `object`, or `any` as value carriers
+- no self-narrating comments
 - obvious provenance
 - explicit composition at the edge
+- minimal dependencies

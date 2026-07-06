@@ -609,16 +609,6 @@ is a possibly-stale convenience. A command that exits non-zero is non-negotiable
 evidence of a blocker. A fully green suite is REQUIRED before you may recommend
 stopping — you may never declare convergence while anything is red.`;
 
-// Comment-quality clause for Daddy's final review only. Super-daddy convergence
-// must not spend repair passes on comment cleanup after correctness is green.
-const COMMENT_QUALITY_CLAUSE = `## Comment quality — flag unuseful comments
-Inspect the comments this run ADDED. Flag stream-of-consciousness or narrating
-comments ("now loop over the items", "set count to 0"), restatements of what the
-code plainly says, and notes-to-self left in the diff. A comment earns its place
-only by explaining WHY, a non-obvious constraint, or a real gotcha — the rest is
-noise and should go. Judge only what THIS run added; leave pre-existing comments
-alone.`;
-
 const reviewBody = (input: SuperReviewInput): string => {
   const fm = input.packet.frontmatter;
   const outcomeLines = fm.outcomes.map((o) => `- ${o.id}: ${o.description}`).join("\n");
@@ -668,22 +658,10 @@ matters — use it to order them and to decide accept-vs-request_changes, NOT to
 a real issue. If you request_changes, EVERY finding you list becomes a fix target
 for the next pass, so list the real ones and leave pure taste out.
 
-## Test quality — a green suite is necessary, not sufficient
-A suite that exits 0 proves nothing if it tests the wrong things. Inspect the
-tests this run added or changed and raise a CLAUSE-grounded blocker (quote the
-relevant rubric rule in grounding.ref) when you find:
-  - MOCK-SOUP — a test that asserts against fakes/mocks/stubs instead of real
-    behaviour (e.g. asserting a mock was called, or a hand-rolled in-memory fake
-    stands in for the real adapter where the rubric wants a real-DB integration
-    test). Verifying the mock, not the code, is not coverage.
-  - INCOMPLETE COVERAGE — a NEW use case, handler, or decision branch this run
-    introduced (e.g. the 404 / 422 / success mapping of a new endpoint) with NO
-    direct test exercising it. The assembler being covered does not cover the use
-    case that calls it.
-Both are P1 grounded blockers that drive a follow-up pass — name the exact
-untested symbol or the mock-asserting test in evidence. If the tests are honest and
-the new surface is directly covered, say so explicitly in notes — do not invent a
-gap to look thorough.
+## Test quality
+A green suite is necessary, not sufficient. Check new tests against the rubric's
+testing doctrine — mock soup and incomplete coverage of new branches are P1
+grounded blockers. Name the exact untested symbol or mock-asserting test.
 
 ## Scope — repairs only
 You judge against the ORIGINAL intent. A gap against the packet or doctrine is a
@@ -814,19 +792,9 @@ it matches the requested pattern. Approve it only if the resulting code still
 satisfies the packet's intent, preserves required existing behaviour, and leaves
 downstream work with a coherent model to build on.
 
-Then judge test quality — a green suite is necessary, not sufficient. Inspect the
-tests this run added or changed and request_changes when you find:
-  - MOCK-SOUP — a test asserting against fakes/mocks/stubs instead of real
-    behaviour (asserting a mock was called, or a hand-rolled fake standing in for
-    a real adapter where a real-DB integration test belongs). Verifying the mock
-    is not coverage.
-  - INCOMPLETE COVERAGE — a NEW use case, handler, or decision branch this run
-    introduced with NO direct test exercising it. The assembler being covered
-    does not cover the use case that calls it.
-Name the exact untested symbol or mock-asserting test in your finding. Judge only
-what THIS run added or touched; pre-existing untested code is not your remit.
-
-${COMMENT_QUALITY_CLAUSE}
+Then judge test quality — inspect the tests this run added or changed. Mock soup
+and incomplete coverage of new branches are request_changes findings. Name the
+exact untested symbol or mock-asserting test.
 
 ## Packet outcomes
 ${outcomeLines}

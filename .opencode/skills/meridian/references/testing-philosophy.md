@@ -214,6 +214,14 @@ the app root, mirroring source structure — not colocated `__tests__/` dirs and
 not specs scattered beside source files. Backend tests live in the
 conventionally named sibling test project (`*.Tests`).
 
+## Coverage Honesty
+
+A green suite that tests the wrong things proves nothing.
+
+Every new use case, handler, or decision branch introduced in a change (e.g. the 404/422/success mapping of a new endpoint) needs a direct test exercising it. Covering the assembler, wiring, or setup does not cover the use case that calls it.
+
+A test that asserts against fakes/mocks/stubs instead of real behaviour is not coverage. Verifying the mock, not the code, manufactures confidence.
+
 ## Smell Checks
 
 A test strategy is probably wrong if:
@@ -223,6 +231,7 @@ A test strategy is probably wrong if:
 - tests break whenever code is rearranged but behaviour is unchanged
 - boundaries are constantly discussed in reviews but never enforced in tests
 - the test suite is mostly mocks with very little real behaviour exercised
+- new decision branches or error paths have no direct test exercising them
 
 ## Summary
 

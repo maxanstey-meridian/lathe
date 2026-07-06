@@ -136,6 +136,8 @@ const mountSettingsView = async () =>
           emits: ["update:open"],
           template: "<div v-if='open'><slot name='body' /></div>",
         },
+        UTooltip: { props: ["text"], template: "<span><slot />{{ text }}</span>" },
+        UIcon: { template: "<span />" },
       },
     },
   });
@@ -147,7 +149,7 @@ test("SettingsView: hydrates repos, round-trips promote-to, and masks API keys",
   await flush();
 
   assert.equal(settingsState.load.mock.calls.length, 1);
-  assert.equal(wrapper.text().includes("This can only be edited locally"), true);
+  assert.equal(wrapper.text().includes("Edit in /tmp/lathe/config.json"), true);
   assert.equal(wrapper.findAll("input[disabled][type='text']").length, 2);
 
   const reposTextarea = wrapper.get("textarea");

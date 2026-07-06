@@ -35,6 +35,12 @@ const promoteEnabled = computed({
   },
 });
 
+// ── Config file path (for masked field hints) ──
+const configFilePath = computed(() => {
+  const root = settings.draft.value?.stateRoot ?? "~/.meridian/v3";
+  return `${root}/config.json`;
+});
+
 // ── Group fields by section ──
 const fieldsBySection = computed(() => {
   const groups: Record<string, typeof settingsFields> = {};
@@ -264,8 +270,11 @@ watch(
                 class="grid grid-cols-1 gap-2 sm:grid-cols-3"
               >
                 <!-- Label -->
-                <label class="sm:self-center text-sm text-slate-400">
+                <label class="sm:self-center flex items-center gap-1 text-sm text-slate-400">
                   {{ field.label }}
+                  <UTooltip :text="field.description" :delay-duration="0" :disable-hoverable-content="true">
+                    <UIcon name="i-lucide-info" class="size-3.5 cursor-help text-slate-600 hover:text-slate-300" />
+                  </UTooltip>
                 </label>
 
                 <!-- Input area (span remaining cols) -->
@@ -317,7 +326,7 @@ watch(
                       type="text"
                       class="w-full rounded-md border border-slate-700 bg-slate-800 px-3 py-1.5 text-sm text-slate-500 focus:border-cyan-500 focus:outline-none"
                     />
-                    <span class="text-xs text-slate-500">This can only be edited locally</span>
+                    <span class="whitespace-nowrap text-xs text-slate-500">Edit in <code class="font-mono text-slate-400">{{ configFilePath }}</code></span>
                   </div>
 
                   <!-- Text input -->

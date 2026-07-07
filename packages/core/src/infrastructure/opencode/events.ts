@@ -104,8 +104,8 @@ export const createEvents = (config: Config): Events => ({
 
 export const createContextTokenReader = (config: Config) => {
   const base = `http://127.0.0.1:${config.opencode.port}`;
-  return async (sessionId: string): Promise<number | undefined> => {
-    const res = await fetch(`${base}/session/${sessionId}/message`);
+  return async (sessionId: string, signal?: AbortSignal): Promise<number | undefined> => {
+    const res = await fetch(`${base}/session/${sessionId}/message`, { signal });
     if (!res.ok) {
       return undefined;
     }

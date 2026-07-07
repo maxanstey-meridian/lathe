@@ -834,6 +834,16 @@ export class SqliteStoreAdapter implements Store {
     return rows.map((r) => JournalEventSchema.parse(jsonParse(r.event)));
   }
 
+  readJournalWithSeq(runId: string): { seq: number; event: JournalEvent }[] {
+    const rows = this.db
+      .prepare("SELECT seq, event FROM events WHERE run_id = ? ORDER BY seq")
+      .all(runId) as { seq: number; event: string }[];
+    return rows.map((r) => ({
+      seq: r.seq,
+      event: JournalEventSchema.parse(jsonParse(r.event)),
+    }));
+  }
+
   // ---------------------------------------------------------------------------
   // Global resumable journal — cross-run, gap-free, sorted by seq
 

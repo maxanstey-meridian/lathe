@@ -70,6 +70,7 @@ export const writeOpencodeConfig = (
       };
 
       const providerMap = new Map<string, ProviderEntry>();
+      const builtInProviderIds = new Set(["opencode"]);
 
       const defaultProviderId = config.baby.providerId;
       const defaultModelId = config.baby.modelId;
@@ -82,23 +83,25 @@ export const writeOpencodeConfig = (
             ? { options: { thinking_budget: config.baby.thinkingBudget } }
             : {};
 
-      providerMap.set(defaultProviderId, {
-        npm: "@ai-sdk/openai-compatible",
-        name: "Baby inference",
-        options: {
-          baseURL: config.baby.baseUrl,
-          apiKey: config.baby.apiKey,
-          timeout: config.baby.timeoutMs,
-          chunkTimeout: 600_000,
-        },
-        models: {
-          [defaultModelId]: {
-            name: defaultModelId,
-            limit: { context: defaultContextWindow, output: 16_384 },
-            ...thinkingOptions,
+      if (!builtInProviderIds.has(defaultProviderId)) {
+        providerMap.set(defaultProviderId, {
+          npm: "@ai-sdk/openai-compatible",
+          name: "Baby inference",
+          options: {
+            baseURL: config.baby.baseUrl,
+            apiKey: config.baby.apiKey,
+            timeout: config.baby.timeoutMs,
+            chunkTimeout: 600_000,
           },
-        },
-      });
+          models: {
+            [defaultModelId]: {
+              name: defaultModelId,
+              limit: { context: defaultContextWindow, output: 16_384 },
+              ...thinkingOptions,
+            },
+          },
+        });
+      }
 
       for (const [key, entry] of Object.entries(config.baby.models)) {
         const existing = providerMap.get(entry.providerId);

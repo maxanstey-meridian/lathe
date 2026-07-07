@@ -420,43 +420,64 @@ const startTailOpenCode = (
       sub.close();
     }
     subscriptions.delete(runId);
+    const prefix = `${runId}:`;
+    for (const key of toolSeen) {
+      if (key.startsWith(prefix)) {
+        toolSeen.delete(key);
+      }
+    }
+    for (const key of partTypes.keys()) {
+      if (key.startsWith(prefix)) {
+        partTypes.delete(key);
+      }
+    }
   };
 
   const syncSubscriptions = (): void => {
     _testSyncSubscriptions(store, subscriptions, ensureRun, closeRun);
   };
 
+  let tokenPollInFlight = false;
+
   const pollTokens = async (): Promise<void> => {
-    for (const runId of subscriptions.keys()) {
-      const meta = store.readMetaIfExists(runId);
-      if (!meta?.babySessionId) {
-        continue;
-      }
-      const tokens = await readContextTokens(meta.babySessionId).catch(() => undefined);
-      if (typeof tokens !== "number") {
-        continue;
-      }
-      const counts = (() => {
-        try {
-          const ledger = store.readLedger(runId);
-          return { done: ledger.outcomes.filter((outcome) => outcome.status === "done").length, total: ledger.outcomes.length };
-        } catch {
-          return { done: 0, total: 0 };
+    if (tokenPollInFlight) {
+      return;
+    }
+    tokenPollInFlight = true;
+    try {
+      for (const runId of subscriptions.keys()) {
+        const meta = store.readMetaIfExists(runId);
+        if (!meta?.babySessionId) {
+          continue;
         }
-      })();
-      tailBus.publish({
-        kind: "tail.stats",
-        runId,
-        at: new Date().toISOString(),
-        contextTokens: tokens,
-        turn: 0,
-        rotations: 0,
-        outcomesDone: counts.done,
-        outcomesTotal: counts.total,
-        gateReason: null,
-        status: meta.status,
-        promoted: meta.promoted,
-      });
+        const tokens = await readContextTokens(meta.babySessionId, AbortSignal.timeout(5_000)).catch(() => undefined);
+        if (typeof tokens !== "number") {
+          continue;
+        }
+        const counts = (() => {
+          try {
+            const ledger = store.readLedger(runId);
+            return { done: ledger.outcomes.filter((outcome) => outcome.status === "done").length, total: ledger.outcomes.length };
+          } catch {
+            return { done: 0, total: 0 };
+          }
+        })();
+        tailBus.publish({
+          kind: "tail.stats",
+          runId,
+          at: new Date().toISOString(),
+          contextTokens: tokens,
+          turn: 0,
+          rotations: 0,
+          outcomesDone: counts.done,
+          outcomesTotal: counts.total,
+          gateReason: null,
+          status: meta.status,
+          promoted: meta.promoted,
+        });
+      }
+    } finally {
+      tokenPollInFlight = false;
     }
   };
 
@@ -591,7 +612,7 @@ export const createSupervisor = (
       return undefined;
     }
 
-    const journalRows = store.readJournalSince(0).filter((row) => row.runId === runId);
+    const journalRows = store.readJournalWithSeq(runId);
     const counts = outcomeCounts(runId);
     let contextTokens = 0;
     let turn = 0;

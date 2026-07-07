@@ -1419,6 +1419,7 @@ test("runLoop: excludedRepos is built from listActiveRuns and listActiveConverge
         throw new Error("not called");
       },
       readJournal: () => [],
+      readJournalWithSeq: () => [],
       readJournalSince: () => [],
       clearResumeArtifacts: () => {
         throw new Error("not called");

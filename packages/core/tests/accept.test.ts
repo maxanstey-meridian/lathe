@@ -122,6 +122,7 @@ const makeStore = (meta?: ReturnType<typeof makeMeta>): TestStore => {
     removeStaged: () => {},
     appendJournal: () => {},
     readJournal: () => [],
+    readJournalWithSeq: () => [],
     _getLastMeta: () => lastMeta,
     _getCampaignStore: () => campaignStore,
   } as unknown as TestStore;
@@ -307,6 +308,7 @@ describe("acceptRun — refusal", () => {
       removeStaged: () => {},
       appendJournal: () => {},
       readJournal: () => [],
+    readJournalWithSeq: () => [],
     } as unknown as Store;
     const ports = {
       store,
@@ -394,6 +396,7 @@ describe("acceptRun — refusal", () => {
       removeStaged: () => {},
       appendJournal: () => {},
       readJournal: () => [],
+    readJournalWithSeq: () => [],
     } as unknown as Store;
     const ports = {
       store,

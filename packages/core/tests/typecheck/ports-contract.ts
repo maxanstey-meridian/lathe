@@ -129,6 +129,7 @@ const _storeContract: Store = {
   removeStaged: () => {},
   appendJournal: () => {},
   readJournal: () => [],
+  readJournalWithSeq: () => [],
   readJournalSince: () => [],
   clearResumeArtifacts: () => {},
   listPlans: () => [],

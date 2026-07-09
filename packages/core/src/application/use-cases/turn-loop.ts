@@ -459,7 +459,10 @@ export const turnLoop = async (
   deadlineMs: number,
   signal?: AbortSignal,
 ): Promise<TurnLoopResult> => {
-  const { config, store, repo, executor, planner, clock } = ports;
+  // Snapshot config for this run — configSource is refreshed by PUT /settings,
+  // so each run sees the latest repos[*].seed, thresholds, etc.
+  const config = ports.configSource.get();
+  const { store, repo, executor, planner, clock } = ports;
   const runId = packet.runId;
   // Run Baby's harness on Daddy's model from turn 1 — same task, stronger engine —
   // when this run is already promoted. Two persisted sources: a promoted follow-up

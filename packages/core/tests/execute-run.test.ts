@@ -12,6 +12,7 @@ import type { Store } from "../src/application/ports/store.js";
 import { makeExecuteRun, type BridgeBinding } from "../src/application/use-cases/execute-run.js";
 import { rotateSession } from "../src/application/use-cases/rotation.js";
 import type { RunPorts, RunChannel } from "../src/application/use-cases/run-runtime.js";
+import { createConfigSource } from "../src/application/use-cases/run-runtime.js";
 import { makePaths } from "../src/config/paths.js";
 import { Config } from "../src/config/schemas.js";
 import { initialGateState } from "../src/domain/gate.js";
@@ -131,7 +132,7 @@ const scriptedExecutor = (
 };
 
 const makePorts = (store: Store, repo: Repo, executor: Executor, planner: Planner): RunPorts => ({
-  config: Config.parse({}),
+  configSource: createConfigSource(Config.parse({})),
   store,
   repo,
   executor,

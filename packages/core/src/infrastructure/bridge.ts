@@ -10,7 +10,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { execSync } from "child_process";
+import { execFile } from "child_process";
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "http";
 import { resolve } from "path";
 import { z } from "zod";
@@ -115,36 +115,41 @@ const clearGate = (ctx: ActiveRunRef): void => {
 
 export type VerificationResult = { command: string; exitCode: number; outputTail: string };
 
-export const runVerification = (
+const runOneCommand = (
+  command: string,
+  cwd: string,
+  timeoutMs: number,
+): Promise<VerificationResult> =>
+  new Promise((resolve) => {
+    execFile(
+      "/bin/zsh",
+      ["-c", command],
+      { cwd, encoding: "utf-8", timeout: timeoutMs / 1000 },
+      (err, stdout, stderr) => {
+        if (err) {
+          const status = (err as unknown as { status?: number }).status;
+          const timedOut = err.killed;
+          resolve({
+            command,
+            exitCode: typeof status === "number" ? status : timedOut ? 124 : 1,
+            outputTail:
+              `${stdout ?? ""}${stderr ?? ""}`.slice(-400) ||
+              (timedOut ? "timed out" : err.message),
+          });
+          return;
+        }
+        resolve({ command, exitCode: 0, outputTail: (stdout ?? "").slice(-400) });
+      },
+    );
+  });
+
+export const runVerification = async (
   frontmatter: Packet["frontmatter"],
   worktree: string,
   timeoutMs: number,
-): VerificationResult[] => {
+): Promise<VerificationResult[]> => {
   const wt = resolve(worktree);
-  return frontmatter.verification.map((v) => {
-    try {
-      const output = execSync(v.command, {
-        cwd: wt,
-        encoding: "utf-8",
-        stdio: ["ignore" as const, "pipe" as const, "pipe" as const],
-        timeout: timeoutMs,
-        shell: "/bin/zsh",
-      });
-      return { command: v.command, exitCode: 0, outputTail: output.slice(-400) };
-    } catch (err) {
-      const e = err as {
-        status?: number | null;
-        stdout?: string;
-        stderr?: string;
-        message?: string;
-      };
-      return {
-        command: v.command,
-        exitCode: typeof e.status === "number" ? e.status : 1,
-        outputTail: `${e.stdout ?? ""}${e.stderr ?? ""}`.slice(-400) || (e.message ?? "failed"),
-      };
-    }
-  });
+  return Promise.all(frontmatter.verification.map((v) => runOneCommand(v.command, wt, timeoutMs)));
 };
 
 export const toVerificationClaims = (
@@ -560,7 +565,7 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
   // V1: the driver runs verification ITSELF, up front for ready_for_review.
   const verificationResults =
     input.status === "ready_for_review"
-      ? runVerification(
+      ? await runVerification(
           ctx.packet.frontmatter,
           ctx.worktree,
           ctx.config.thresholds.verificationTimeoutMs,

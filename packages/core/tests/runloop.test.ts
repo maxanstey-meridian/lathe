@@ -1342,6 +1342,7 @@ test("runLoop: excludedRepos is built from listActiveRuns and listActiveConverge
       readLedger: () => {
         throw new Error("not called");
       },
+      listLedgers: () => [],
       writeLedger: () => {
         throw new Error("not called");
       },
@@ -1420,6 +1421,11 @@ test("runLoop: excludedRepos is built from listActiveRuns and listActiveConverge
       },
       readJournal: () => [],
       readJournalWithSeq: () => [],
+      readJournalSinceForRun: () => [],
+      readRecentJournal: () => [],
+      readRecentJournalWithSeq: () => [],
+      readJournalStats: () => ({ turn: 0, contextTokens: 0, rotations: 0 }),
+      latestJournalSeq: () => 0,
       readJournalSince: () => [],
       clearResumeArtifacts: () => {
         throw new Error("not called");

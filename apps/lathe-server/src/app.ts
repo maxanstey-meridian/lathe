@@ -457,9 +457,9 @@ export const createApp = (
   });
 
   // --- SSE sidecar -----------------------------------------------------------
-  // Resumable: client sends Last-Event-ID; we replay the SQLite events table
-  // from there (exclusive), THEN attach to the live bus. seq is the SSE event
-  // id so a dropped connection resumes gap-free.
+  // Live-only status SSE. The dashboard uses this only as an invalidation signal
+  // before refetching /status, so historical journal replay is wasted work and
+  // can soft-lock startup on large event tables.
   //
   // NOTE: there is a bounded race window (≤ pollIntervalMs) between the
   // readJournalSince snapshot and the bus.subscribe() call — events written
@@ -467,16 +467,9 @@ export const createApp = (
   // the next tail poll). A reconnect-mid-stream test verifies the handoff.
   app.get("/events", (c) =>
     streamSSE(c, async (stream) => {
-      const lastId = Number.parseInt(c.req.header("Last-Event-ID") ?? "0", 10);
-      const since = Number.isInteger(lastId) ? lastId : -1;
-      let lastSeq = since;
+      let lastSeq = 0;
 
-      for (const { seq, event } of deps.readEventsSince(since)) {
-        lastSeq = seq;
-        await stream.writeSSE({ id: String(seq), event: event.kind, data: JSON.stringify(event) });
-      }
-
-      const queue: { seq: number; event: LatheEvent }[] = [];
+      const queue: Array<{ seq: number; event: LatheEvent } | { ping: true }> = [{ ping: true }];
       let notify: (() => void) | null = null;
       stream.onAbort(() => notify?.());
       const unsub = deps.bus.subscribe((seq, event) => {
@@ -497,7 +490,12 @@ export const createApp = (
             if (stream.aborted) break;
             if (queue.length === 0) { await stream.writeSSE({ event: "ping", data: "" }); continue; }
           }
-          const { seq, event } = queue.shift()!;
+          const next = queue.shift()!;
+          if ("ping" in next) {
+            await stream.writeSSE({ event: "ping", data: "" });
+            continue;
+          }
+          const { seq, event } = next;
           lastSeq = seq;
           await stream.writeSSE({ id: String(seq), event: event.kind, data: JSON.stringify(event) });
         }
@@ -557,6 +555,7 @@ const streamTailSse = (
     let activeSnapshot = safeResolveSnapshot();
     let runId = activeSnapshot?.runId ?? fallbackRunId;
     let lastSeq = since;
+    let wroteReplay = false;
 
     if (runId) {
       for (const event of readTailEventsSince(since, runId)) {
@@ -564,6 +563,7 @@ const streamTailSse = (
         if (seq !== null) {
           lastSeq = seq;
         }
+        wroteReplay = true;
         await stream.writeSSE({
           id: seq === null ? undefined : String(seq),
           event: event.kind,
@@ -576,15 +576,19 @@ const streamTailSse = (
     let notify: (() => void) | null = null;
     stream.onAbort(() => notify?.());
     const unsub = tailBus.subscribe((event) => {
-      const currentSnapshot = safeResolveSnapshot();
-      const currentRunId = currentSnapshot?.runId ?? fallbackRunId;
+      const eventRunId = tailEventRunId(event);
+      let currentSnapshot = activeSnapshot;
+      let currentRunId = fallbackRunId ?? runId;
+      if (fallbackRunId === null && eventRunId && eventRunId !== runId) {
+        currentSnapshot = safeResolveSnapshot();
+        currentRunId = currentSnapshot?.runId ?? eventRunId;
+      }
       if (currentRunId !== runId) {
         activeSnapshot = currentSnapshot;
         runId = currentRunId;
         queue.push({ kind: "tail.run.changed", runId: currentRunId ?? "", snapshot: activeSnapshot });
         notify?.();
       }
-      const eventRunId = tailEventRunId(event);
       if (currentRunId && eventRunId && eventRunId !== currentRunId) {
         return;
       }
@@ -595,6 +599,10 @@ const streamTailSse = (
       queue.push(event);
       notify?.();
     });
+
+    if (!wroteReplay) {
+      queue.push({ kind: "tail.ping" });
+    }
 
     try {
       while (!stream.aborted) {

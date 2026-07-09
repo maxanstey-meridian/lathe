@@ -56,6 +56,8 @@ export type {
   WaitForWorkCallback,
   RunLoopSeams,
 } from "./application/use-cases/run-loop.js";
+export { createConfigSource } from "./application/use-cases/run-runtime.js";
+export type { ConfigSource } from "./application/use-cases/run-runtime.js";
 
 // ---------------------------------------------------------------------------
 // Domain (pure helpers consumed by lifecycle methods)

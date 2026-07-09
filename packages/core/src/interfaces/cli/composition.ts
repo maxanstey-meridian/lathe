@@ -20,7 +20,7 @@ import {
   type WaitForWorkCallback,
   type RunLoopSeams,
 } from "../../application/use-cases/run-loop.js";
-import type { RunPorts } from "../../application/use-cases/run-runtime.js";
+import type { RunPorts, ConfigSource } from "../../application/use-cases/run-runtime.js";
 import type { Paths } from "../../config/paths.js";
 import type { Config } from "../../config/schemas.js";
 import {
@@ -124,11 +124,14 @@ const stopServe = (serve: Serve): void => {
 // ---------------------------------------------------------------------------
 
 export const runDriver = async (
-  config: Config,
+  configSource: ConfigSource,
   paths: Paths,
   store: Store,
   seams?: RunLoopSeams,
 ): Promise<void> => {
+  // Snapshot config for model adapters — these are created once and don't change
+  // during the driver lifetime (model changes require restart).
+  const config = configSource.get();
   const clock = systemClock;
   const repo = buildRepo();
   const executor = createOpencodeClient(config);
@@ -147,7 +150,7 @@ export const runDriver = async (
   const verify = createVerify();
   const caffeinate = createCaffeinate();
 
-  const ports: RunPorts = { config, store, repo, executor, planner, clock };
+  const ports: RunPorts = { configSource, store, repo, executor, planner, clock };
 
   // The bridge port (the lock) holds the serve substrate. bind() acquires the
   // lock and brings opencode up; close() tears both down. The driver loop calls
@@ -156,7 +159,10 @@ export const runDriver = async (
   let serve: Serve | undefined;
   const bridge: BridgePort<RunRef> = {
     bind: async () => {
-      serve = await startServe(config, paths, ref);
+      // Snapshot config for the bridge/servers — these are created once and
+      // don't change during the driver lifetime (model changes require restart).
+      const cfg = configSource.get();
+      serve = await startServe(cfg, paths, ref);
       return ref;
     },
     clearActive: (r, runId) => {
@@ -174,6 +180,9 @@ export const runDriver = async (
   // in with no cast (the seam that keeps application off the infrastructure type).
   const binding: BridgeBinding<RunRef> = {
     beginRun: (r, packet, worktree) => {
+      // Snapshot config at run start for the channel — the bridge reads model
+      // config, paths, etc. from here during the run.
+      const config = configSource.get();
       const channel: ActiveRunRef = {
         intents: [],
         pendingConsult: null,

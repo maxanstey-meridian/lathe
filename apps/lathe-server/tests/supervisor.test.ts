@@ -331,6 +331,41 @@ test("readEventsSince returns projected events from the journal", async () => {
   });
 });
 
+test("readTailEventsSince replays cheap journal rows and one final stats event", async () => {
+  await withSupervisor(async (supervisor, paths) => {
+    const store = SqliteStoreAdapter.create(paths, fakeRepo(), systemClock);
+    const runId = "test-tail-replay";
+    store.writeMeta(makeTestMeta({
+      runId,
+      status: "running",
+      queuedAt: systemClock.nowIso(),
+      startedAt: systemClock.nowIso(),
+      updatedAt: systemClock.nowIso(),
+    }));
+
+    store.appendJournal(runId, { event: "run_started", runId, attempt: 1, at: systemClock.nowIso() });
+    store.appendJournal(runId, {
+      event: "super_review",
+      at: systemClock.nowIso(),
+      verdict: "accept",
+      pass: 2,
+      findings: ["looks good"],
+    });
+
+    const events = supervisor.appDeps.readTailEventsSince?.(-1, runId) ?? [];
+    deepStrictEqual(events.map((event) => event.kind), ["tail.journal", "tail.journal", "tail.super.verdict", "tail.stats"]);
+    equal(events.filter((event) => event.kind === "tail.stats").length, 1);
+    equal(events[0]?.kind, "tail.journal");
+    equal(events[1]?.kind, "tail.journal");
+    equal(events[2]?.kind, "tail.super.verdict");
+    equal(events[3]?.kind, "tail.stats");
+    if (events[3]?.kind === "tail.stats") {
+      equal(events[3].status, "running");
+      equal(events[3].seq, 2);
+    }
+  });
+});
+
 test("runReadModel derives packet and latest journal fields", async () => {
   await withSupervisor(async (supervisor, paths) => {
     const store = createStore(paths);

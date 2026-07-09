@@ -88,7 +88,10 @@ const replaceStaleDaddySession = async (
 export const makeExecuteRun =
   <Ref>(ports: RunPorts, bridge: BridgeBinding<Ref>): ExecuteRunCallback<Ref> =>
   async (runId, runMeta, ref, _clock, signal): Promise<void> => {
-    const { store, repo, executor, planner, config, clock } = ports;
+    // Snapshot config for this run — configSource is refreshed by PUT /settings,
+    // so each run sees the latest repos[*].seed, thresholds, etc.
+    const config = ports.configSource.get();
+    const { store, repo, executor, planner, clock } = ports;
     const { repo: repoPath, worktree, base, branch } = runMeta as RunMetaPaths;
 
     const priorMeta = store.readMetaIfExists(runId);

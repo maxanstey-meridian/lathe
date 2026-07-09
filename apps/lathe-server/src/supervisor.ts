@@ -42,6 +42,8 @@ import {
   createContextTokenReader,
   parsePacketShape,
   Config,
+  createConfigSource,
+  type ConfigSource,
 } from "@lathe/core";
 import type { OpencodeEvent } from "@lathe/core";
 
@@ -133,7 +135,7 @@ export type Supervisor = {
   stop(): Promise<void>;
   /** Dependencies for createApp (bus + readEventsSince). */
   appDeps: AppDeps;
-  /** Read-only config — used by GetConfig handler and run-to-dto contextWindow. */
+  /** Read-only config snapshot (for GetConfig handler and contextWindow). */
   config: Config;
   // -- Lifecycle methods (P03 handlers call these) --
   /** Admit a packet file into the queue; returns the derived runId. */
@@ -204,6 +206,20 @@ export type RunReadModel = {
   contextTokens: number;
 };
 
+type TailStats = Pick<
+  TailSnapshotDto,
+  | "contextTokens"
+  | "turn"
+  | "rotations"
+  | "outcomesDone"
+  | "outcomesTotal"
+  | "gateReason"
+  | "status"
+  | "promoted"
+>;
+
+const TAIL_SNAPSHOT_JOURNAL_LIMIT = 500;
+
 // ---------------------------------------------------------------------------
 // Projection context builder — derives from supervisor-held state
 // ---------------------------------------------------------------------------
@@ -249,11 +265,8 @@ const startJournalTail = (
   let running = true;
   let lastSeq = 0;
 
-  // Seed lastSeq to current max seq so we only tail live events.
-  const initialEvents = store.readJournalSince(0);
-  if (initialEvents.length > 0) {
-    lastSeq = initialEvents.at(-1)!.seq;
-  }
+  // Seed to current max seq so startup never parses the historical journal.
+  lastSeq = store.latestJournalSeq();
 
   const poll = setInterval(() => {
     if (!running) return;
@@ -383,7 +396,8 @@ const startTailOpenCode = (
       }
       const sessionId = typeof props.sessionID === "string" ? props.sessionID : undefined;
       const partId = typeof props.partID === "string" ? props.partID : undefined;
-      const text = typeof props.delta === "string" ? props.delta : "";
+      const raw = typeof props.delta === "string" ? props.delta : "";
+      const text = raw.replace(/<!--[\s\S]*?-->/g, "");
       if (!sessionId || !partId || !text) {
         return;
       }
@@ -517,6 +531,11 @@ export const createSupervisor = (
   const repo: Repo = buildRepo();
   const store: Store = SqliteStoreAdapter.create(paths, repo, clock);
 
+  // Supervisor-owned live config source. PUT /settings updates this via
+  // writeConfig below, and runDriver reads via configSource.get() when
+  // starting each run.
+  const configSource: ConfigSource = createConfigSource(config);
+
   // Derive a single "compatibility" active run from multi-row state:
   // newest startedAt descending, or undefined if no active runs.
   const firstActiveRun = () => {
@@ -554,7 +573,7 @@ export const createSupervisor = (
   // --- Start runDriver ---
 
   // runDriver is a background promise; the supervisor holds its handle.
-  const driverPromise = options.startDriver === false ? Promise.resolve() : runDriver(config, paths, store, seams);
+  const driverPromise = options.startDriver === false ? Promise.resolve() : runDriver(configSource, paths, store, seams);
 
   // --- Lifecycle method implementations ---
 
@@ -574,15 +593,19 @@ export const createSupervisor = (
   const outcomes = (runId: string): string => {
     try {
       const ledger = store.readLedger(runId);
-      const counts = { done: 0, in_progress: 0, not_started: 0, blocked: 0 };
-      for (const outcome of ledger.outcomes) {
-        counts[outcome.status] += 1;
-      }
-      const extra = `${counts.in_progress ? `, ${counts.in_progress} in progress` : ""}${counts.blocked ? `, ${counts.blocked} blocked` : ""}`;
-      return `${counts.done}/${ledger.outcomes.length} done${extra}`;
+      return renderOutcomeSummary(ledger);
     } catch {
       return "";
     }
+  };
+
+  const renderOutcomeSummary = (ledger: ReturnType<Store["readLedger"]>): string => {
+    const counts = { done: 0, in_progress: 0, not_started: 0, blocked: 0 };
+    for (const outcome of ledger.outcomes) {
+      counts[outcome.status] += 1;
+    }
+    const extra = `${counts.in_progress ? `, ${counts.in_progress} in progress` : ""}${counts.blocked ? `, ${counts.blocked} blocked` : ""}`;
+    return `${counts.done}/${ledger.outcomes.length} done${extra}`;
   };
 
   const gateLatchReason = (runId: string): string | null => {
@@ -606,32 +629,68 @@ export const createSupervisor = (
     }
   };
 
+  const tailStatsByRun = new Map<string, TailStats>();
+
+  const cacheTailStats = (snapshot: TailSnapshotDto): TailStats => {
+    const stats: TailStats = {
+      contextTokens: snapshot.contextTokens,
+      turn: snapshot.turn,
+      rotations: snapshot.rotations,
+      outcomesDone: snapshot.outcomesDone,
+      outcomesTotal: snapshot.outcomesTotal,
+      gateReason: snapshot.gateReason,
+      status: snapshot.status,
+      promoted: snapshot.promoted,
+    };
+    tailStatsByRun.set(snapshot.runId, stats);
+    return stats;
+  };
+
+  const updateTailStats = (runId: string, event: JournalEvent): TailStats | undefined => {
+    const meta = store.readMetaIfExists(runId);
+    if (!meta) {
+      return undefined;
+    }
+
+    const previous = tailStatsByRun.get(runId);
+    const counts = outcomeCounts(runId);
+    const next: TailStats = {
+      contextTokens: previous?.contextTokens ?? 0,
+      turn: previous?.turn ?? 0,
+      rotations: previous?.rotations ?? 0,
+      outcomesDone: counts.done,
+      outcomesTotal: counts.total,
+      gateReason: gateLatchReason(runId),
+      status: meta.status,
+      promoted: meta.promoted,
+    };
+
+    if (typeof event.turn === "number") {
+      next.turn = event.turn;
+    }
+    if (event.event === "turn_ended") {
+      next.contextTokens = event.contextTokens;
+    }
+    if (event.event === "rotation" && event.phase === "session_replaced") {
+      next.rotations += 1;
+      next.contextTokens = event.contextTokens ?? 0;
+    }
+
+    tailStatsByRun.set(runId, next);
+    return next;
+  };
+
   const getTailSnapshot = (runId: string): TailSnapshotDto | undefined => {
     const meta = store.readMetaIfExists(runId);
     if (!meta) {
       return undefined;
     }
 
-    const journalRows = store.readJournalWithSeq(runId);
+    const journalRows = store.readRecentJournalWithSeq(runId, TAIL_SNAPSHOT_JOURNAL_LIMIT);
+    const journalStats = store.readJournalStats(runId);
     const counts = outcomeCounts(runId);
-    let contextTokens = 0;
-    let turn = 0;
-    let rotations = 0;
 
-    for (const { event } of journalRows) {
-      if (typeof event.turn === "number") {
-        turn = event.turn;
-      }
-      if (event.event === "turn_ended") {
-        contextTokens = event.contextTokens;
-      }
-      if (event.event === "rotation" && event.phase === "session_replaced") {
-        rotations += 1;
-        contextTokens = event.contextTokens ?? 0;
-      }
-    }
-
-    return {
+    const snapshot: TailSnapshotDto = {
       runId,
       summary: meta.summary ?? null,
       status: meta.status,
@@ -648,9 +707,9 @@ export const createSupervisor = (
       outcomesDone: counts.done,
       outcomesTotal: counts.total,
       gateReason: gateLatchReason(runId),
-      contextTokens,
-      turn,
-      rotations,
+      contextTokens: journalStats.contextTokens,
+      turn: journalStats.turn,
+      rotations: journalStats.rotations,
       journal: journalRows.map(({ seq, event }) => ({
         seq,
         at: event.at,
@@ -660,34 +719,23 @@ export const createSupervisor = (
       })),
       lastSeq: journalRows.at(-1)?.seq ?? 0,
     };
+    cacheTailStats(snapshot);
+    return snapshot;
   };
 
   const runReadModel = (runId: string): RunReadModel => {
     const raw = store.readQueuePacket(runId);
     const parsed = raw ? parsePacketShape(raw, runId) : undefined;
     const frontmatter = parsed?.ok ? parsed.packet.frontmatter : undefined;
-
-    let turn = 0;
-    let contextTokens = 0;
-    for (const event of store.readJournal(runId)) {
-      if (typeof event.turn === "number") {
-        turn = event.turn;
-      }
-      if (event.event === "turn_ended") {
-        contextTokens = event.contextTokens;
-      }
-      if (event.event === "rotation" && typeof event.contextTokens === "number") {
-        contextTokens = event.contextTokens;
-      }
-    }
+    const journalStats = store.readJournalStats(runId);
 
     return {
       campaignId: frontmatter?.campaign_id ?? runId,
       parentRunId: frontmatter?.parent_run_id ?? null,
       expectedSurface: frontmatter?.expected_surface ?? [],
       pass: frontmatter?.pass ?? store.readMetaIfExists(runId)?.attempt ?? 0,
-      turn,
-      contextTokens,
+      turn: journalStats.turn,
+      contextTokens: journalStats.contextTokens,
     };
   };
 
@@ -711,8 +759,8 @@ export const createSupervisor = (
   };
 
   const projectTailEvents = (seq: number, runId: string, event: JournalEvent): TailEvent[] => {
-    const snapshot = getTailSnapshot(runId);
-    if (!snapshot) {
+    const stats = updateTailStats(runId, event);
+    if (!stats) {
       return [];
     }
     const journalEvent: TailEvent = {
@@ -729,14 +777,14 @@ export const createSupervisor = (
       runId,
       seq,
       at: event.at,
-      contextTokens: snapshot.contextTokens,
-      turn: snapshot.turn,
-      rotations: snapshot.rotations,
-      outcomesDone: snapshot.outcomesDone,
-      outcomesTotal: snapshot.outcomesTotal,
-      gateReason: snapshot.gateReason,
-      status: snapshot.status,
-      promoted: snapshot.promoted,
+      contextTokens: stats.contextTokens,
+      turn: stats.turn,
+      rotations: stats.rotations,
+      outcomesDone: stats.outcomesDone,
+      outcomesTotal: stats.outcomesTotal,
+      gateReason: stats.gateReason,
+      status: stats.status,
+      promoted: stats.promoted,
     };
     if (event.event !== "super_review") {
       return [journalEvent, statsEvent];
@@ -753,6 +801,64 @@ export const createSupervisor = (
         pass: event.pass,
         findings: event.findings,
         lines: [`verdict: ${event.verdict} (pass ${event.pass})`, ...event.findings.map((finding) => `  ${finding}`)],
+      },
+    ];
+  };
+
+  const replayTailEventsSince = (seq: number, runId: string): TailEvent[] => {
+    const rows = store.readJournalSinceForRun(runId, seq);
+    if (rows.length === 0) {
+      return [];
+    }
+
+    const events = rows.flatMap(({ seq, event }) => {
+      const journalEvent: TailEvent = {
+        kind: "tail.journal",
+        runId,
+        seq,
+        at: event.at,
+        line: renderJournalEvent(event),
+        event: event.event,
+        driver: isTailDriverEvent(event),
+      };
+      if (event.event !== "super_review") {
+        return [journalEvent];
+      }
+      return [
+        journalEvent,
+        {
+          kind: "tail.super.verdict",
+          runId,
+          seq,
+          at: event.at,
+          verdict: event.verdict,
+          pass: event.pass,
+          findings: event.findings,
+          lines: [`verdict: ${event.verdict} (pass ${event.pass})`, ...event.findings.map((finding) => `  ${finding}`)],
+        } satisfies TailEvent,
+      ];
+    });
+
+    const snapshot = getTailSnapshot(runId);
+    if (!snapshot) {
+      return events;
+    }
+
+    return [
+      ...events,
+      {
+        kind: "tail.stats",
+        runId,
+        seq: snapshot.lastSeq,
+        at: rows.at(-1)!.event.at,
+        contextTokens: snapshot.contextTokens,
+        turn: snapshot.turn,
+        rotations: snapshot.rotations,
+        outcomesDone: snapshot.outcomesDone,
+        outcomesTotal: snapshot.outcomesTotal,
+        gateReason: snapshot.gateReason,
+        status: snapshot.status,
+        promoted: snapshot.promoted,
       },
     ];
   };
@@ -799,7 +905,7 @@ export const createSupervisor = (
         runId: run.runId,
         outcomes: outcomes(run.runId),
         gateLatched: gateLatchReason(run.runId),
-        recentEvents: store.readJournal(run.runId).slice(-5).map((event) => ({
+        recentEvents: store.readRecentJournal(run.runId, 5).map((event) => ({
           at: event.at,
           event: event.event,
         })),
@@ -857,13 +963,14 @@ export const createSupervisor = (
     },
 
     getReview(): ReviewDto {
+      const outcomesByRun = new Map(store.listLedgers().map((ledger) => [ledger.runId, renderOutcomeSummary(ledger)]));
       const runs = store
         .listMeta()
         .filter((meta) => meta.status !== "running" && meta.status !== "queued")
         .map((meta) => ({
           runId: meta.runId,
           status: meta.status,
-          outcomes: outcomes(meta.runId),
+          outcomes: outcomesByRun.get(meta.runId) ?? "",
           branch: meta.branch,
           repo: meta.repo,
           base: meta.base,
@@ -936,10 +1043,7 @@ export const createSupervisor = (
             .filter((e): e is { seq: number; event: LatheEvent } => e !== null);
         },
         readTailEventsSince: (seq: number, runId: string): TailEvent[] =>
-          store
-            .readJournalSince(seq)
-            .filter((row) => row.runId === runId)
-            .flatMap((row) => projectTailEvents(row.seq, row.runId, row.event)),
+          replayTailEventsSince(seq, runId),
       };
     },
 
@@ -1119,6 +1223,8 @@ export const createSupervisor = (
     writeConfig(raw: unknown): Config {
       const parsed = Config.parse(raw);
       writeFileSync(paths.configFile, JSON.stringify(parsed, null, 2) + "\n", "utf-8");
+      // Update the live config so subsequent runs see the new settings.
+      configSource.set(parsed);
       return parsed;
     },
 

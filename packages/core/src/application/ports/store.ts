@@ -25,6 +25,7 @@ import type { VerificationResult } from "./verify.js";
 
 // Queue entry — inline; no domain function consumes it.
 export type QueueEntry = { runId: string; admittedAt: string };
+export type JournalStats = { turn: number; contextTokens: number; rotations: number };
 
 // Convergence log entry — a discriminated union so an UNREACHABLE attempt (transport drop, no verdict)
 // is logged honestly instead of forging an escalate SuperReview. The shared head
@@ -65,6 +66,7 @@ export type Store = {
   // Outcome ledger
   initialLedger(packet: Packet): OutcomeLedger;
   readLedger(runId: string): OutcomeLedger;
+  listLedgers(): OutcomeLedger[];
   writeLedger(ledger: OutcomeLedger): void;
 
   // Review state
@@ -136,6 +138,11 @@ export type Store = {
   appendJournal(runId: string, event: JournalEvent): void;
   readJournal(runId: string): JournalEvent[];
   readJournalWithSeq(runId: string): { seq: number; event: JournalEvent }[];
+  readJournalSinceForRun(runId: string, seq: number): { seq: number; event: JournalEvent }[];
+  readRecentJournal(runId: string, limit: number): JournalEvent[];
+  readRecentJournalWithSeq(runId: string, limit: number): { seq: number; event: JournalEvent }[];
+  readJournalStats(runId: string): JournalStats;
+  latestJournalSeq(): number;
 
   // Global resumable journal — cross-run, gap-free, sorted by seq.
   // The daemon's /events SSE spine consumes this for a single resuming stream.

@@ -1,5 +1,5 @@
 import type { components } from "@lathe/contract";
-import { onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 
 import { injectLatheStatus } from "../ports/lathe-status";
 import type { LatheStatus } from "../ports/lathe-status";
@@ -29,7 +29,15 @@ export const useReviewData = (status?: LatheStatus, loadReviewRuns: typeof fetch
     void fetchReview();
   });
 
-  watch(source.status, () => {
+  const reviewVersion = computed(() => {
+    const current = source.status.value;
+    if (!current) {
+      return "";
+    }
+    return `${current.review.readyForReview}:${current.review.failed}`;
+  });
+
+  watch(reviewVersion, () => {
     void fetchReview();
   });
 

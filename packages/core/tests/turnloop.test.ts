@@ -10,6 +10,7 @@ import type { Planner } from "../src/application/ports/planner.js";
 import type { Repo } from "../src/application/ports/repo.js";
 import type { Store } from "../src/application/ports/store.js";
 import type { RunPorts, RunChannel } from "../src/application/use-cases/run-runtime.js";
+import { createConfigSource } from "../src/application/use-cases/run-runtime.js";
 import {
   turnLoop,
   babyModelConfig,
@@ -265,7 +266,7 @@ const makePorts = (
   planner: Planner,
   config = Config.parse({}),
 ): RunPorts => ({
-  config,
+  configSource: createConfigSource(config),
   store,
   repo,
   executor,

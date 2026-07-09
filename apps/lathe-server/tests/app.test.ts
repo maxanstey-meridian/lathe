@@ -1066,16 +1066,38 @@ test("Tail SSE: run stream receives live matching tail events", async () => {
   ok(!body.includes("id: 4"), "filters non-matching live event");
 });
 
-test("SSE: fresh connection with no Last-Event-ID replays the first event", async () => {
+test("Tail SSE: empty replay writes an immediate ping frame", async () => {
+  const tailBus = createTailEventBus();
+  const deps = {
+    bus: createEventBus(),
+    readEventsSince: (_seq: number): { seq: number; event: LatheEvent }[] => [],
+    tailBus,
+    readTailEventsSince: (_seq: number, _runId: string): TailEvent[] => [],
+  };
+  const app = createApp(deps, null as unknown as Supervisor, { logger: false });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2000);
+  const res = await app.request("http://localhost/tail/r1/events", { signal: controller.signal });
+  equal(res.status, 200);
+  const reader = res.body!.getReader();
+  const chunk = await reader.read();
+  clearTimeout(timer);
+  await reader.cancel();
+  const body = chunk.value ? new TextDecoder().decode(chunk.value) : "";
+  ok(body.includes("event: tail.ping"), "writes an immediate ping frame when replay is empty");
+});
+
+test("SSE: fresh connection with no Last-Event-ID starts live-only", async () => {
   const bus = createEventBus();
-  const events: { seq: number; event: LatheEvent }[] = [
-    { seq: 1, event: { kind: "log", runId: "r", line: "e1", at: new Date().toISOString() } },
-    { seq: 2, event: { kind: "log", runId: "r", line: "e2", at: new Date().toISOString() } },
-  ];
+  let replayCalls = 0;
 
   const deps = {
     bus,
-    readEventsSince: (seq: number): { seq: number; event: LatheEvent }[] => events.filter((e) => e.seq > seq),
+    readEventsSince: (_seq: number): { seq: number; event: LatheEvent }[] => {
+      replayCalls++;
+      return [];
+    },
   };
   const app = createApp(deps, null as unknown as Supervisor, { logger: false });
 
@@ -1087,30 +1109,28 @@ test("SSE: fresh connection with no Last-Event-ID replays the first event", asyn
   equal(res.status, 200);
 
   const reader = res.body!.getReader();
+  await reader.read();
+  bus.publish(1, { kind: "log", runId: "r", line: "live", at: new Date().toISOString() });
   const body = await readUntilId(reader, "1");
   clearTimeout(timer);
   await reader.cancel();
-  ok(body.includes("id: 1"), "replays the first event when Last-Event-ID is absent");
+  equal(replayCalls, 0, "fresh connections do not replay the historical journal");
+  ok(body.includes("id: 1"), "fresh connections still receive live events");
 });
 
-test("SSE: reconnect-mid-stream replay from Last-Event-ID", async () => {
+test("SSE: Last-Event-ID is ignored for live-only status stream", async () => {
   const bus = createEventBus();
-  const events: { seq: number; event: LatheEvent }[] = [
-    { seq: 1, event: { kind: "log", runId: "r", line: "e1", at: new Date().toISOString() } },
-    { seq: 2, event: { kind: "log", runId: "r", line: "e2", at: new Date().toISOString() } },
-    { seq: 3, event: { kind: "log", runId: "r", line: "e3", at: new Date().toISOString() } },
-  ];
+  let replayCalls = 0;
 
   const deps = {
     bus,
-    readEventsSince: (seq: number): { seq: number; event: LatheEvent }[] => {
-      // Exclusive: returns events with seq > given seq
-      return events.filter(e => e.seq > seq);
+    readEventsSince: (_seq: number): { seq: number; event: LatheEvent }[] => {
+      replayCalls++;
+      return [];
     },
   };
   const app = createApp(deps, null as unknown as Supervisor, { logger: false });
 
-  // Connect with Last-Event-ID = 1 → should replay seq 2, 3
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 2000);
   const res = await app.request("http://localhost/events", {
@@ -1120,46 +1140,13 @@ test("SSE: reconnect-mid-stream replay from Last-Event-ID", async () => {
   equal(res.status, 200);
 
   const reader = res.body!.getReader();
-  const body = await readUntilId(reader, "3");
-  clearTimeout(timer);
-  await reader.cancel();
-  ok(body.includes("id: 2"), "replays seq 2");
-  ok(body.includes("id: 3"), "replays seq 3");
-  ok(!body.includes("id: 1"), "does not replay seq 1 (exclusive)");
-});
-
-test("SSE: replay/live handoff does not duplicate replayed events", async () => {
-  const bus = {
-    publish: (_seq: number, _event: LatheEvent) => {},
-    subscribe: (onEvent: (seq: number, event: LatheEvent) => void) => {
-      onEvent(2, { kind: "log", runId: "r", line: "e2", at: new Date().toISOString() });
-      return () => {};
-    },
-  };
-  const events: { seq: number; event: LatheEvent }[] = [
-    { seq: 1, event: { kind: "log", runId: "r", line: "e1", at: new Date().toISOString() } },
-    { seq: 2, event: { kind: "log", runId: "r", line: "e2", at: new Date().toISOString() } },
-  ];
-
-  const deps = {
-    bus,
-    readEventsSince: (seq: number): { seq: number; event: LatheEvent }[] => events.filter((e) => e.seq > seq),
-  };
-  const app = createApp(deps, null as unknown as Supervisor, { logger: false });
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 2000);
-  const res = await app.request("http://localhost/events", {
-    signal: controller.signal,
-  });
-  equal(res.status, 200);
-
-  const reader = res.body!.getReader();
+  await reader.read();
+  bus.publish(2, { kind: "log", runId: "r", line: "live", at: new Date().toISOString() });
   const body = await readUntilId(reader, "2");
   clearTimeout(timer);
   await reader.cancel();
-
-  equal((body.match(/id: 2/g) ?? []).length, 1, "replayed seq 2 is not duplicated by the live handoff");
+  equal(replayCalls, 0, "status SSE never reads historical journal rows");
+  ok(body.includes("id: 2"), "reconnected clients still receive live events");
 });
 
 test("SSE: reconnect with Last-Event-ID = 3 gets only live events", async () => {
@@ -1206,74 +1193,6 @@ test("SSE: reconnect with Last-Event-ID = 3 gets only live events", async () => 
     ok(!body.includes("id: 1"), "no replay of seq 1");
     ok(!body.includes("id: 2"), "no replay of seq 2 (exclusive)");
   }
-});
-
-test("SSE: sequential reconnects are gap-free and dup-free", async () => {
-  const bus = createEventBus();
-  const events: { seq: number; event: LatheEvent }[] = [];
-
-  const deps = {
-    bus,
-    readEventsSince: (seq: number): { seq: number; event: LatheEvent }[] => {
-      return events.filter(e => e.seq > seq);
-    },
-  };
-  const app = createApp(deps, null as unknown as Supervisor, { logger: false });
-
-  // Pre-seed 5 events
-  for (let i = 1; i <= 5; i++) {
-    const evt: LatheEvent = { kind: "log", runId: "r", line: `e${i}`, at: new Date().toISOString() };
-    events.push({ seq: i, event: evt });
-    bus.publish(i, evt);
-  }
-
-  // Client A: reconnect at seq 2 → replay 3, 4, 5 (verify via stream body)
-  const controllerA = new AbortController();
-  const timerA = setTimeout(() => controllerA.abort(), 2000);
-  const resA = await app.request("http://localhost/events", {
-    headers: { "Last-Event-ID": "2" },
-    signal: controllerA.signal,
-  });
-  equal(resA.status, 200);
-
-  const readerA = resA.body!.getReader();
-  const bodyA = await readUntilId(readerA, "5");
-  clearTimeout(timerA);
-  await readerA.cancel();
-
-  ok(bodyA.includes("id: 3"), "Client A replays seq 3");
-  ok(bodyA.includes("id: 4"), "Client A replays seq 4");
-  ok(bodyA.includes("id: 5"), "Client A replays seq 5");
-  ok(!bodyA.includes("id: 1"), "Client A no replay of seq 1");
-  ok(!bodyA.includes("id: 2"), "Client A no replay of seq 2 (exclusive)");
-
-  // Client B: reconnect at seq 4 → replay 5
-  const controllerB = new AbortController();
-  const timerB = setTimeout(() => controllerB.abort(), 2000);
-  const resB = await app.request("http://localhost/events", {
-    headers: { "Last-Event-ID": "4" },
-    signal: controllerB.signal,
-  });
-  equal(resB.status, 200);
-
-  const readerB = resB.body!.getReader();
-  const bodyB = await readUntilId(readerB, "5");
-  clearTimeout(timerB);
-  await readerB.cancel();
-
-  ok(bodyB.includes("id: 5"), "Client B replays seq 5");
-  ok(!bodyB.includes("id: 3"), "Client B no replay of seq 3 (exclusive at 4)");
-
-  // Publish seq 6 (live event — arrives via bus handoff)
-  const evt6: LatheEvent = { kind: "log", runId: "r", line: "e6", at: new Date().toISOString() };
-  events.push({ seq: 6, event: evt6 });
-  bus.publish(6, evt6);
-
-  // Verify the live bus delivered seq 6 (gap-free handoff)
-  await new Promise(r => setTimeout(r, 50));
-  equal(events.length, 6);
-  const seqs = events.map(e => e.seq).sort();
-  strictEqual(seqs.join(","), "1,2,3,4,5,6");
 });
 
 async function readUntilId(reader: ReadableStreamDefaultReader<Uint8Array>, targetId: string): Promise<string> {

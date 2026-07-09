@@ -19,7 +19,12 @@ import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import type { Clock } from "../application/ports/clock.js";
 import type { Repo } from "../application/ports/repo.js";
-import type { Store, QueueEntry, ConvergenceLogEntry } from "../application/ports/store.js";
+import type {
+  Store,
+  QueueEntry,
+  ConvergenceLogEntry,
+  JournalStats,
+} from "../application/ports/store.js";
 import type { Paths } from "../config/paths.js";
 import { Campaign as CampaignSchema } from "../domain/campaign.js";
 import { parseStaged } from "../domain/chain.js";
@@ -148,10 +153,14 @@ export class SqliteStoreAdapter implements Store {
     const version = row?.user_version ?? 0;
     if (version === 0) {
       createSchema(db);
-      db.exec("PRAGMA user_version = 3;");
+      db.exec("PRAGMA user_version = 4;");
     } else if (version === 1) {
       migrateV1toV2(db);
-      db.exec("PRAGMA user_version = 3;");
+      migrateV3toV4(db);
+      db.exec("PRAGMA user_version = 4;");
+    } else if (version < 4) {
+      migrateV3toV4(db);
+      db.exec("PRAGMA user_version = 4;");
     }
 
     return new SqliteStoreAdapter(db, paths, repo, clock);
@@ -245,6 +254,11 @@ export class SqliteStoreAdapter implements Store {
       throw new Error(`ledger not found: ${runId}`);
     }
     return OutcomeLedgerSchema.parse(jsonParse(row.ledger));
+  }
+
+  listLedgers(): OutcomeLedger[] {
+    const rows = this.db.prepare("SELECT ledger FROM outcome_ledger").all() as { ledger: string }[];
+    return rows.map((r) => OutcomeLedgerSchema.parse(jsonParse(r.ledger)));
   }
 
   writeLedger(ledger: OutcomeLedger): void {
@@ -844,6 +858,77 @@ export class SqliteStoreAdapter implements Store {
     }));
   }
 
+  readJournalSinceForRun(runId: string, seq: number): { seq: number; event: JournalEvent }[] {
+    const rows = this.db
+      .prepare("SELECT seq, event FROM events WHERE run_id = ? AND seq > ? ORDER BY seq")
+      .all(runId, seq) as { seq: number; event: string }[];
+    return rows.map((r) => ({
+      seq: r.seq,
+      event: JournalEventSchema.parse(jsonParse(r.event)),
+    }));
+  }
+
+  readRecentJournal(runId: string, limit: number): JournalEvent[] {
+    const rows = this.db
+      .prepare("SELECT event FROM events WHERE run_id = ? ORDER BY seq DESC LIMIT ?")
+      .all(runId, Math.max(0, Math.floor(limit))) as { event: string }[];
+    return rows.reverse().map((r) => JournalEventSchema.parse(jsonParse(r.event)));
+  }
+
+  readRecentJournalWithSeq(runId: string, limit: number): { seq: number; event: JournalEvent }[] {
+    const rows = this.db
+      .prepare("SELECT seq, event FROM events WHERE run_id = ? ORDER BY seq DESC LIMIT ?")
+      .all(runId, Math.max(0, Math.floor(limit))) as { seq: number; event: string }[];
+    return rows.reverse().map((r) => ({
+      seq: r.seq,
+      event: JournalEventSchema.parse(jsonParse(r.event)),
+    }));
+  }
+
+  readJournalStats(runId: string): JournalStats {
+    const latestTurn = this.db
+      .prepare(
+        "SELECT event FROM events WHERE run_id = ? AND json_extract(event, '$.turn') IS NOT NULL ORDER BY seq DESC LIMIT 1",
+      )
+      .get(runId) as { event: string } | undefined;
+    const latestContext = this.db
+      .prepare(
+        "SELECT event FROM events WHERE run_id = ? AND (json_extract(event, '$.event') = 'turn_ended' OR json_extract(event, '$.event') = 'rotation') AND json_extract(event, '$.contextTokens') IS NOT NULL ORDER BY seq DESC LIMIT 1",
+      )
+      .get(runId) as { event: string } | undefined;
+    const rotations = this.db
+      .prepare(
+        "SELECT COUNT(*) AS count FROM events WHERE run_id = ? AND json_extract(event, '$.event') = 'rotation' AND json_extract(event, '$.phase') = 'session_replaced'",
+      )
+      .get(runId) as { count: number };
+
+    const turnEvent = latestTurn
+      ? JournalEventSchema.parse(jsonParse(latestTurn.event))
+      : undefined;
+    const contextEvent = latestContext
+      ? JournalEventSchema.parse(jsonParse(latestContext.event))
+      : undefined;
+    const contextTokens =
+      contextEvent &&
+      "contextTokens" in contextEvent &&
+      typeof contextEvent.contextTokens === "number"
+        ? contextEvent.contextTokens
+        : 0;
+
+    return {
+      turn: typeof turnEvent?.turn === "number" ? turnEvent.turn : 0,
+      contextTokens,
+      rotations: rotations.count,
+    };
+  }
+
+  latestJournalSeq(): number {
+    const row = this.db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM events").get() as {
+      seq: number;
+    };
+    return row.seq;
+  }
+
   // ---------------------------------------------------------------------------
   // Global resumable journal — cross-run, gap-free, sorted by seq
 
@@ -968,6 +1053,18 @@ function createSchema(db: DatabaseSync): void {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE INDEX IF NOT EXISTS idx_events_run_seq ON events(run_id, seq);
+    CREATE INDEX IF NOT EXISTS idx_decisions_run_seq ON decisions(run_id, seq);
+    CREATE INDEX IF NOT EXISTS idx_convergence_run_seq ON convergence(run_id, seq);
+  `);
+}
+
+function migrateV3toV4(db: DatabaseSync): void {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_events_run_seq ON events(run_id, seq);
+    CREATE INDEX IF NOT EXISTS idx_decisions_run_seq ON decisions(run_id, seq);
+    CREATE INDEX IF NOT EXISTS idx_convergence_run_seq ON convergence(run_id, seq);
   `);
 }
 

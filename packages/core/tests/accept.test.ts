@@ -308,7 +308,7 @@ describe("acceptRun — refusal", () => {
       removeStaged: () => {},
       appendJournal: () => {},
       readJournal: () => [],
-    readJournalWithSeq: () => [],
+      readJournalWithSeq: () => [],
     } as unknown as Store;
     const ports = {
       store,
@@ -396,7 +396,7 @@ describe("acceptRun — refusal", () => {
       removeStaged: () => {},
       appendJournal: () => {},
       readJournal: () => [],
-    readJournalWithSeq: () => [],
+      readJournalWithSeq: () => [],
     } as unknown as Store;
     const ports = {
       store,

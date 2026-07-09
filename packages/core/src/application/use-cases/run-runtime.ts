@@ -18,10 +18,34 @@ import type { Planner } from "../ports/planner.js";
 import type { Repo } from "../ports/repo.js";
 import type { Store } from "../ports/store.js";
 
+// ---------------------------------------------------------------------------
+// ConfigSource — supervisor-owned live config (ARCHITECTURE §14)
+//
+// The daemon loads config once at startup, but PUT /settings must update the
+// in-memory config for subsequent runs to see new repos[*].seed values without
+// restarting. The ConfigSource is a tiny mutable cell owned by the supervisor;
+// writeConfig updates it after successful validation/write, and run start reads
+// it via get() when seeding a fresh sandbox.
+// ---------------------------------------------------------------------------
+export type ConfigSource = {
+  get: () => Config;
+  set: (config: Config) => void;
+};
+
+export const createConfigSource = (initial: Config): ConfigSource => {
+  let current = initial;
+  return {
+    get: () => current,
+    set: (config) => {
+      current = config;
+    },
+  };
+};
+
 // The ports the run-level use cases depend on. One bag, injected at the
 // composition root; every side effect in the loop flows through it.
 export type RunPorts = {
-  config: Config;
+  configSource: ConfigSource;
   store: Store;
   repo: Repo;
   executor: Executor;

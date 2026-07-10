@@ -41,7 +41,6 @@ const showUpload = ref(false);
 
 onMounted(() => {
   void latheStatus.refresh();
-  void latheTail.refresh();
   void lathePlans.refresh();
 });
 </script>

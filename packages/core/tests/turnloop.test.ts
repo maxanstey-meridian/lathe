@@ -9,6 +9,7 @@ import type { Executor } from "../src/application/ports/executor.js";
 import type { Planner } from "../src/application/ports/planner.js";
 import type { Repo } from "../src/application/ports/repo.js";
 import type { Store } from "../src/application/ports/store.js";
+import type { Verify } from "../src/application/ports/verify.js";
 import type { RunPorts, RunChannel } from "../src/application/use-cases/run-runtime.js";
 import { createConfigSource } from "../src/application/use-cases/run-runtime.js";
 import {
@@ -265,13 +266,19 @@ const makePorts = (
   executor: Executor,
   planner: Planner,
   config = Config.parse({}),
+  verify: Verify = {
+    run: async () => [{ command: "echo ok", exitCode: 0, outputTail: "ok" }],
+    runAutoFix: async () => {},
+  },
 ): RunPorts => ({
+  driverOutput: { verification: () => {} },
   configSource: createConfigSource(config),
   store,
   repo,
   executor,
   planner,
   clock: fixedClock(),
+  verify,
 });
 
 const cleanTemp = async (dir: string) => {

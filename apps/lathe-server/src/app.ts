@@ -62,6 +62,7 @@ export interface AppDeps {
   readEventsSince: (seq: number) => { seq: number; event: LatheEvent }[];
   tailBus?: TailEventBus;
   readTailEventsSince?: (seq: number, runId: string) => TailEvent[];
+  prepareTailSnapshot?: (runId: string | null) => Promise<string | null>;
 }
 
 export interface CreateAppOptions {
@@ -552,59 +553,100 @@ const streamTailSse = (
         return null;
       }
     };
-    let activeSnapshot = safeResolveSnapshot();
-    let runId = activeSnapshot?.runId ?? fallbackRunId;
-    let lastSeq = since;
-    let wroteReplay = false;
-
-    if (runId) {
-      for (const event of readTailEventsSince(since, runId)) {
-        const seq = tailEventSeq(event);
-        if (seq !== null) {
-          lastSeq = seq;
-        }
-        wroteReplay = true;
-        await stream.writeSSE({
-          id: seq === null ? undefined : String(seq),
-          event: event.kind,
-          data: JSON.stringify(event),
-        });
-      }
-    }
-
-    const queue: TailEvent[] = [];
+    const queue: Array<{ event: TailEvent; representedByBootstrap: boolean }> = [];
+    const emittedDurable = new Set<string>();
     let notify: (() => void) | null = null;
+    let activeSnapshot: TailSnapshotDto | null = null;
+    let runId = fallbackRunId;
+    let lastSeq = since;
+    let bootstrapResolved = false;
+    let transitionGeneration = 0;
+    const resolvePreparedSnapshot = async (
+      requestedRunId: string | null,
+      generation?: number,
+    ): Promise<TailSnapshotDto | null | undefined> => {
+      if (!deps.prepareTailSnapshot) {
+        return safeResolveSnapshot();
+      }
+      let target = requestedRunId;
+      while (!stream.aborted) {
+        const prepared = await deps.prepareTailSnapshot(target);
+        if (generation !== undefined && generation !== transitionGeneration) {
+          return undefined;
+        }
+        const snapshot = safeResolveSnapshot();
+        if (fallbackRunId !== null || (snapshot?.runId ?? null) === prepared) {
+          return snapshot;
+        }
+        target = snapshot?.runId ?? null;
+      }
+      return undefined;
+    };
     stream.onAbort(() => notify?.());
     const unsub = tailBus.subscribe((event) => {
+      if (!bootstrapResolved) {
+        queue.push({ event, representedByBootstrap: true });
+        return;
+      }
       const eventRunId = tailEventRunId(event);
       let currentSnapshot = activeSnapshot;
       let currentRunId = fallbackRunId ?? runId;
       if (fallbackRunId === null && eventRunId && eventRunId !== runId) {
-        currentSnapshot = safeResolveSnapshot();
-        currentRunId = currentSnapshot?.runId ?? eventRunId;
-      }
-      if (currentRunId !== runId) {
-        activeSnapshot = currentSnapshot;
-        runId = currentRunId;
-        queue.push({ kind: "tail.run.changed", runId: currentRunId ?? "", snapshot: activeSnapshot });
-        notify?.();
+        const generation = ++transitionGeneration;
+        void (async () => {
+          const preparedSnapshot = await resolvePreparedSnapshot(eventRunId, generation);
+          if (preparedSnapshot === undefined) return;
+          currentSnapshot = preparedSnapshot;
+          currentRunId = currentSnapshot?.runId ?? eventRunId;
+          activeSnapshot = currentSnapshot;
+          runId = currentRunId;
+          queue.push({ event: { kind: "tail.run.changed", runId: currentRunId, snapshot: activeSnapshot }, representedByBootstrap: false });
+          notify?.();
+        })();
+        return;
       }
       if (currentRunId && eventRunId && eventRunId !== currentRunId) {
         return;
       }
       const seq = tailEventSeq(event);
-      if (seq !== null && seq <= lastSeq) {
+      if (seq !== null && seq < lastSeq) {
         return;
       }
-      queue.push(event);
+      queue.push({ event, representedByBootstrap: false });
       notify?.();
     });
 
-    if (!wroteReplay) {
-      queue.push({ kind: "tail.ping" });
-    }
-
     try {
+      activeSnapshot = await resolvePreparedSnapshot(fallbackRunId) ?? null;
+      runId = activeSnapshot?.runId ?? fallbackRunId;
+      bootstrapResolved = true;
+      if (activeSnapshot) {
+        lastSeq = Math.max(lastSeq, activeSnapshot.lastSeq);
+      }
+      await stream.writeSSE({
+        event: "tail.run.changed",
+        data: JSON.stringify({ kind: "tail.run.changed", runId: runId ?? "", snapshot: activeSnapshot } satisfies TailEvent),
+      });
+
+      if (runId) {
+        for (const event of readTailEventsSince(lastSeq, runId)) {
+          const seq = tailEventSeq(event);
+          const fingerprint = JSON.stringify(event);
+          if ((seq !== null && seq < lastSeq) || (seq !== null && emittedDurable.has(fingerprint))) {
+            continue;
+          }
+          if (seq !== null) {
+            lastSeq = Math.max(lastSeq, seq);
+          }
+          if (seq !== null) emittedDurable.add(fingerprint);
+          await stream.writeSSE({
+            id: seq === null ? undefined : String(seq),
+            event: event.kind,
+            data: JSON.stringify(event),
+          });
+        }
+      }
+
       while (!stream.aborted) {
         if (queue.length === 0) {
           let timer: ReturnType<typeof setTimeout> | undefined;
@@ -617,10 +659,25 @@ const streamTailSse = (
             continue;
           }
         }
-        const event = queue.shift()!;
+        const queued = queue.shift()!;
+        if (queued.representedByBootstrap) {
+          continue;
+        }
+        const event = queued.event;
         const seq = tailEventSeq(event);
+        const fingerprint = JSON.stringify(event);
+        if ((seq !== null && seq < lastSeq) || (seq !== null && emittedDurable.has(fingerprint))) {
+          continue;
+        }
         if (seq !== null) {
-          lastSeq = seq;
+          lastSeq = Math.max(lastSeq, seq);
+        }
+        if (seq !== null) {
+          emittedDurable.add(fingerprint);
+          if (emittedDurable.size > 1_000) {
+            const oldest = [...emittedDurable].slice(0, emittedDurable.size - 1_000);
+            for (const key of oldest) emittedDurable.delete(key);
+          }
         }
         await stream.writeSSE({
           id: seq === null ? undefined : String(seq),

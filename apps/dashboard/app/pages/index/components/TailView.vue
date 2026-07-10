@@ -252,6 +252,15 @@ const isTerminal = computed(() => {
           <TailPane title="super-daddy" :model="snapshot.models.super" :pane="tail.state.value.panes.super" accent="blue" :now="tail.now.value" />
         </div>
 
+        <TailPane
+          title="driver verification"
+          model="stdout / stderr"
+          :pane="tail.state.value.panes.driver"
+          accent="amber"
+          :now="tail.now.value"
+          class="h-40 shrink-0"
+        />
+
         <section class="shrink-0 border-t border-slate-800 bg-slate-900 px-4 py-1.5 font-mono text-xs text-slate-500">
           <div v-if="tail.state.value.driverEvents.length" class="space-y-0.5">
             <p v-for="(event, index) in tail.state.value.driverEvents.slice(-3)" :key="`${index}-${event}`" class="truncate">

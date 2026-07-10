@@ -25,6 +25,7 @@ const makeSnapshot = (runId: string): TailSnapshotDto => ({
   contextTokens: 0,
   turn: 0,
   rotations: 0,
+  panes: { baby: [], daddy: [], super: [], driver: [] },
   journal: [],
   lastSeq: 0,
 });

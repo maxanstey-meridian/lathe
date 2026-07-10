@@ -6,20 +6,28 @@
 // The adapter extracts paths via Object.keys(readDiffStats(...)) and calls domain.
 
 import type { VerificationCommand } from "../../domain/packet.js";
+import type { VerificationProcessEvent } from "./driver-output.js";
 
 // VerificationResult — inline; no domain function consumes it.
 export type VerificationResult = { command: string; exitCode: number; outputTail: string };
+export type VerificationRunOptions = {
+  signal?: AbortSignal;
+  onEvent?: (event: VerificationProcessEvent) => void;
+  onResult?: (result: VerificationResult) => void;
+};
 
 export type Verify = {
   run(
     commands: VerificationCommand[],
     worktree: string,
     timeoutMs: number,
+    options?: VerificationRunOptions,
   ): Promise<VerificationResult[]>;
   runAutoFix(
     commands: VerificationCommand[],
     expectedSurface: string[],
     worktree: string,
     timeoutMs: number,
+    options?: VerificationRunOptions,
   ): Promise<void>;
 };

@@ -40,7 +40,7 @@ export type ExecuteRunCallback<Ref = unknown> = (
   signal?: AbortSignal,
 ) => Promise<void>;
 
-export type ConvergeCallback = (runId: string) => Promise<void>;
+export type ConvergeCallback = (runId: string, signal?: AbortSignal) => Promise<void>;
 
 export type WaitForWorkCallback = (signal: AbortSignal) => Promise<void>;
 
@@ -127,8 +127,8 @@ export const runLoop = async <Ref>(
   // Convergence mutex: serialise convergeStep calls so only one runs at a time
   // across all workers.
   let convergenceChain: Promise<void> = Promise.resolve();
-  const serializeConvergence = (runId: string): Promise<void> => {
-    const next = convergenceChain.then(() => convergeStep(runId));
+  const serializeConvergence = (runId: string, signal?: AbortSignal): Promise<void> => {
+    const next = convergenceChain.then(() => convergeStep(runId, signal));
     convergenceChain = next.catch(() => {});
     return next;
   };
@@ -340,7 +340,16 @@ export const runLoop = async <Ref>(
     }
 
     // Post-run steps: convergence, chain promotion, stall recovery.
-    await serializeConvergence(runId);
+    const convergenceAbort = new AbortController();
+    if (seams?.stopSignal?.aborted) {
+      convergenceAbort.abort();
+    }
+    abortMap.set(runId, convergenceAbort);
+    try {
+      await serializeConvergence(runId, convergenceAbort.signal);
+    } finally {
+      abortMap.delete(runId);
+    }
     promoteStaged(store, repo);
     const stall = recoverStalledRun(
       store,

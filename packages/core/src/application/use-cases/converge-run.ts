@@ -30,6 +30,7 @@ import type { Repo } from "../ports/repo.js";
 import type { Reviewer, SuperReviewResult } from "../ports/reviewer.js";
 import type { Store, ConvergenceLogEntry } from "../ports/store.js";
 import type { Verify, VerificationResult } from "../ports/verify.js";
+import { noopDriverOutput, type DriverOutput } from "../ports/driver-output.js";
 
 // ---------------------------------------------------------------------------
 // Dependencies
@@ -39,6 +40,7 @@ export type ConvergeDeps = {
   repo: Repo;
   reviewer: Reviewer;
   verify: Verify;
+  driverOutput?: DriverOutput;
   clock: Clock;
   config: Config;
   paths: Paths;
@@ -131,12 +133,12 @@ const slugFromRunId = (runId: string, pass: number): string => {
 };
 
 // ---------------------------------------------------------------------------
-// Main entry point — matches `ConvergeCallback = (runId: string) => Promise<void>`
+// Main entry point — matches `ConvergeCallback`.
 
-export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<void>) => {
-  const { store, repo, reviewer, verify, clock, config } = deps;
+export const convergeRun = (deps: ConvergeDeps): ((runId: string, signal?: AbortSignal) => Promise<void>) => {
+  const { store, repo, reviewer, verify, driverOutput = noopDriverOutput, clock, config } = deps;
 
-  return async (runId: string): Promise<void> => {
+  return async (runId: string, signal?: AbortSignal): Promise<void> => {
     store.addActiveConvergence({ runId, startedAt: clock.nowIso() });
     try {
       let meta = store.readMeta(runId);
@@ -183,14 +185,41 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
           packet.frontmatter.expected_surface,
           meta.worktree,
           config.thresholds.verificationTimeoutMs,
+          {
+            signal,
+            onEvent: (event) => driverOutput.verification(runId, "autofix", event),
+            onResult: (result) => store.appendJournal(runId, {
+              event: "verification_run",
+              command: result.command,
+              exitCode: result.exitCode,
+              turn: 0,
+              at: clock.nowIso(),
+            }),
+          },
         );
+        if (signal?.aborted) {
+          return;
+        }
 
         // 2. Verification — driver's own command execution (S6).
         const verificationResults = await verify.run(
           packet.frontmatter.verification,
           meta.worktree,
           config.thresholds.verificationTimeoutMs,
+          { signal, onEvent: (event) => driverOutput.verification(runId, "convergence", event) },
         );
+        for (const result of verificationResults) {
+          store.appendJournal(runId, {
+            event: "verification_run",
+            command: result.command,
+            exitCode: result.exitCode,
+            turn: 0,
+            at: clock.nowIso(),
+          });
+        }
+        if (signal?.aborted) {
+          return;
+        }
         const verificationGreen = allGreen(verificationResults);
 
         // 3. Super-daddy review — ONE reviewer, trusted (S2/S4). The reviewer's
@@ -211,7 +240,11 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
             campaignId,
           },
           recordReviewerSession,
+          signal,
         );
+        if (signal?.aborted) {
+          return;
+        }
 
         // 3a. Transport failure — NOT a verdict. Never record a campaign pass (that
         // would make alreadyReviewed no-op the retry), never author/stop from a
@@ -383,7 +416,11 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string) => Promise<voi
                   priorRawSnippet,
                 },
                 recordReviewerSession,
+                signal,
               );
+              if (signal?.aborted) {
+                return;
+              }
 
               // The review just succeeded over this socket, so an authoring drop is
               // transient — throw to the fail-safe: the run stays ready_for_review

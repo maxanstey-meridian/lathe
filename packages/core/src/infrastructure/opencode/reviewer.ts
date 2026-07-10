@@ -66,12 +66,15 @@ export const createReviewer = (
   type TurnOutcome =
     | { kind: "text"; raw: string; response: TurnResponse }
     | { kind: "unreachable"; detail: string };
-  const runTurn = async (sessionId: string, prompt: string): Promise<TurnOutcome> => {
+  const runTurn = async (sessionId: string, prompt: string, signal?: AbortSignal): Promise<TurnOutcome> => {
     let lastDetail = "unknown error";
     for (let attempt = 0; ; attempt++) {
+      if (signal?.aborted) {
+        return { kind: "unreachable", detail: "aborted" };
+      }
       let detail: string;
       try {
-        const response = await executor.sendMessage(sessionId, prompt, superdaddyModel, timeoutMs);
+        const response = await executor.sendMessage(sessionId, prompt, superdaddyModel, timeoutMs, signal);
         const { text: raw, error } = await harvestReply(executor, sessionId, response);
 
         // A provider/transport failure returns HTTP 200 with the failure on the
@@ -85,6 +88,10 @@ export const createReviewer = (
       } catch (err) {
         // A timeout or dead socket rejects out of sendMessage to here.
         detail = err instanceof Error ? err.message : String(err);
+      }
+
+      if (signal?.aborted) {
+        return { kind: "unreachable", detail: "aborted" };
       }
 
       lastDetail = detail;
@@ -101,13 +108,14 @@ export const createReviewer = (
   const superReview = async (
     input: SuperReviewInput,
     onSessionBound?: (sessionId: string) => void,
+    signal?: AbortSignal,
   ): Promise<SuperReviewOutcome> => {
     const sessionId = await ensureSession(input.worktree);
     // Surface the bound session BEFORE the turn so the caller (converge-run) can
     // record it in run meta — `lathe tail` then routes super-daddy's live tool
     // calls to its pane during the review, not after.
     onSessionBound?.(sessionId);
-    const turn = await runTurn(sessionId, renderSuperReview(input));
+    const turn = await runTurn(sessionId, renderSuperReview(input), signal);
 
     // Retries exhausted (or a fatal error) — unreachable, NOT escalate. A parse
     // failure is different — parseSuperReview fails closed to an escalate VERDICT
@@ -129,10 +137,11 @@ export const createReviewer = (
   const authorFollowup = async (
     input: AuthorFollowupInput,
     onSessionBound?: (sessionId: string) => void,
+    signal?: AbortSignal,
   ): Promise<AuthorFollowupOutcome> => {
     const sessionId = await ensureSession(input.worktree);
     onSessionBound?.(sessionId);
-    const turn = await runTurn(sessionId, renderFollowupAuthoring(input));
+    const turn = await runTurn(sessionId, renderFollowupAuthoring(input), signal);
     if (turn.kind === "unreachable") {
       return {
         kind: "unreachable",

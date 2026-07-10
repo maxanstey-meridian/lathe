@@ -743,6 +743,18 @@ export interface components {
             daddy: string;
             super: string;
         };
+        TailPaneLineDto: {
+            text: string;
+            /** @enum {string} */
+            style: "think" | "text" | "tool";
+            attachment?: string;
+        };
+        TailPanesDto: {
+            baby: components["schemas"]["TailPaneLineDto"][];
+            daddy: components["schemas"]["TailPaneLineDto"][];
+            super: components["schemas"]["TailPaneLineDto"][];
+            driver: components["schemas"]["TailPaneLineDto"][];
+        };
         TailSnapshotDto: {
             runId: string;
             summary: string | null;
@@ -758,6 +770,7 @@ export interface components {
             contextTokens: number;
             turn: number;
             rotations: number;
+            panes: components["schemas"]["TailPanesDto"];
             journal: components["schemas"]["TailJournalLineDto"][];
             lastSeq: number;
         };

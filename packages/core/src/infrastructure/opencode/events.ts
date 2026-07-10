@@ -4,7 +4,7 @@
 // on it. node:http (not fetch): a long-lived GET that streams until closed.
 
 import { request as httpRequest } from "node:http";
-import type { Events, OpencodeEvent, EventSubscription } from "../../application/ports/events.js";
+import type { Events, OpencodeEvent, EventSubscription, OpencodeMessage } from "../../application/ports/events.js";
 import type { Config } from "../../config/schemas.js";
 
 type OpenCodeMessage = {
@@ -44,13 +44,18 @@ const latestAssistantContextTokens = (messages: OpenCodeMessage[]): number | und
 };
 
 export const createEvents = (config: Config): Events => ({
-  subscribe: (directory: string, onEvent: (event: OpencodeEvent) => void): EventSubscription => {
+  subscribe: (
+    directory: string,
+    onEvent: (event: OpencodeEvent) => void,
+    onReconnect?: () => void,
+  ): EventSubscription => {
     // The feed is per-instance, scoped by directory exactly like sessions — an
     // unscoped subscription sees only its own server.connected handshake.
     const url = `http://127.0.0.1:${config.opencode.port}/event?directory=${encodeURIComponent(directory)}`;
     let closed = false;
     let req: ReturnType<typeof httpRequest> | undefined;
     let reconnect: ReturnType<typeof setTimeout> | undefined;
+    let connected = false;
 
     const scheduleReconnect = (): void => {
       if (closed || reconnect) {
@@ -65,6 +70,10 @@ export const createEvents = (config: Config): Events => ({
 
     const connect = (): void => {
       req = httpRequest(url, { method: "GET" }, (res) => {
+        if (connected) {
+          onReconnect?.();
+        }
+        connected = true;
         let buffer = "";
         res.on("data", (chunk: Buffer) => {
           buffer += chunk.toString("utf-8");
@@ -101,6 +110,17 @@ export const createEvents = (config: Config): Events => ({
     };
   },
 });
+
+export const createMessageHistoryReader = (config: Config) => {
+  const base = `http://127.0.0.1:${config.opencode.port}`;
+  return async (sessionId: string, signal?: AbortSignal): Promise<OpencodeMessage[]> => {
+    const res = await fetch(`${base}/session/${sessionId}/message`, { signal });
+    if (!res.ok) {
+      throw new Error(`message list failed: ${res.status} ${await res.text()}`);
+    }
+    return (await res.json()) as OpencodeMessage[];
+  };
+};
 
 export const createContextTokenReader = (config: Config) => {
   const base = `http://127.0.0.1:${config.opencode.port}`;

@@ -19,6 +19,8 @@ export type { Paths } from "./config/paths.js";
 export type { Clock } from "./application/ports/clock.js";
 export type { Repo } from "./application/ports/repo.js";
 export type { Store } from "./application/ports/store.js";
+export { noopDriverOutput } from "./application/ports/driver-output.js";
+export type { DriverOutput, VerificationPhase, VerificationProcessEvent } from "./application/ports/driver-output.js";
 
 // ---------------------------------------------------------------------------
 // Infrastructure (concrete adapters consumed by the server)
@@ -26,8 +28,8 @@ export type { Store } from "./application/ports/store.js";
 
 export { SqliteStoreAdapter } from "./infrastructure/sqlite-store.js";
 export { systemClock } from "./infrastructure/clock.js";
-export { createEvents, createContextTokenReader } from "./infrastructure/opencode/events.js";
-export type { OpencodeEvent } from "./application/ports/events.js";
+export { createEvents, createContextTokenReader, createMessageHistoryReader } from "./infrastructure/opencode/events.js";
+export type { OpencodeEvent, OpencodeMessage, OpencodeMessagePart } from "./application/ports/events.js";
 
 // ---------------------------------------------------------------------------
 // CLI composition root (buildRepo + runDriver — the server hosts these)

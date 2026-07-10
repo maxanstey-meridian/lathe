@@ -9,6 +9,7 @@ import type { Executor } from "../src/application/ports/executor.js";
 import type { Planner } from "../src/application/ports/planner.js";
 import type { Repo } from "../src/application/ports/repo.js";
 import type { Store } from "../src/application/ports/store.js";
+import type { Verify } from "../src/application/ports/verify.js";
 import { makeExecuteRun, type BridgeBinding } from "../src/application/use-cases/execute-run.js";
 import { rotateSession } from "../src/application/use-cases/rotation.js";
 import type { RunPorts, RunChannel } from "../src/application/use-cases/run-runtime.js";
@@ -132,12 +133,17 @@ const scriptedExecutor = (
 };
 
 const makePorts = (store: Store, repo: Repo, executor: Executor, planner: Planner): RunPorts => ({
+  driverOutput: { verification: () => {} },
   configSource: createConfigSource(Config.parse({})),
   store,
   repo,
   executor,
   planner,
   clock: fixedClock(),
+  verify: {
+    run: async () => [{ command: "echo ok", exitCode: 0, outputTail: "ok" }],
+    runAutoFix: async () => {},
+  } satisfies Verify,
 });
 
 const cleanTemp = async (dir: string) => {

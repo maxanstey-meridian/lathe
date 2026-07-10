@@ -980,11 +980,61 @@ export const turnLoop = async (
           next = { name: "Q3", text: q3Continue() };
           continue;
         }
+
+        // V1: run verification here (off the MCP path) so the bridge handler
+        // can return immediately without blocking baby's turn. The report
+        // arrives with empty verificationClaims; fill them now.
+        const verificationResults = await ports.verify.run(
+          packet.frontmatter.verification,
+          worktree,
+          config.thresholds.verificationTimeoutMs,
+          {
+            ...(signal ? { signal } : {}),
+            onEvent: (event) => ports.driverOutput.verification(runId, "report", event),
+          },
+        );
+        if (signal?.aborted) {
+          return finish({ status: "stopped" });
+        }
+        for (const result of verificationResults) {
+          journal(ports, runId, turn, {
+            event: "verification_run",
+            command: result.command,
+            exitCode: result.exitCode,
+          });
+        }
+        const verificationFailures = verificationResults.filter((r) => r.exitCode !== 0);
+        if (verificationFailures.length > 0) {
+          channel.reportRejectionCount += 1;
+          const problems = verificationFailures.map(
+            (r) =>
+              `verification failed (exit ${r.exitCode}): ${r.command}\n  output: ${r.outputTail.slice(-200)}`,
+          );
+          journal(ports, runId, turn, { event: "report_rejected", problems });
+          if (channel.reportRejectionCount >= config.thresholds.reportRejectionParkAt) {
+            return finish({
+              status: "failed",
+              note: `verification failed ${channel.reportRejectionCount} times; last problems: ${problems.join("; ")}`,
+            });
+          }
+          next = { name: "Q7", text: q7ReportRejected(problems) };
+          continue;
+        }
+
+        const fullReport: SubmitReport = {
+          ...report,
+          verificationClaims: verificationResults.map((r) => ({
+            command: r.command,
+            result: (r.exitCode === 0 ? "passed" : "failed") as "passed" | "failed",
+            ...(r.outputTail ? { notes: r.outputTail.slice(-200) } : {}),
+          })),
+        };
+
         const ledger = store.readLedger(runId);
         let review: FinalReview;
         try {
           await syncPendingMaxDecisionsToDaddy(ports, runId, worktree, turn);
-          review = await planner.finalReview(packet, ledger, report);
+          review = await planner.finalReview(packet, ledger, fullReport);
         } catch (err) {
           const detail = err instanceof Error ? err.message : String(err);
           review = {
@@ -1065,7 +1115,7 @@ export const turnLoop = async (
               continue;
             }
             if (isCompleteFinalStepLedger(ledger) && !finalReviewWasUnavailable(review)) {
-              acceptedReport = report;
+              acceptedReport = fullReport;
               finalReview = review;
               journal(ports, runId, turn, {
                 event: "driver_note",
@@ -1082,9 +1132,9 @@ export const turnLoop = async (
           continue;
         }
         // accept → terminal ready_for_review (rendered into report.md at finalize).
-        acceptedReport = report;
+        acceptedReport = fullReport;
         finalReview = review;
-        journal(ports, runId, turn, { event: "report_accepted", status: report.status });
+        journal(ports, runId, turn, { event: "report_accepted", status: fullReport.status });
         return finish({ status: "ready_for_review" });
       }
 

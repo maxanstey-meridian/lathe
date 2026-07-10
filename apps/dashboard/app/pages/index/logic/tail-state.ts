@@ -1,4 +1,4 @@
-import type { TailEvent, TailLineStyle, TailRunStatus, TailSnapshotDto, TailSpeaker } from "@lathe/contract";
+import type { TailEvent, TailLineStyle, TailPaneLineDto, TailPanesDto, TailRunStatus, TailSnapshotDto, TailSpeaker } from "@lathe/contract";
 
 export type TailPaneLineStyle = TailLineStyle | "tool";
 
@@ -27,7 +27,7 @@ export type TailStatsState = {
 
 export type TailViewState = {
   readonly snapshot: TailSnapshotDto | null;
-  readonly panes: Record<TailSpeaker, TailPaneState>;
+  readonly panes: Record<TailSpeaker | "driver", TailPaneState>;
   readonly driverEvents: string[];
   readonly stats: TailStatsState | null;
   readonly charsThisTurn: number;
@@ -41,6 +41,20 @@ export const emptyTailPane = (): TailPaneState => ({
   current: "",
   currentStyle: "text",
   lastAt: 0,
+});
+
+const paneFromLines = (lines: TailPaneLineDto[]): TailPaneState => ({
+  lines: lines.slice(-MAX_PANE_LINES),
+  current: "",
+  currentStyle: "text",
+  lastAt: 0,
+});
+
+const panesFromDto = (panes: TailPanesDto): TailViewState["panes"] => ({
+  baby: paneFromLines(panes.baby),
+  daddy: paneFromLines(panes.daddy),
+  super: paneFromLines(panes.super),
+  driver: paneFromLines(panes.driver),
 });
 
 const tailStatsFromSnapshot = (snapshot: TailSnapshotDto): TailStatsState => ({
@@ -62,9 +76,10 @@ const driverEventsFromSnapshot = (snapshot: TailSnapshotDto): string[] =>
 export const tailStateFromSnapshot = (snapshot: TailSnapshotDto | null): TailViewState => ({
   snapshot,
   panes: {
-    baby: emptyTailPane(),
-    daddy: emptyTailPane(),
-    super: emptyTailPane(),
+    baby: snapshot ? paneFromLines(snapshot.panes.baby) : emptyTailPane(),
+    daddy: snapshot ? paneFromLines(snapshot.panes.daddy) : emptyTailPane(),
+    super: snapshot ? paneFromLines(snapshot.panes.super) : emptyTailPane(),
+    driver: snapshot ? paneFromLines(snapshot.panes.driver) : emptyTailPane(),
   },
   driverEvents: snapshot ? driverEventsFromSnapshot(snapshot) : [],
   stats: snapshot ? tailStatsFromSnapshot(snapshot) : null,
@@ -109,7 +124,7 @@ const pushToolLine = (pane: TailPaneState, text: string, now: number, attachment
 
 const updatePane = (
   state: TailViewState,
-  speaker: TailSpeaker,
+  speaker: TailSpeaker | "driver",
   update: (pane: TailPaneState) => TailPaneState,
 ): TailViewState => ({
   ...state,
@@ -159,6 +174,14 @@ export const applyTailEvent = (state: TailViewState, event: TailEvent, now: numb
     return state;
   }
 
+  if (event.kind === "tail.panes.replaced") {
+    return {
+      ...state,
+      snapshot: state.snapshot ? { ...state.snapshot, panes: event.panes } : state.snapshot,
+      panes: panesFromDto(event.panes),
+    };
+  }
+
   if (event.kind === "tail.journal") {
     if (!event.driver) {
       return state;
@@ -202,11 +225,28 @@ export const applyTailEvent = (state: TailViewState, event: TailEvent, now: numb
     return updatePane(state, event.speaker, (pane) => pushToolLine(pane, `${marker} ${event.tool}${detail}`, now, event.input));
   }
 
+  if (event.kind === "tail.driver.delta") {
+    return {
+      ...updatePane(state, "driver", (pane) => pushDelta(
+        pane,
+        event.text,
+        event.stream === "stderr" ? "think" : "text",
+        now,
+      )),
+    };
+  }
+
+  if (event.kind === "tail.driver.command") {
+    const text = event.status === "running"
+      ? `[${event.phase}] $ ${event.command}`
+      : event.timedOut
+        ? "timed out"
+        : `exit ${event.exitCode ?? 1}`;
+    return updatePane(state, "driver", (pane) => pushToolLine(pane, text, now));
+  }
+
   if (event.kind === "tail.super.verdict") {
-    return event.lines.reduce(
-      (next, line) => updatePane(next, "super", (pane) => pushToolLine(pane, line, now)),
-      state,
-    );
+    return state;
   }
 
   return state;

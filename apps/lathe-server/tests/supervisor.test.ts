@@ -7,8 +7,53 @@ import { test } from "node:test";
 import type { Config, Clock, Repo, Paths, RunMeta } from "@lathe/core";
 import { makePaths, SqliteStoreAdapter, systemClock, buildRepo, Config as ConfigSchema } from "@lathe/core";
 import type { Supervisor } from "../src/supervisor.js";
-import { createSupervisor, NonChainTipError, TerminalRunError, RunNotFoundError, resolveSpeaker, _testSyncSubscriptions } from "../src/supervisor.js";
+import { createSupervisor, NonChainTipError, TerminalRunError, RunNotFoundError, resolveSpeaker, createOpenCodeTailProjector, _testSyncSubscriptions } from "../src/supervisor.js";
 import { createEventBus } from "../src/app.js";
+
+test("OpenCode tail projector streams accumulated bash output as suffix deltas", () => {
+  const events: import("@lathe/contract").TailEvent[] = [];
+  const { project } = createOpenCodeTailProjector(
+    (_runId, sessionId) => (sessionId === "baby-session" ? "baby" : undefined),
+    (event) => events.push(event),
+  );
+  const part = (status: "running" | "completed", output: string) => ({
+    type: "message.part.updated",
+    properties: {
+      part: {
+        id: "tool-1",
+        sessionID: "baby-session",
+        messageID: "message-1",
+        type: "tool",
+        tool: "bash",
+        state: {
+          status,
+          input: { command: "task check" },
+          ...(status === "running"
+            ? { metadata: { output } }
+            : { output, metadata: { output } }),
+        },
+      },
+    },
+  });
+
+  project("run-1", part("running", "phase one\n"));
+  project("run-1", part("running", "phase one\nphase two\n"));
+  project("run-1", part("completed", "phase one\nphase two\n"));
+
+  deepStrictEqual(events, [
+    {
+      kind: "tail.pane.tool",
+      runId: "run-1",
+      speaker: "baby",
+      status: "running",
+      tool: "bash",
+      detail: "task check",
+      input: '{\n  "command": "task check"\n}',
+    },
+    { kind: "tail.pane.delta", runId: "run-1", speaker: "baby", style: "text", text: "phase one\n" },
+    { kind: "tail.pane.delta", runId: "run-1", speaker: "baby", style: "text", text: "phase two\n" },
+  ]);
+});
 
 // ---------------------------------------------------------------------------
 // Test helpers

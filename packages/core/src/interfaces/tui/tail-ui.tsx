@@ -3,7 +3,7 @@
 // Daddy, and Super-daddy, a driver-event strip, and a status bar with the
 // tokens-until-rotation gauge. Writes nothing.
 
-import type { TailEvent, TailLineStyle, TailSnapshotDto, TailSpeaker } from "@lathe/contract";
+import type { TailEvent, TailLineStyle, TailPaneLineDto, TailSnapshotDto, TailSpeaker } from "@lathe/contract";
 import { render, Box, Text, useApp, useInput } from "ink";
 import React from "react";
 import { useEffect, useRef, useState } from "react";
@@ -19,7 +19,12 @@ type LineStyle = TailLineStyle | "tool";
 type PaneLine = { text: string; style: LineStyle };
 type PaneState = { lines: PaneLine[]; current: string; currentStyle: LineStyle; lastAt: number };
 
-const emptyPane = (): PaneState => ({ lines: [], current: "", currentStyle: "text", lastAt: 0 });
+const paneFromLines = (lines: TailPaneLineDto[]): PaneState => ({
+  lines: lines.slice(-300),
+  current: "",
+  currentStyle: "text",
+  lastAt: 0,
+});
 
 const pushDelta = (pane: PaneState, delta: string, style: LineStyle): PaneState => {
   let { lines, current, currentStyle } = pane;
@@ -119,10 +124,11 @@ const Pane = ({
 
 const TailApp = ({ snapshot: initialSnapshot, subscribe }: TailUiDeps) => {
   const { exit } = useApp();
-  const [snapshot, setSnapshot] = useState(initialSnapshot);
-  const [baby, setBaby] = useState<PaneState>(emptyPane());
-  const [daddy, setDaddy] = useState<PaneState>(emptyPane());
-  const [superPane, setSuperPane] = useState<PaneState>(emptyPane());
+  const [snapshot, setSnapshot] = useState<TailSnapshotDto | null>(initialSnapshot);
+  const [baby, setBaby] = useState<PaneState>(paneFromLines(initialSnapshot.panes.baby));
+  const [daddy, setDaddy] = useState<PaneState>(paneFromLines(initialSnapshot.panes.daddy));
+  const [superPane, setSuperPane] = useState<PaneState>(paneFromLines(initialSnapshot.panes.super));
+  const [driver, setDriver] = useState<PaneState>(paneFromLines(initialSnapshot.panes.driver));
   const [events, setEvents] = useState<string[]>(
     initialSnapshot.journal
       .filter((entry) => entry.driver)
@@ -140,9 +146,10 @@ const TailApp = ({ snapshot: initialSnapshot, subscribe }: TailUiDeps) => {
     status: initialSnapshot.status,
   });
   const charsThisTurn = useRef(0);
-  const startedAt = snapshot.startedAt ? Date.parse(snapshot.startedAt) : Date.now();
-  const label = runLabel(snapshot.runId, snapshot.summary ?? undefined);
-  const babyModel = snapshot.promoted ? `⬆ ${snapshot.models.promoted}` : snapshot.models.baby;
+  const currentRunId = useRef(initialSnapshot.runId);
+  const startedAt = snapshot?.startedAt ? Date.parse(snapshot.startedAt) : Date.now();
+  const label = snapshot ? runLabel(snapshot.runId, snapshot.summary ?? undefined) : "no active run";
+  const babyModel = snapshot ? (snapshot.promoted ? `⬆ ${snapshot.models.promoted}` : snapshot.models.baby) : "";
 
   useInput((input, key) => {
     if (input === "q" || (key.ctrl && input === "c")) {
@@ -169,6 +176,7 @@ const TailApp = ({ snapshot: initialSnapshot, subscribe }: TailUiDeps) => {
     const sub = subscribe((event) => {
       if (event.kind === "tail.run.changed") {
         if (event.snapshot) {
+          currentRunId.current = event.snapshot.runId;
           setSnapshot(event.snapshot);
           setEvents(
             event.snapshot.journal
@@ -185,15 +193,32 @@ const TailApp = ({ snapshot: initialSnapshot, subscribe }: TailUiDeps) => {
             gate: event.snapshot.gateReason ?? "",
             status: event.snapshot.status,
           });
-          setBaby(emptyPane());
-          setDaddy(emptyPane());
-          setSuperPane(emptyPane());
+          setBaby(paneFromLines(event.snapshot.panes.baby));
+          setDaddy(paneFromLines(event.snapshot.panes.daddy));
+          setSuperPane(paneFromLines(event.snapshot.panes.super));
+          setDriver(paneFromLines(event.snapshot.panes.driver));
+          charsThisTurn.current = 0;
+        } else {
+          currentRunId.current = "";
+          setSnapshot(null);
+          setEvents([]);
+          setBaby(paneFromLines([]));
+          setDaddy(paneFromLines([]));
+          setSuperPane(paneFromLines([]));
+          setDriver(paneFromLines([]));
           charsThisTurn.current = 0;
         }
         return;
       }
 
-      if ("runId" in event && event.runId !== snapshot.runId) {
+      if ("runId" in event && event.runId !== currentRunId.current) {
+        return;
+      }
+      if (event.kind === "tail.panes.replaced") {
+        setBaby(paneFromLines(event.panes.baby));
+        setDaddy(paneFromLines(event.panes.daddy));
+        setSuperPane(paneFromLines(event.panes.super));
+        setDriver(paneFromLines(event.panes.driver));
         return;
       }
       if (event.kind === "tail.journal") {
@@ -204,7 +229,7 @@ const TailApp = ({ snapshot: initialSnapshot, subscribe }: TailUiDeps) => {
       }
       if (event.kind === "tail.stats") {
         charsThisTurn.current = 0;
-        setSnapshot((prev) => ({ ...prev, promoted: event.promoted, status: event.status }));
+        setSnapshot((prev) => prev ? ({ ...prev, promoted: event.promoted, status: event.status }) : prev);
         setStats({
           ctx: event.contextTokens,
           turn: event.turn,
@@ -232,16 +257,37 @@ const TailApp = ({ snapshot: initialSnapshot, subscribe }: TailUiDeps) => {
         );
         return;
       }
+      if (event.kind === "tail.driver.delta") {
+        setDriver((pane) => pushDelta(pane, event.text, event.stream === "stderr" ? "think" : "text"));
+        return;
+      }
+      if (event.kind === "tail.driver.command") {
+        setDriver((pane) => pushToolLine(
+          pane,
+          event.status === "running"
+            ? `[${event.phase}] $ ${event.command}`
+            : event.timedOut
+              ? "timed out"
+              : `exit ${event.exitCode ?? 1}`,
+        ));
+        return;
+      }
       if (event.kind === "tail.super.verdict") {
-        for (const line of event.lines) {
-          setSuperPane((p) => pushToolLine(p, line));
-        }
+        return;
       }
     });
     return () => {
       sub.close();
     };
-  }, [snapshot.runId, subscribe]);
+  }, [subscribe]);
+
+  if (!snapshot) {
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Text color="gray">No active run. Queue a packet to begin.</Text>
+      </Box>
+    );
+  }
 
   const rows = process.stdout.rows ?? 35;
   const columns = process.stdout.columns ?? 80;
@@ -295,12 +341,20 @@ const TailApp = ({ snapshot: initialSnapshot, subscribe }: TailUiDeps) => {
         overflow="hidden"
         paddingX={1}
       >
-        {events.slice(-3).map((line, i) => (
+        {[
+          ...driver.lines,
+          ...(driver.current.trim() ? [{ text: driver.current, style: driver.currentStyle }] : []),
+        ].slice(-3).map((line, i) => (
+          <Text key={`driver-${i}`} dimColor={line.style === "think"} color={line.style === "tool" ? "yellow" : undefined} wrap="truncate-end">
+            {line.text}
+          </Text>
+        ))}
+        {driver.lines.length === 0 && !driver.current.trim() && events.slice(-3).map((line, i) => (
           <Text key={i} wrap="truncate-end">
             {line}
           </Text>
         ))}
-        {events.length === 0 && <Text dimColor>no driver events yet</Text>}
+        {driver.lines.length === 0 && !driver.current.trim() && events.length === 0 && <Text dimColor>no driver events yet</Text>}
       </Box>
       <Box paddingX={1}>
         <Text wrap="truncate-end">

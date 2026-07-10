@@ -1,4 +1,4 @@
-import { client, type TailEvent, type TailRunStatus } from "@lathe/contract";
+import { type TailEvent } from "@lathe/contract";
 import { onUnmounted, ref, watch } from "vue";
 
 import { daemonTailEventsUrl, daemonTailRunEventsUrl } from "../logic/daemon-url";
@@ -10,17 +10,13 @@ const TAIL_EVENT_KINDS = [
   "tail.stats",
   "tail.pane.delta",
   "tail.pane.tool",
+  "tail.panes.replaced",
+  "tail.driver.command",
+  "tail.driver.delta",
   "tail.super.verdict",
   "tail.run.changed",
   "tail.ping",
 ] as const;
-
-const TERMINAL_STATUSES: readonly TailRunStatus[] = [
-  "ready_for_review",
-  "blocked",
-  "failed",
-  "accepted",
-];
 
 export const useLatheTail = (): LatheTail => {
   const runtimeConfig = useRuntimeConfig();
@@ -31,31 +27,19 @@ export const useLatheTail = (): LatheTail => {
   const now = ref(Date.now());
   const selectedRunId = ref<string | null>(null);
 
+  let reconnect = (): void => {};
   const refresh = async (): Promise<void> => {
     isLoading.value = true;
     errorMessage.value = null;
-
-    try {
-      const result = selectedRunId.value
-        ? await client.GET("/tail/{runId}", { params: { path: { runId: selectedRunId.value } } })
-        : await client.GET("/tail/active");
-
-      if (result.response.ok) {
-        state.value = tailStateFromSnapshot(result.data ?? null);
-        return;
-      }
-
-      errorMessage.value = `Tail endpoint returned ${result.response.status}.`;
-    } catch {
-      errorMessage.value = "Unable to reach the Lathe tail endpoint.";
-    } finally {
-      isLoading.value = false;
-    }
+    reconnect();
   };
 
   let eventSource: EventSource | null = null;
+  let generation = 0;
 
   const connectEventSource = (): void => {
+    generation += 1;
+    const ownGeneration = generation;
     eventSource?.close();
 
     const url = selectedRunId.value
@@ -65,34 +49,33 @@ export const useLatheTail = (): LatheTail => {
     const source = new EventSource(url);
 
     source.onopen = () => {
+      if (ownGeneration !== generation) return;
       isLive.value = true;
+      isLoading.value = false;
     };
 
     source.onerror = () => {
+      if (ownGeneration !== generation) return;
       isLive.value = false;
+      isLoading.value = false;
+      errorMessage.value = "Unable to reach the Lathe tail endpoint.";
     };
 
     for (const kind of TAIL_EVENT_KINDS) {
       source.addEventListener(kind, (raw: MessageEvent) => {
+        if (ownGeneration !== generation) return;
         const event = JSON.parse(raw.data) as TailEvent;
-        if (
-          event.kind === "tail.stats" &&
-          TERMINAL_STATUSES.includes(event.status) &&
-          selectedRunId.value === null
-        ) {
-          state.value = tailStateFromSnapshot(null);
-          return;
-        }
+        errorMessage.value = null;
         state.value = applyTailEvent(state.value, event, Date.now());
       });
     }
 
     eventSource = source;
   };
+  reconnect = connectEventSource;
 
   watch(selectedRunId, () => {
     connectEventSource();
-    void refresh();
   });
 
   connectEventSource();

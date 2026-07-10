@@ -28,9 +28,11 @@ export type Reviewer = {
   superReview(
     input: SuperReviewInput,
     onSessionBound?: (sessionId: string) => void,
+    signal?: AbortSignal,
   ): Promise<SuperReviewOutcome>;
   authorFollowup(
     input: AuthorFollowupInput,
     onSessionBound?: (sessionId: string) => void,
+    signal?: AbortSignal,
   ): Promise<AuthorFollowupOutcome>;
 };

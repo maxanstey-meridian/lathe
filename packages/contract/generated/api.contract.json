@@ -2620,6 +2620,90 @@
       ]
     },
     {
+      "name": "TailPaneLineDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "text",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "style",
+          "type": {
+            "kind": "stringUnion",
+            "values": [
+              "think",
+              "text",
+              "tool"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "attachment",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": true
+        }
+      ]
+    },
+    {
+      "name": "TailPanesDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "baby",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "TailPaneLineDto"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "daddy",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "TailPaneLineDto"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "super",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "TailPaneLineDto"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "driver",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "TailPaneLineDto"
+            }
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
       "name": "TailSnapshotDto",
       "typeParameters": [],
       "properties": [
@@ -2741,6 +2825,14 @@
           "type": {
             "kind": "primitive",
             "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "panes",
+          "type": {
+            "kind": "ref",
+            "name": "TailPanesDto"
           },
           "optional": false
         },

@@ -40,18 +40,23 @@ import {
   renderJournalEvent,
   createEvents,
   createContextTokenReader,
+  createMessageHistoryReader,
   parsePacketShape,
   Config,
   createConfigSource,
   type ConfigSource,
+  type DriverOutput,
+  type VerificationProcessEvent,
+  type VerificationPhase,
 } from "@lathe/core";
-import type { OpencodeEvent } from "@lathe/core";
+import type { OpencodeEvent, OpencodeMessage } from "@lathe/core";
 
 import type { EventBus, AppDeps, LatheEvent, TailEventBus } from "./app.js";
-import type { Reviewer, ReviewDto, StatusDto, TailEvent, TailSnapshotDto } from "@lathe/contract";
+import type { Reviewer, ReviewDto, StatusDto, TailEvent, TailSnapshotDto, TailSpeaker } from "@lathe/contract";
 import { createEventBus, createTailEventBus } from "./app.js";
 import { projectJournalEvent } from "./event-projection.js";
 import type { ProjectionContext } from "./event-projection.js";
+import { createTailPaneProjection, type TailPaneProjection } from "./tail-pane-projection.js";
 
 // ---------------------------------------------------------------------------
 // Domain errors — P03 handlers map these to typed HTTP responses
@@ -301,20 +306,6 @@ const startJournalTail = (
 const isTailDriverEvent = (event: JournalEvent): boolean =>
   event.event !== "tool_call" && event.event !== "turn_ended" && event.event !== "prompt_sent";
 
-const tailToolDetail = (state: Record<string, unknown>): string => {
-  const inputObj = (state.input ?? {}) as Record<string, unknown>;
-  if (typeof inputObj.command === "string") {
-    return inputObj.command.slice(0, 90);
-  }
-  if (typeof inputObj.filePath === "string") {
-    return inputObj.filePath.split("/worktree/").pop() ?? inputObj.filePath;
-  }
-  if (typeof inputObj.question === "string") {
-    return `"${inputObj.question.slice(0, 80)}…"`;
-  }
-  return typeof inputObj.status === "string" ? inputObj.status : "";
-};
-
 export const resolveSpeaker = (store: Store, runId: string, sessionId: string): "baby" | "daddy" | "super" | undefined => {
   const activeRuns = store.listActiveRuns();
   if (activeRuns.some((r) => r.runId === runId && sessionId === r.babySessionId)) {
@@ -333,96 +324,110 @@ export const resolveSpeaker = (store: Store, runId: string, sessionId: string): 
   return undefined;
 };
 
+export const createOpenCodeTailProjector = (
+  speakerFor: (runId: string, sessionId: string) => "baby" | "daddy" | "super" | undefined,
+  publish: (event: TailEvent) => void,
+): TailPaneProjection => createTailPaneProjection(speakerFor, publish);
+
+type TailHydrator = {
+  hydrateRun(runId: string, force?: boolean): Promise<void>;
+};
+
+const createTailHydrator = (
+  config: Config,
+  store: Store,
+  projection: TailPaneProjection,
+  publish: (event: TailEvent) => void,
+): TailHydrator => {
+  const readHistory = createMessageHistoryReader(config);
+  const hydrated = new Map<string, string>();
+  const inFlight = new Map<string, { promise: Promise<void>; forceRequested: boolean }>();
+
+  const bindingOf = (runId: string, speaker: TailSpeaker): string | undefined => {
+    const meta = store.readMetaIfExists(runId);
+    if (speaker === "baby") return meta?.babySessionId;
+    if (speaker === "daddy") return meta?.daddySessionId;
+    return meta?.reviewerSessionId;
+  };
+
+  const hydrateSpeaker = async (runId: string, speaker: TailSpeaker, force: boolean): Promise<void> => {
+    let sessionId = bindingOf(runId, speaker);
+    if (!sessionId || (!force && hydrated.get(`${runId}:${speaker}`) === sessionId)) return;
+    for (let attempt = 0; attempt < 2 && sessionId; attempt += 1) {
+      let messages: OpencodeMessage[];
+      try {
+        messages = await readHistory(sessionId, AbortSignal.timeout(10_000));
+      } catch {
+        const current = bindingOf(runId, speaker);
+        if (current && current !== sessionId) {
+          sessionId = current;
+          continue;
+        }
+        return;
+      }
+      const current = bindingOf(runId, speaker);
+      if (current !== sessionId) {
+        sessionId = current;
+        continue;
+      }
+      projection.mergeHistory(runId, speaker, sessionId, messages);
+      hydrated.set(`${runId}:${speaker}`, sessionId);
+      return;
+    }
+  };
+
+  const hydrateRun = (runId: string, force = false): Promise<void> => {
+    const existing = inFlight.get(runId);
+    if (existing) {
+      existing.forceRequested ||= force;
+      return existing.promise;
+    }
+    const state = { promise: Promise.resolve(), forceRequested: force };
+    state.promise = (async () => {
+      do {
+        const forceThisPass = state.forceRequested;
+        state.forceRequested = false;
+        await Promise.all(
+          (["baby", "daddy", "super"] as const).map((speaker) => hydrateSpeaker(runId, speaker, forceThisPass)),
+        );
+        publish({ kind: "tail.panes.replaced", runId, panes: projection.panes(runId) });
+      } while (state.forceRequested);
+    })().finally(() => {
+      inFlight.delete(runId);
+    });
+    inFlight.set(runId, state);
+    return state.promise;
+  };
+
+  return { hydrateRun };
+};
+
 const startTailOpenCode = (
   config: Config,
   paths: Paths,
   store: Store,
   tailBus: TailEventBus,
   pollIntervalMs: number,
+  tailProjector: TailPaneProjection,
+  hydrator: TailHydrator,
 ): TailOpenCodeHandle => {
   const events = createEvents(config);
   const readContextTokens = createContextTokenReader(config);
   const subscriptions = new Map<string, { close: () => void }[]>();
-  const partTypes = new Map<string, string>();
-  const toolSeen = new Set<string>();
   let running = true;
 
-  const speakerFor = (runId: string, sessionId: string): "baby" | "daddy" | "super" | undefined =>
-    resolveSpeaker(store, runId, sessionId);
-
-  const onOpenCodeEvent = (runId: string, event: OpencodeEvent): void => {
-    const props = event.properties;
-    if (!props) {
-      return;
-    }
-    if (event.type === "message.part.updated") {
-      const part = (props.part ?? {}) as Record<string, unknown>;
-      const partId = typeof part.id === "string" ? part.id : undefined;
-      const type = typeof part.type === "string" ? part.type : "";
-      const sessionId = typeof part.sessionID === "string" ? part.sessionID : undefined;
-      if (partId) {
-        partTypes.set(`${runId}:${partId}`, type);
-      }
-      if (type !== "tool" || !partId || !sessionId) {
-        return;
-      }
-      const state = (part.state ?? {}) as Record<string, unknown>;
-      const status = typeof state.status === "string" ? state.status : "";
-      const seenKey = `${runId}:${partId}`;
-      if ((status !== "completed" && status !== "error") || toolSeen.has(seenKey)) {
-        return;
-      }
-      const speaker = speakerFor(runId, sessionId);
-      if (!speaker) {
-        return;
-      }
-      toolSeen.add(seenKey);
-      const inputObj = (state.input ?? {}) as Record<string, unknown>;
-      const hasStructuredInput = Object.keys(inputObj).length > 0;
-      tailBus.publish({
-        kind: "tail.pane.tool",
-        runId,
-        speaker,
-        status,
-        tool: typeof part.tool === "string" ? part.tool : "tool",
-        detail: tailToolDetail(state),
-        ...(hasStructuredInput ? { input: JSON.stringify(inputObj, null, 2) } : {}),
-      });
-      return;
-    }
-    if (event.type === "message.part.delta") {
-      if (props.field !== "text") {
-        return;
-      }
-      const sessionId = typeof props.sessionID === "string" ? props.sessionID : undefined;
-      const partId = typeof props.partID === "string" ? props.partID : undefined;
-      const raw = typeof props.delta === "string" ? props.delta : "";
-      const text = raw.replace(/<!--[\s\S]*?-->/g, "");
-      if (!sessionId || !partId || !text) {
-        return;
-      }
-      const speaker = speakerFor(runId, sessionId);
-      if (!speaker) {
-        return;
-      }
-      tailBus.publish({
-        kind: "tail.pane.delta",
-        runId,
-        speaker,
-        style: partTypes.get(`${runId}:${partId}`) === "reasoning" ? "think" : "text",
-        text,
-      });
-    }
-  };
+  const onOpenCodeEvent = tailProjector.project;
 
   const ensureRun = (meta: RunMeta): void => {
     if (subscriptions.has(meta.runId)) {
+      void hydrator.hydrateRun(meta.runId);
       return;
     }
     subscriptions.set(meta.runId, [
-      events.subscribe(meta.worktree, (event) => onOpenCodeEvent(meta.runId, event)),
-      events.subscribe(paths.root, (event) => onOpenCodeEvent(meta.runId, event)),
+      events.subscribe(meta.worktree, (event) => onOpenCodeEvent(meta.runId, event), () => void hydrator.hydrateRun(meta.runId, true)),
+      events.subscribe(paths.root, (event) => onOpenCodeEvent(meta.runId, event), () => void hydrator.hydrateRun(meta.runId, true)),
     ]);
+    void hydrator.hydrateRun(meta.runId);
   };
 
   const closeRun = (runId: string): void => {
@@ -434,17 +439,6 @@ const startTailOpenCode = (
       sub.close();
     }
     subscriptions.delete(runId);
-    const prefix = `${runId}:`;
-    for (const key of toolSeen) {
-      if (key.startsWith(prefix)) {
-        toolSeen.delete(key);
-      }
-    }
-    for (const key of partTypes.keys()) {
-      if (key.startsWith(prefix)) {
-        partTypes.delete(key);
-      }
-    }
   };
 
   const syncSubscriptions = (): void => {
@@ -569,11 +563,55 @@ export const createSupervisor = (
 
   const bus = createEventBus();
   const tailBus = createTailEventBus();
+  const tailProjection = createTailPaneProjection(
+    (runId, sessionId) => resolveSpeaker(store, runId, sessionId),
+    (event) => tailBus.publish(event),
+  );
+  const tailHydrator = createTailHydrator(config, store, tailProjection, (event) => tailBus.publish(event));
+  const driverOutput: DriverOutput = {
+    verification: (
+      runId: string,
+      phase: VerificationPhase,
+      event: VerificationProcessEvent,
+    ): void => {
+      const wire: Extract<TailEvent, { kind: "tail.driver.command" | "tail.driver.delta" }> = event.kind === "output"
+        ? {
+            kind: "tail.driver.delta",
+            runId,
+            phase,
+            commandId: event.commandId,
+            stream: event.stream,
+            text: event.chunk,
+          }
+        : event.kind === "started"
+          ? {
+              kind: "tail.driver.command",
+              runId,
+              phase,
+              commandId: event.commandId,
+              command: event.command,
+              status: "running",
+            }
+          : {
+            kind: "tail.driver.command",
+            runId,
+            phase,
+            commandId: event.commandId,
+            command: event.command,
+            status: event.exitCode === 0 ? "completed" : "error",
+            exitCode: event.exitCode,
+            timedOut: event.timedOut,
+          };
+      tailProjection.projectDriver(wire);
+    },
+  };
 
   // --- Start runDriver ---
 
   // runDriver is a background promise; the supervisor holds its handle.
-  const driverPromise = options.startDriver === false ? Promise.resolve() : runDriver(configSource, paths, store, seams);
+  const driverPromise = options.startDriver === false
+    ? Promise.resolve()
+    : runDriver(configSource, paths, store, seams, driverOutput);
 
   // --- Lifecycle method implementations ---
 
@@ -685,8 +723,16 @@ export const createSupervisor = (
     if (!meta) {
       return undefined;
     }
+    void tailHydrator.hydrateRun(runId);
 
     const journalRows = store.readRecentJournalWithSeq(runId, TAIL_SNAPSHOT_JOURNAL_LIMIT);
+    const latestReview = store.readJournal(runId).findLast((event) => event.event === "super_review");
+    if (latestReview?.event === "super_review") {
+      tailProjection.mergeVerdict(runId, [
+        `verdict: ${latestReview.verdict} (pass ${latestReview.pass})`,
+        ...latestReview.findings.map((finding) => `  ${finding}`),
+      ]);
+    }
     const journalStats = store.readJournalStats(runId);
     const counts = outcomeCounts(runId);
 
@@ -710,6 +756,7 @@ export const createSupervisor = (
       contextTokens: journalStats.contextTokens,
       turn: journalStats.turn,
       rotations: journalStats.rotations,
+      panes: tailProjection.panes(runId),
       journal: journalRows.map(({ seq, event }) => ({
         seq,
         at: event.at,
@@ -789,6 +836,8 @@ export const createSupervisor = (
     if (event.event !== "super_review") {
       return [journalEvent, statsEvent];
     }
+    const verdictLines = [`verdict: ${event.verdict} (pass ${event.pass})`, ...event.findings.map((finding) => `  ${finding}`)];
+    tailProjection.projectVerdict(runId, verdictLines);
     return [
       journalEvent,
       statsEvent,
@@ -800,7 +849,7 @@ export const createSupervisor = (
         verdict: event.verdict,
         pass: event.pass,
         findings: event.findings,
-        lines: [`verdict: ${event.verdict} (pass ${event.pass})`, ...event.findings.map((finding) => `  ${finding}`)],
+        lines: verdictLines,
       },
     ];
   };
@@ -811,7 +860,7 @@ export const createSupervisor = (
       return [];
     }
 
-    const events = rows.flatMap(({ seq, event }) => {
+    const events = rows.flatMap(({ seq, event }): TailEvent[] => {
       const journalEvent: TailEvent = {
         kind: "tail.journal",
         runId,
@@ -866,7 +915,15 @@ export const createSupervisor = (
   // --- Journal tail ---
 
   const journalTail = startJournalTail(store, bus, tailBus, config, pollIntervalMs, projectTailEvents);
-  const tailOpenCode = startTailOpenCode(config, paths, store, tailBus, pollIntervalMs);
+  const tailOpenCode = startTailOpenCode(
+    config,
+    paths,
+    store,
+    tailBus,
+    pollIntervalMs,
+    tailProjection,
+    tailHydrator,
+  );
 
   return {
     get config(): Config {
@@ -1044,6 +1101,13 @@ export const createSupervisor = (
         },
         readTailEventsSince: (seq: number, runId: string): TailEvent[] =>
           replayTailEventsSince(seq, runId),
+        prepareTailSnapshot: async (runId: string | null): Promise<string | null> => {
+          const target = runId ?? firstActiveRun()?.runId ?? store.listActiveConvergences()[0]?.runId;
+          if (target) {
+            await tailHydrator.hydrateRun(target);
+          }
+          return target ?? null;
+        },
       };
     },
 
@@ -1121,6 +1185,12 @@ export const createSupervisor = (
       const meta = store.readMetaIfExists(runId);
       if (!meta) {
         throw new RunNotFoundError(runId);
+      }
+
+      const activeAbort = abortMap.get(runId);
+      if (activeAbort) {
+        activeAbort.abort();
+        return;
       }
 
       // An already-terminal run -> throw (P03 maps to 404/409).

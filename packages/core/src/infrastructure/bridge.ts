@@ -10,9 +10,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { execFile } from "child_process";
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "http";
-import { resolve } from "path";
 import { z } from "zod";
 import type { Executor, ModelConfig } from "../application/ports/executor.js";
 import type { Store } from "../application/ports/store.js";
@@ -108,58 +106,6 @@ const clearGate = (ctx: ActiveRunRef): void => {
   ctx.store.writeGateState(ctx.packet.runId, cleared);
   journal(ctx, { event: "gate_cleared", decisionAt: now });
 };
-
-// ---------------------------------------------------------------------------
-// Verification helpers
-// ---------------------------------------------------------------------------
-
-export type VerificationResult = { command: string; exitCode: number; outputTail: string };
-
-const runOneCommand = (
-  command: string,
-  cwd: string,
-  timeoutMs: number,
-): Promise<VerificationResult> =>
-  new Promise((resolve) => {
-    execFile(
-      "/bin/zsh",
-      ["-c", command],
-      { cwd, encoding: "utf-8", timeout: timeoutMs / 1000 },
-      (err, stdout, stderr) => {
-        if (err) {
-          const status = (err as unknown as { status?: number }).status;
-          const timedOut = err.killed;
-          resolve({
-            command,
-            exitCode: typeof status === "number" ? status : timedOut ? 124 : 1,
-            outputTail:
-              `${stdout ?? ""}${stderr ?? ""}`.slice(-400) ||
-              (timedOut ? "timed out" : err.message),
-          });
-          return;
-        }
-        resolve({ command, exitCode: 0, outputTail: (stdout ?? "").slice(-400) });
-      },
-    );
-  });
-
-export const runVerification = async (
-  frontmatter: Packet["frontmatter"],
-  worktree: string,
-  timeoutMs: number,
-): Promise<VerificationResult[]> => {
-  const wt = resolve(worktree);
-  return Promise.all(frontmatter.verification.map((v) => runOneCommand(v.command, wt, timeoutMs)));
-};
-
-export const toVerificationClaims = (
-  results: VerificationResult[],
-): SubmitReport["verificationClaims"] =>
-  results.map((r) => ({
-    command: r.command,
-    result: r.exitCode === 0 ? ("passed" as const) : ("failed" as const),
-    ...(r.outputTail ? { notes: r.outputTail.slice(-200) } : {}),
-  }));
 
 export const outcomeProblems = (report: SubmitReport, ledger: OutcomeLedger): string[] => {
   const problems: string[] = [];
@@ -562,18 +508,12 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
   }
   const ledger = ctx.store.readLedger(ctx.packet.runId);
 
-  // V1: the driver runs verification ITSELF, up front for ready_for_review.
-  const verificationResults =
-    input.status === "ready_for_review"
-      ? await runVerification(
-          ctx.packet.frontmatter,
-          ctx.worktree,
-          ctx.config.thresholds.verificationTimeoutMs,
-        )
-      : [];
-  for (const r of verificationResults) {
-    journal(ctx, { event: "verification_run", command: r.command, exitCode: r.exitCode });
-  }
+  // V1: the driver runs verification ITSELF for ready_for_review — but NOT
+  // here. Verification commands can take 10+ minutes (Testcontainers, full
+  // suites), and opencode's MCP client cancels a tool-call held open that
+  // long (~15min). Same async pattern as ask_planner (CONTRACT §9 M3):
+  // record the submission and return at once; the turn loop runs verification
+  // off the MCP path in run_final_review.
 
   // Assembled from durable state + the executor's belief-prose.
   const report = SubmitReport.parse({
@@ -593,7 +533,7 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
     behaviourChanged: input.behaviourChanged ?? [],
     sourceOfTruthFollowed: input.sourceOfTruthFollowed ?? [],
     outcomeClaims: ledger.outcomes.map((o) => ({ id: o.id, status: o.status })),
-    verificationClaims: toVerificationClaims(verificationResults),
+    verificationClaims: [],
     escalations: input.escalations ?? [],
     remainingUncertainty: input.remainingUncertainty ?? [],
     ...(input.regressionGuard !== undefined ? { regressionGuard: input.regressionGuard } : {}),
@@ -608,15 +548,6 @@ export const handleSubmitReport = async (ref: RunRef, input: SubmitReportInput) 
     );
   }
   problems.push(...outcomeProblems(report, ledger));
-
-  // Verification failures from the driver's own run.
-  for (const r of verificationResults) {
-    if (r.exitCode !== 0) {
-      problems.push(
-        `verification failed (exit ${r.exitCode}): ${r.command}\n  output: ${r.outputTail.slice(-200)}`,
-      );
-    }
-  }
 
   // V8A: anti-fabrication — fires on ANY ready_for_review, regardless of pass.
   // Each named test's file must be in the diff.

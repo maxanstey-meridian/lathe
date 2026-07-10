@@ -2651,6 +2651,64 @@
           "super"
         ]
       },
+      "TailPaneLineDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "style": {
+            "type": "string",
+            "enum": [
+              "think",
+              "text",
+              "tool"
+            ]
+          },
+          "attachment": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "style"
+        ]
+      },
+      "TailPanesDto": {
+        "type": "object",
+        "properties": {
+          "baby": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TailPaneLineDto"
+            }
+          },
+          "daddy": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TailPaneLineDto"
+            }
+          },
+          "super": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TailPaneLineDto"
+            }
+          },
+          "driver": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TailPaneLineDto"
+            }
+          }
+        },
+        "required": [
+          "baby",
+          "daddy",
+          "super",
+          "driver"
+        ]
+      },
       "TailSnapshotDto": {
         "type": "object",
         "properties": {
@@ -2705,6 +2763,9 @@
           "rotations": {
             "type": "number"
           },
+          "panes": {
+            "$ref": "#/components/schemas/TailPanesDto"
+          },
           "journal": {
             "type": "array",
             "items": {
@@ -2730,6 +2791,7 @@
           "contextTokens",
           "turn",
           "rotations",
+          "panes",
           "journal",
           "lastSeq"
         ]

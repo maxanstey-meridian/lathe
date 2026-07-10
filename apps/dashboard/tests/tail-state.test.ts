@@ -25,6 +25,12 @@ const snapshot = (runId = "20260701-180000-dashboard-spa"): TailSnapshotDto => (
   contextTokens: 12_000,
   turn: 2,
   rotations: 0,
+  panes: {
+    baby: [{ text: "restored baby", style: "text" }],
+    daddy: [{ text: "restored daddy", style: "think" }],
+    super: [],
+    driver: [],
+  },
   journal: [
     { seq: 1, at: "2026-07-01T18:00:01.000Z", line: "driver booted", event: "log", driver: true },
     { seq: 2, at: "2026-07-01T18:00:02.000Z", line: "baby text", event: "log", driver: false },
@@ -32,12 +38,13 @@ const snapshot = (runId = "20260701-180000-dashboard-spa"): TailSnapshotDto => (
   lastSeq: 2,
 });
 
-test("tailStateFromSnapshot initializes driver events and stats", () => {
+test("tailStateFromSnapshot initializes panes, driver events, and stats", () => {
   const state = tailStateFromSnapshot(snapshot());
 
   assert.deepEqual(state.driverEvents, ["driver booted"]);
   assert.equal(state.stats?.contextTokens, 12_000);
   assert.equal(state.stats?.outcomesDone, 1);
+  assert.deepEqual(visiblePaneLines(state.panes.baby), [{ text: "restored baby", style: "text" }]);
 });
 
 test("applyTailEvent appends pane text, tools, and stats for the active run", () => {
@@ -74,6 +81,7 @@ test("applyTailEvent appends pane text, tools, and stats for the active run", ()
   }, 300);
 
   assert.deepEqual(visiblePaneLines(withStats.panes.baby), [
+    { text: "restored baby", style: "text" },
     { text: "hello", style: "text" },
     { text: "world", style: "text" },
     { text: ". Bash pnpm test", style: "tool" },
@@ -102,5 +110,79 @@ test("applyTailEvent ignores events from another run and resets on run changes",
 
   assert.equal(changed.snapshot?.runId, nextSnapshot.runId);
   assert.deepEqual(changed.driverEvents, ["driver booted"]);
-  assert.deepEqual(visiblePaneLines(changed.panes.baby), []);
+  assert.deepEqual(visiblePaneLines(changed.panes.baby), [{ text: "restored baby", style: "text" }]);
+});
+
+test("pane replacement is authoritative and terminal stats preserve content", () => {
+  const state = tailStateFromSnapshot(snapshot());
+  const replaced = applyTailEvent(state, {
+    kind: "tail.panes.replaced",
+    runId: snapshot().runId,
+    panes: {
+      baby: [{ text: "hydrated", style: "text" }],
+      daddy: [],
+      super: [],
+      driver: [],
+    },
+  }, 100);
+  const terminal = applyTailEvent(replaced, {
+    kind: "tail.stats",
+    runId: snapshot().runId,
+    at: "2026-07-01T18:00:03.000Z",
+    contextTokens: 20_000,
+    turn: 3,
+    rotations: 1,
+    outcomesDone: 3,
+    outcomesTotal: 3,
+    gateReason: null,
+    status: "ready_for_review",
+    promoted: false,
+  }, 200);
+
+  assert.deepEqual(visiblePaneLines(terminal.panes.baby), [{ text: "hydrated", style: "text" }]);
+});
+
+test("driver verification renders command, stdout, stderr, and exit separately", () => {
+  let state = tailStateFromSnapshot(snapshot());
+  state = applyTailEvent(state, {
+    kind: "tail.driver.command",
+    runId: snapshot().runId,
+    phase: "report",
+    commandId: "command-1",
+    command: "task check",
+    status: "running",
+  }, 100);
+  state = applyTailEvent(state, {
+    kind: "tail.driver.delta",
+    runId: snapshot().runId,
+    phase: "report",
+    commandId: "command-1",
+    stream: "stdout",
+    text: "green\n",
+  }, 200);
+  state = applyTailEvent(state, {
+    kind: "tail.driver.delta",
+    runId: snapshot().runId,
+    phase: "report",
+    commandId: "command-1",
+    stream: "stderr",
+    text: "warning\n",
+  }, 300);
+  state = applyTailEvent(state, {
+    kind: "tail.driver.command",
+    runId: snapshot().runId,
+    phase: "report",
+    commandId: "command-1",
+    command: "task check",
+    status: "completed",
+    exitCode: 0,
+    timedOut: false,
+  }, 400);
+
+  assert.deepEqual(visiblePaneLines(state.panes.driver), [
+    { text: "[report] $ task check", style: "tool" },
+    { text: "green", style: "text" },
+    { text: "warning", style: "think" },
+    { text: "exit 0", style: "tool" },
+  ]);
 });

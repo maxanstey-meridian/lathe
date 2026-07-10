@@ -6,7 +6,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { classifyLine } from "../logic/tail-json";
 import { visiblePaneLines, type TailPaneLine, type TailPaneState } from "../logic/tail-state";
 
-type Accent = "green" | "magenta" | "blue";
+type Accent = "green" | "magenta" | "blue" | "amber";
 
 type RenderedLine = {
   readonly key: string;
@@ -28,6 +28,7 @@ const accentClasses: Record<Accent, { readonly border: string; readonly text: st
   green: { border: "border-emerald-500", text: "text-emerald-400", dot: "bg-emerald-500" },
   magenta: { border: "border-fuchsia-500", text: "text-fuchsia-400", dot: "bg-fuchsia-500" },
   blue: { border: "border-sky-500", text: "text-sky-400", dot: "bg-sky-500" },
+  amber: { border: "border-amber-500", text: "text-amber-400", dot: "bg-amber-500" },
 };
 
 const isActive = computed(() => props.now - props.pane.lastAt < 10_000);

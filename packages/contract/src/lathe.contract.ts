@@ -452,6 +452,19 @@ export interface TailJournalLineDto {
   driver: boolean;
 }
 
+export interface TailPaneLineDto {
+  text: string;
+  style: "think" | "text" | "tool";
+  attachment?: string;
+}
+
+export interface TailPanesDto {
+  baby: TailPaneLineDto[];
+  daddy: TailPaneLineDto[];
+  super: TailPaneLineDto[];
+  driver: TailPaneLineDto[];
+}
+
 export interface TailSnapshotDto {
   runId: string;
   summary: string | null;
@@ -467,12 +480,14 @@ export interface TailSnapshotDto {
   contextTokens: number;
   turn: number;
   rotations: number;
+  panes: TailPanesDto;
   journal: TailJournalLineDto[];
   lastSeq: number;
 }
 
 export type TailSpeaker = "baby" | "daddy" | "super";
 export type TailLineStyle = "think" | "text";
+export type VerificationPhaseDto = "report" | "convergence" | "autofix";
 
 export type TailEvent =
   | {
@@ -509,10 +524,37 @@ export type TailEvent =
       kind: "tail.pane.tool";
       runId: string;
       speaker: TailSpeaker;
-      status: "completed" | "error";
+      status: "running" | "completed" | "error";
       tool: string;
       detail: string;
       input?: string;
+    }
+  | { kind: "tail.panes.replaced"; runId: string; panes: TailPanesDto }
+  | {
+      kind: "tail.driver.command";
+      runId: string;
+      phase: VerificationPhaseDto;
+      commandId: string;
+      command: string;
+      status: "running";
+    }
+  | {
+      kind: "tail.driver.command";
+      runId: string;
+      phase: VerificationPhaseDto;
+      commandId: string;
+      command: string;
+      status: "completed" | "error";
+      exitCode: number;
+      timedOut: boolean;
+    }
+  | {
+      kind: "tail.driver.delta";
+      runId: string;
+      phase: VerificationPhaseDto;
+      commandId: string;
+      stream: "stdout" | "stderr";
+      text: string;
     }
   | {
       kind: "tail.super.verdict";

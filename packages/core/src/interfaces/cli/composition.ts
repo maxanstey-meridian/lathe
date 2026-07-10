@@ -13,6 +13,7 @@ import type { BridgePort } from "../../application/ports/bridge.js";
 import type { ModelConfig } from "../../application/ports/executor.js";
 import type { Repo } from "../../application/ports/repo.js";
 import type { Store } from "../../application/ports/store.js";
+import { noopDriverOutput, type DriverOutput } from "../../application/ports/driver-output.js";
 import { convergeRun } from "../../application/use-cases/converge-run.js";
 import { makeExecuteRun, type BridgeBinding } from "../../application/use-cases/execute-run.js";
 import {
@@ -128,6 +129,7 @@ export const runDriver = async (
   paths: Paths,
   store: Store,
   seams?: RunLoopSeams,
+  driverOutput: DriverOutput = noopDriverOutput,
 ): Promise<void> => {
   // Snapshot config for model adapters — these are created once and don't change
   // during the driver lifetime (model changes require restart).
@@ -150,7 +152,7 @@ export const runDriver = async (
   const verify = createVerify();
   const caffeinate = createCaffeinate();
 
-  const ports: RunPorts = { configSource, store, repo, executor, planner, clock };
+  const ports: RunPorts = { configSource, store, repo, executor, planner, clock, verify, driverOutput };
 
   // The bridge port (the lock) holds the serve substrate. bind() acquires the
   // lock and brings opencode up; close() tears both down. The driver loop calls
@@ -209,7 +211,7 @@ export const runDriver = async (
   };
 
   const executeRun = makeExecuteRun(ports, binding);
-  const convergeStep = convergeRun({ store, repo, reviewer, verify, clock, config, paths });
+  const convergeStep = convergeRun({ store, repo, reviewer, verify, driverOutput, clock, config, paths });
 
   await runLoop(
     config,

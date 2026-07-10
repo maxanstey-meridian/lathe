@@ -91,8 +91,11 @@ export const Config = z.object({
       // when the reviewer's provider differs from Baby's (see opencode.ts).
       // baseUrl pins the Codex backend; headerTimeoutMs is opencode's
       // ProviderHeaderTimeout window. Use false to disable that timer for
-      // diagnosis.
-      baseUrl: z.string().default("https://chatgpt.com/backend-api/codex"),
+      // diagnosis. Set baseUrl to null when the provider is a built-in that
+      // resolves through global auth (e.g. zai-coding-plan, ollama-cloud) —
+      // the generated config won't add a provider entry, letting opencode
+      // resolve the endpoint from its built-in provider definitions.
+      baseUrl: z.string().nullable().default("https://chatgpt.com/backend-api/codex"),
       headerTimeoutMs: z.union([z.number().int(), z.literal(false)]).default(3_600_000),
       // A dummy key for a LOCAL proxy provider (e.g. claude-max-proxy, which
       // bridges a Claude Max sub to a standard Anthropic API and ignores the
@@ -217,6 +220,18 @@ export const Config = z.object({
           .object({
             copies: z.array(z.string()).default([]),
             writes: z.record(z.string(), z.string()).default({}),
+          })
+          .default({}),
+        setup: z
+          .object({
+            commands: z
+              .array(
+                z.object({
+                  command: z.string(),
+                  dir: z.string().default("."),
+                }),
+              )
+              .default([]),
           })
           .default({}),
       }),

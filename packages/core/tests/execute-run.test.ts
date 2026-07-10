@@ -1,5 +1,5 @@
-import { equal, ok, deepEqual, strictEqual } from "node:assert";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { equal, ok, deepEqual, rejects, strictEqual } from "node:assert";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp as mkdtempP, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -132,9 +132,15 @@ const scriptedExecutor = (
   };
 };
 
-const makePorts = (store: Store, repo: Repo, executor: Executor, planner: Planner): RunPorts => ({
+const makePorts = (
+  store: Store,
+  repo: Repo,
+  executor: Executor,
+  planner: Planner,
+  config = Config.parse({}),
+): RunPorts => ({
   driverOutput: { verification: () => {} },
-  configSource: createConfigSource(Config.parse({})),
+  configSource: createConfigSource(config),
   store,
   repo,
   executor,
@@ -338,6 +344,285 @@ test("makeExecuteRun: fresh run → init state → terminal status in meta", () 
     equal(store.listActiveRuns().length, 0);
     await cleanTemp(tmp);
   })();
+});
+
+test("makeExecuteRun: fresh run executes configured repo setup commands after sandbox creation", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "exec-setup-"));
+    const worktree = join(tmp, "wt");
+    const repo: Repo = {
+      ...fakeRepo(),
+      createSandbox: () => {
+        mkdirSync(worktree, { recursive: true });
+      },
+    };
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, fixedClock());
+    store.admitQueue(RUN_ID, PACKET_RAW);
+
+    const channel = emptyChannel();
+    const executor = scriptedExecutor(channel, [
+      {
+        intents: [
+          {
+            kind: "report-accepted",
+            status: "blocked",
+            blockedReason: "human_decision",
+            blockedQuestion: "decide",
+            summary: "blocked out",
+          },
+        ],
+      },
+    ]);
+    const ports = makePorts(
+      store,
+      repo,
+      executor,
+      fakePlanner(),
+      Config.parse({
+        repos: {
+          "/tmp/test-repo": {
+            setup: {
+              commands: [{ command: "printf setup-ok > setup-marker.txt", dir: "." }],
+            },
+          },
+        },
+      }),
+    );
+    const bridge: BridgeBinding<unknown> = {
+      beginRun: () => channel,
+      endRun: (_ref, _runId) => {},
+    };
+
+    const executeRun = makeExecuteRun(ports, bridge);
+    await executeRun(
+      RUN_ID,
+      {
+        repo: "/tmp/test-repo",
+        worktree,
+        base: "main",
+        branch: `meridian/${RUN_ID}`,
+      },
+      {},
+      ports.clock,
+    );
+
+    equal(readFileSync(join(worktree, "setup-marker.txt"), "utf-8"), "setup-ok");
+    const journal = store.readJournal(RUN_ID);
+    ok(
+      journal.some(
+        (e) => e.event === "driver_note" && e.note === "setup: printf setup-ok > setup-marker.txt",
+      ),
+    );
+    await cleanTemp(tmp);
+  })();
+});
+
+test("makeExecuteRun: setup success is not reclassified while a descendant retains its pipes", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "exec-setup-pipes-"));
+  try {
+    const worktree = join(tmp, "wt");
+    const repo: Repo = {
+      ...fakeRepo(),
+      createSandbox: () => mkdirSync(worktree, { recursive: true }),
+    };
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, fixedClock());
+    store.admitQueue(RUN_ID, PACKET_RAW);
+    const channel = emptyChannel();
+    const ports = makePorts(
+      store,
+      repo,
+      scriptedExecutor(channel, [{
+        intents: [{
+          kind: "report-accepted",
+          status: "blocked",
+          blockedReason: "human_decision",
+          blockedQuestion: "decide",
+          summary: "blocked out",
+        }],
+      }]),
+      fakePlanner(),
+      Config.parse({
+        thresholds: { verificationTimeoutMs: 50 },
+        repos: {
+          "/tmp/test-repo": {
+            setup: { commands: [{ command: "sleep 1 & disown; exit 0", dir: "." }] },
+          },
+        },
+      }),
+    );
+    const executeRun = makeExecuteRun(ports, {
+      beginRun: () => channel,
+      endRun: () => {},
+    });
+
+    const startedAt = Date.now();
+    await executeRun(
+      RUN_ID,
+      {
+        repo: "/tmp/test-repo",
+        worktree,
+        base: "main",
+        branch: `meridian/${RUN_ID}`,
+      },
+      {},
+      ports.clock,
+    );
+    ok(Date.now() - startedAt < 900, "setup timeout should clean up inherited pipes promptly");
+  } finally {
+    await cleanTemp(tmp);
+  }
+});
+
+test("makeExecuteRun: rejects a setup directory symlink escaping the worktree before starting sessions", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "exec-setup-symlink-"));
+  try {
+    const worktree = join(tmp, "wt");
+    const outside = join(tmp, "outside");
+    const repo: Repo = {
+      ...fakeRepo(),
+      createSandbox: () => {
+        mkdirSync(worktree, { recursive: true });
+        mkdirSync(outside, { recursive: true });
+        symlinkSync(outside, join(worktree, "escaped"));
+      },
+    };
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, fixedClock());
+    store.admitQueue(RUN_ID, PACKET_RAW);
+    let plannerSessions = 0;
+    let executorSessions = 0;
+    const planner: Planner = {
+      ...fakePlanner(),
+      handshake: async () => {
+        plannerSessions++;
+        return "daddy-session";
+      },
+    };
+    const executor: Executor = {
+      ...scriptedExecutor(emptyChannel(), []),
+      createSession: async () => {
+        executorSessions++;
+        return "baby-session";
+      },
+    };
+    const ports = makePorts(
+      store,
+      repo,
+      executor,
+      planner,
+      Config.parse({
+        repos: {
+          "/tmp/test-repo": {
+            setup: { commands: [{ command: "printf escaped > marker.txt", dir: "escaped" }] },
+          },
+        },
+      }),
+    );
+    const executeRun = makeExecuteRun(ports, {
+      beginRun: () => emptyChannel(),
+      endRun: () => {},
+    });
+
+    await rejects(
+      executeRun(
+        RUN_ID,
+        {
+          repo: "/tmp/test-repo",
+          worktree,
+          base: "main",
+          branch: `meridian/${RUN_ID}`,
+        },
+        {},
+        ports.clock,
+      ),
+      /setup command cwd escapes sandbox: escaped/,
+    );
+
+    equal(plannerSessions, 0);
+    equal(executorSessions, 0);
+  } finally {
+    await cleanTemp(tmp);
+  }
+});
+
+test("makeExecuteRun: aborts a running setup command before starting sessions", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "exec-setup-abort-"));
+  try {
+    const worktree = join(tmp, "wt");
+    const pidFile = join(worktree, "setup.pid");
+    const repo: Repo = {
+      ...fakeRepo(),
+      createSandbox: () => mkdirSync(worktree, { recursive: true }),
+    };
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, fixedClock());
+    store.admitQueue(RUN_ID, PACKET_RAW);
+    let plannerSessions = 0;
+    let executorSessions = 0;
+    const planner: Planner = {
+      ...fakePlanner(),
+      handshake: async () => {
+        plannerSessions++;
+        return "daddy-session";
+      },
+    };
+    const executor: Executor = {
+      ...scriptedExecutor(emptyChannel(), []),
+      createSession: async () => {
+        executorSessions++;
+        return "baby-session";
+      },
+    };
+    const ports = makePorts(
+      store,
+      repo,
+      executor,
+      planner,
+      Config.parse({
+        repos: {
+          "/tmp/test-repo": {
+            setup: { commands: [{ command: "printf %s $$ > setup.pid; sleep 30", dir: "." }] },
+          },
+        },
+      }),
+    );
+    const executeRun = makeExecuteRun(ports, {
+      beginRun: () => emptyChannel(),
+      endRun: () => {},
+    });
+    const controller = new AbortController();
+    const execution = executeRun(
+      RUN_ID,
+      {
+        repo: "/tmp/test-repo",
+        worktree,
+        base: "main",
+        branch: `meridian/${RUN_ID}`,
+      },
+      {},
+      ports.clock,
+      controller.signal,
+    );
+
+    for (let attempt = 0; attempt < 100; attempt++) {
+      try {
+        readFileSync(pidFile, "utf-8");
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+    const setupPid = Number(readFileSync(pidFile, "utf-8"));
+    controller.abort();
+
+    await rejects(execution, (error: Error) => error.name === "AbortError");
+    equal(plannerSessions, 0);
+    equal(executorSessions, 0);
+    await rejects(
+      Promise.resolve().then(() => process.kill(setupPid, 0)),
+      (error: NodeJS.ErrnoException) => error.code === "ESRCH",
+    );
+  } finally {
+    await cleanTemp(tmp);
+  }
 });
 
 test("makeExecuteRun: real fresh queue path — reads the live run packet", () => {

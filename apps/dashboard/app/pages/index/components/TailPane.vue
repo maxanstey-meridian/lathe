@@ -2,9 +2,9 @@
 import Prism from "prismjs";
 import "prismjs/components/prism-json";
 import { computed, nextTick, ref, watch } from "vue";
+import { visiblePaneLines, type TailPaneLine, type TailPaneState } from "@lathe/tail-state";
 
 import { classifyLine } from "../logic/tail-json";
-import { visiblePaneLines, type TailPaneLine, type TailPaneState } from "../logic/tail-state";
 
 type Accent = "green" | "magenta" | "blue" | "amber";
 
@@ -16,12 +16,171 @@ type RenderedLine = {
   readonly attachment?: string;
 };
 
+const MAX_JSON_BLOCK_LINES = 80;
+const FOLLOW_TAIL_THRESHOLD_PX = 24;
+type JsonCandidateStatus = "complete" | "incomplete" | "not-json";
+
+type JsonContainer = {
+  readonly close: "]" | "}";
+  state: "key" | "key-or-end" | "colon" | "value" | "value-or-end" | "comma-or-end";
+};
+
+const jsonCandidateStatus = (text: string): JsonCandidateStatus => {
+  const objectStart = text.indexOf("{");
+  const arrayStart = text.indexOf("[");
+  const starts = [objectStart, arrayStart].filter((start) => start >= 0);
+  if (starts.length === 0) {
+    return "not-json";
+  }
+
+  const start = Math.min(...starts);
+  const stack: JsonContainer[] = [{
+    close: text[start] === "{" ? "}" : "]",
+    state: text[start] === "{" ? "key-or-end" : "value-or-end",
+  }];
+  let index = start + 1;
+
+  const skipWhitespace = (): void => {
+    while (/\s/.test(text[index] ?? "")) {
+      index += 1;
+    }
+  };
+
+  const consumeString = (): JsonCandidateStatus | null => {
+    index += 1;
+    while (index < text.length) {
+      const char = text[index];
+      if (char === '"') {
+        index += 1;
+        return null;
+      }
+      if (char === "\\") {
+        index += 1;
+        if (index >= text.length) {
+          return "incomplete";
+        }
+        if (!'"\\/bfnrtu'.includes(text[index] ?? "")) {
+          return "not-json";
+        }
+        if (text[index] === "u") {
+          const escape = text.slice(index + 1, index + 5);
+          if (escape.length < 4) {
+            return "incomplete";
+          }
+          if (!/^[0-9a-fA-F]{4}$/.test(escape)) {
+            return "not-json";
+          }
+          index += 4;
+        }
+      } else if (char !== undefined && char.charCodeAt(0) < 0x20) {
+        return "not-json";
+      }
+      index += 1;
+    }
+    return "incomplete";
+  };
+
+  const consumeValue = (): JsonCandidateStatus | null => {
+    const char = text[index];
+    if (char === '"') {
+      return consumeString();
+    }
+    if (char === "{" || char === "[") {
+      stack.push({
+        close: char === "{" ? "}" : "]",
+        state: char === "{" ? "key-or-end" : "value-or-end",
+      });
+      index += 1;
+      return null;
+    }
+
+    const tokenStart = index;
+    while (index < text.length && !/[\s,}\]]/.test(text[index] ?? "")) {
+      index += 1;
+    }
+    const token = text.slice(tokenStart, index);
+    if (index === text.length) {
+      return /^(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)$/.test(token)
+        ? null
+        : "incomplete";
+    }
+    return /^(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)$/.test(token)
+      ? null
+      : "not-json";
+  };
+
+  while (stack.length > 0) {
+    skipWhitespace();
+    if (index >= text.length) {
+      return "incomplete";
+    }
+
+    const container = stack.at(-1);
+    if (container === undefined) {
+      return "not-json";
+    }
+    const char = text[index];
+
+    if (container.state === "key" || container.state === "key-or-end") {
+      if (container.state === "key-or-end" && char === container.close) {
+        stack.pop();
+        index += 1;
+      } else if (char === '"') {
+        const status = consumeString();
+        if (status !== null) {
+          return status;
+        }
+        container.state = "colon";
+      } else {
+        return "not-json";
+      }
+      continue;
+    }
+
+    if (container.state === "colon") {
+      if (char !== ":") {
+        return "not-json";
+      }
+      container.state = "value";
+      index += 1;
+      continue;
+    }
+
+    if (container.state === "value" || container.state === "value-or-end") {
+      if (container.state === "value-or-end" && char === container.close) {
+        stack.pop();
+        index += 1;
+        continue;
+      }
+      container.state = "comma-or-end";
+      const status = consumeValue();
+      if (status !== null) {
+        return status;
+      }
+      continue;
+    }
+
+    if (char === ",") {
+      container.state = container.close === "}" ? "key" : "value";
+      index += 1;
+    } else if (char === container.close) {
+      stack.pop();
+      index += 1;
+    } else {
+      return "not-json";
+    }
+  }
+
+  return "complete";
+};
+
 const props = defineProps<{
   readonly title: string;
   readonly model: string;
   readonly pane: TailPaneState;
   readonly accent: Accent;
   readonly now: number;
+  readonly activity?: readonly string[];
 }>();
 
 const accentClasses: Record<Accent, { readonly border: string; readonly text: string; readonly dot: string }> = {
@@ -31,19 +190,87 @@ const accentClasses: Record<Accent, { readonly border: string; readonly text: st
   amber: { border: "border-amber-500", text: "text-amber-400", dot: "bg-amber-500" },
 };
 
-const isActive = computed(() => props.now - props.pane.lastAt < 10_000);
+const hasActivity = computed(() => (props.activity?.length ?? 0) > 0);
+const isActive = computed(() => hasActivity.value || props.now - props.pane.lastAt < 10_000);
 const lines = computed(() => visiblePaneLines(props.pane).slice(-80));
-const renderedLines = computed<RenderedLine[]>(() =>
-  lines.value.map((line, index) => ({
-    key: `${index}-${line.text}`,
-    text: line.text,
-    style: line.style,
-    classified: classifyLine(line.text),
-    ...(line.attachment !== undefined ? { attachment: line.attachment } : {}),
-  })),
-);
+const hasJsonStart = (text: string): boolean => text.includes("{") || text.includes("[");
+const renderedLines = computed<RenderedLine[]>(() => {
+  const result: RenderedLine[] = [];
+  let index = 0;
+
+  while (index < lines.value.length) {
+    const line = lines.value[index];
+    if (line === undefined) {
+      break;
+    }
+
+    if (line.attachment !== undefined || !hasJsonStart(line.text)) {
+      result.push({
+        key: `${index}-${line.text}`,
+        text: line.text,
+        style: line.style,
+        classified: classifyLine(line.text),
+        ...(line.attachment !== undefined ? { attachment: line.attachment } : {}),
+      });
+      index += 1;
+      continue;
+    }
+
+    const block = [line.text];
+    let blockEnd = index;
+    let classified = classifyLine(line.text);
+    let candidateStatus = jsonCandidateStatus(line.text);
+    while (candidateStatus === "incomplete" && block.length < MAX_JSON_BLOCK_LINES) {
+      const next = lines.value[blockEnd + 1];
+      if (next === undefined || next.attachment !== undefined || next.style !== line.style) {
+        break;
+      }
+      block.push(next.text);
+      blockEnd += 1;
+      const text = block.join("\n");
+      classified = classifyLine(text);
+      candidateStatus = jsonCandidateStatus(text);
+    }
+
+    if (classified.kind === "json") {
+      const text = block.join("\n");
+      result.push({
+        key: `${index}-${blockEnd}-${text}`,
+        text,
+        style: line.style,
+        classified,
+      });
+      index = blockEnd + 1;
+      continue;
+    }
+
+    // The block may be a still-streaming outer JSON value. Preserve every
+    // accumulated line as text and skip them together; otherwise nested arrays
+    // are revisited independently and buttonified before the outer value closes.
+    block.forEach((text, blockIndex) => {
+      result.push({
+        key: `${index + blockIndex}-${text}`,
+        text,
+        style: line.style,
+        classified: { kind: "text" },
+      });
+    });
+    index = blockEnd + 1;
+  }
+
+  return result;
+});
 const classes = computed(() => accentClasses[props.accent]);
 const scrollContainer = ref<HTMLElement | null>(null);
+const followsTail = ref(true);
+
+const updateFollowsTail = (): void => {
+  const container = scrollContainer.value;
+  if (container) {
+    followsTail.value =
+      container.scrollHeight - container.scrollTop - container.clientHeight <= FOLLOW_TAIL_THRESHOLD_PX;
+  }
+};
 
 const selectedJson = ref<{ readonly title: string; readonly body: string; readonly html: string } | null>(null);
 
@@ -82,7 +309,7 @@ watch(lines, async () => {
   await nextTick();
 
   const container = scrollContainer.value;
-  if (container) {
+  if (container && followsTail.value) {
     container.scrollTop = container.scrollHeight;
   }
 }, { flush: "post" });
@@ -90,7 +317,7 @@ watch(lines, async () => {
 
 <template>
   <section
-    class="flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-950 border-t-2"
+    class="flex min-h-0 flex-col overflow-hidden bg-slate-950 border-t-2"
     :class="isActive ? classes.border : 'border-transparent'"
   >
     <header class="flex shrink-0 items-center justify-between gap-3 border-b border-slate-800 px-3 py-1.5">
@@ -98,13 +325,21 @@ watch(lines, async () => {
         <div class="flex items-center gap-2">
           <span class="h-1.5 w-1.5 rounded-full" :class="isActive ? classes.dot : 'bg-slate-700'"></span>
           <h3 class="truncate text-xs font-semibold" :class="isActive ? classes.text : 'text-slate-600'">{{ title }}</h3>
-          <span v-if="!isActive" class="text-xs text-slate-700">idle</span>
+          <span v-if="hasActivity" class="text-xs text-amber-500">running</span>
+          <span v-else-if="!isActive" class="text-xs text-slate-700">idle</span>
         </div>
-        <p class="mt-0.5 truncate font-mono text-xs text-slate-700">{{ model }}</p>
+        <p class="mt-0.5 truncate font-mono text-xs text-slate-700">
+          {{ hasActivity ? activity?.join(" | ") : model }}
+        </p>
       </div>
     </header>
 
-    <div ref="scrollContainer" class="min-h-0 flex-1 overflow-y-auto px-3 py-2 font-mono text-xs leading-5">
+    <div
+      ref="scrollContainer"
+      data-testid="tail-scroll"
+      class="min-h-0 flex-1 overflow-y-auto px-3 py-2 font-mono text-xs leading-5"
+      @scroll="updateFollowsTail"
+    >
       <div v-if="renderedLines.length" class="space-y-0.5">
         <template v-for="line in renderedLines" :key="line.key">
           <span

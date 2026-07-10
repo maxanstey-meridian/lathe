@@ -7,7 +7,7 @@ Implemented on 2026-07-10:
 - Daemon-owned identity projection for Baby, Daddy, Super-daddy, and driver panes.
 - OpenCode message-history hydration with binding checks, reconnect repair,
   history/live overlap protection, event deduplication, and removal tombstones.
-- Pane-bearing snapshots and authoritative `tail.panes.replaced` events.
+- Pane-bearing snapshots and authoritative `tail.agent.panes.replaced` events.
 - Subscribe-first SSE bootstrap with `tail.run.changed` as the first frame.
 - Dashboard and Ink snapshot hydration without terminal parent clearing.
 - Dedicated dashboard and Ink driver verification output.
@@ -177,16 +177,16 @@ export interface TailPaneLineDto {
   attachment?: string;
 }
 
-export interface TailPanesDto {
+export interface TailAgentPanesDto {
   baby: TailPaneLineDto[];
   daddy: TailPaneLineDto[];
   super: TailPaneLineDto[];
-  driver: TailPaneLineDto[];
 }
 
 export interface TailSnapshotDto {
   // existing fields
-  panes: TailPanesDto;
+  panes: TailAgentPanesDto;
+  driverCommands: TailDriverCommandDto[];
 }
 ```
 
@@ -194,16 +194,16 @@ Add an authoritative replacement event:
 
 ```ts
 {
-  kind: "tail.panes.replaced";
+  kind: "tail.agent.panes.replaced";
   runId: string;
-  panes: TailPanesDto;
+  panes: TailAgentPanesDto;
 }
 ```
 
 Both representations are required:
 
 - Snapshot panes restore a client that connects after hydration.
-- `tail.panes.replaced` repairs a client already connected while asynchronous
+- `tail.agent.panes.replaced` repairs a client already connected while asynchronous
   hydration completes.
 
 Keep panes bounded to the existing 300-line client policy. Add a reasonable
@@ -234,7 +234,8 @@ The dashboard should:
 
 - Remove terminal-status clearing from `useLatheTail`.
 - Retain the parent panes throughout convergence.
-- Replace panes only on `tail.run.changed` or `tail.panes.replaced`.
+- Replace agent panes only on `tail.run.changed` or
+  `tail.agent.panes.replaced`.
 - Use a connection generation so callbacks from a closed EventSource cannot
   install stale state after run selection changes.
 - Let the active stream, rather than local terminal-status logic, decide when
@@ -285,10 +286,11 @@ It cannot guarantee indefinite full-run history:
 - Finished historical Super-daddy panes can therefore disappear after later
   reviews or daemon restart.
 
-The in-memory projection may retain content observed before rotation for the
-daemon's lifetime, but current surviving sessions are the only reconstructible
-source after restart. Complete indefinite transcripts require a durable
-Lathe-owned pane store, which is a separate and materially larger feature.
+The in-memory projection retains active runs and a bounded LRU of completed
+runs. Evicted content is reconstructed from current surviving sessions and the
+durable journal where possible. Complete indefinite transcripts require a
+durable Lathe-owned pane store, which is a separate and materially larger
+feature.
 
 ## Hydration Regression Tests
 
@@ -332,7 +334,7 @@ Lathe-owned pane store, which is a separate and materially larger feature.
 ### Dashboard And TUI Tests
 
 - Snapshot initialization restores all panes.
-- `tail.panes.replaced` replaces panes authoritatively.
+- `tail.agent.panes.replaced` replaces agent panes authoritatively.
 - Terminal parent stats update status without clearing panes.
 - Parent-to-child replacement atomically removes parent content.
 - A closed EventSource generation cannot install stale state.
@@ -484,10 +486,11 @@ type TailDriverEvent =
 Do not widen `TailSpeaker` to `driver` and do not label driver output as Baby,
 Daddy, or Super-daddy. These commands have different ownership.
 
-Update the canonical `driver` pane for each process event, then publish an
-authoritative pane replacement. This keeps concurrent command partials keyed by
-`commandId` and makes live rendering identical to reconnect rendering without
-attributing output to an agent speaker.
+Update canonical structured driver-command state for each process event, then
+publish the keyed command or delta event. Snapshots carry the bounded command
+state for reconnect; dashboard and Ink reduce the same events through the
+shared `@lathe/tail-state` projection. Full agent-pane replacements remain
+reserved for removals, divergent updates, and hydration repair.
 
 ### Presentation
 
@@ -521,9 +524,9 @@ and is visible while the command is running.
 - Convergence autofix and verification use their respective phases.
 - Super-daddy does not begin until convergence verification settles.
 - Server mapping never attributes driver output to an agent speaker.
-- Tail SSE filters authoritative driver replacements by run ID.
-- Dashboard renders concurrent split chunks, stderr, and terminal status from
-  the canonical driver pane.
+- Tail SSE filters keyed driver events by run ID.
+- Dashboard and Ink render concurrent split chunks, stderr, and terminal status
+  from structured command state.
 
 ## Implementation Record
 
@@ -543,6 +546,15 @@ and is visible while the command is running.
 - [x] Add the core `DriverOutput` port and `spawn`-based verification adapter.
 - [x] Wire report, convergence, and autofix output through the supervisor.
 - [x] Add and render dedicated dashboard and Ink driver output.
+- [x] Replace per-chunk full-pane broadcasts with command-keyed driver events
+  and structured snapshot state.
+- [x] Share exhaustive tail reduction between dashboard and Ink.
+- [x] Await hydration for REST and SSE snapshots and make bootstrap buffering
+  revision-safe.
+- [x] Make active-tail transitions deterministic, including transition to no
+  active run.
+- [x] Bound raw projection payloads and completed-run retention.
+- [x] Make verification cancellation/timeout classification first-cause-wins.
 - [x] Remove obsolete bridge-owned buffered verification.
 - [x] Regenerate contract artifacts.
 - [x] Run `pnpm check`, `pnpm test`, `pnpm build`, `git diff --check`, and Plumb.
@@ -554,7 +566,7 @@ and is visible while the command is running.
 
 Automated coverage now verifies projection identity, history/live overlap,
 chronological history repair, monotonic tool state, removal tombstones,
-authoritative pane replacement, terminal-state retention, buffered SSE bootstrap,
+authoritative agent-pane replacement, terminal-state retention, revision-safe SSE bootstrap,
 same-sequence replay, concurrent driver rendering, split chunks,
 streaming-before-settlement, stream tagging, timeouts, cancellation, resistant
 descendant termination, command identity, result order, and observer isolation.
@@ -577,7 +589,7 @@ The implementation retained and integrated the pre-existing uncommitted work for
 - Deferred post-`submit_report` verification in the turn loop.
 - `Verify` added to `RunPorts`.
 - Correct verification timeout units.
-- Running OpenCode tool output projected as suffix deltas.
+- OpenCode tool calls retained while noisy tool result output remains suppressed.
 - `running` added to tail tool status.
 - OpenCode bash-output regression coverage.
 

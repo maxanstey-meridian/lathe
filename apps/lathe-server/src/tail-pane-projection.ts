@@ -1,5 +1,6 @@
 import type { OpencodeEvent, OpencodeMessage } from "@lathe/core";
-import type { TailEvent, TailPaneLineDto, TailPanesDto, TailSpeaker } from "@lathe/contract";
+import { TAIL_PROTOCOL_LIMITS } from "@lathe/contract";
+import type { TailAgentPanesDto, TailDriverCommandDto, TailEvent, TailPaneLineDto, TailSpeaker } from "@lathe/contract";
 
 type ProjectedPart = {
   readonly key: string;
@@ -18,31 +19,38 @@ type ProjectedPart = {
 
 type DriverSegment = { readonly stream: "stdout" | "stderr"; text: string };
 type DriverCommand = {
-  readonly order: number;
-  readonly phase: Extract<TailEvent, { kind: "tail.driver.command" }>["phase"];
-  readonly command: string;
+  order: number;
+  phase: Extract<TailEvent, { kind: "tail.driver.command" }>["phase"];
+  command: string;
+  startedAt: string;
   readonly segments: DriverSegment[];
-  terminal?: { readonly status: "completed" | "error"; readonly exitCode: number; readonly timedOut: boolean };
+  terminal?: { readonly status: "completed" | "error"; readonly exitCode: number; readonly timedOut: boolean; readonly finishedAt: string };
 };
 
 export type TailPaneProjection = {
   project(runId: string, event: OpencodeEvent): void;
   mergeHistory(runId: string, speaker: TailSpeaker, sessionId: string, messages: OpencodeMessage[]): void;
-  panes(runId: string): TailPanesDto;
+  panes(runId: string): TailAgentPanesDto;
+  driverCommands(runId: string): TailDriverCommandDto[];
   projectDriver(event: Extract<TailEvent, { kind: "tail.driver.command" | "tail.driver.delta" }>): void;
   projectVerdict(runId: string, lines: string[]): void;
   mergeVerdict(runId: string, lines: string[]): void;
   clearRun(runId: string): void;
 };
 
-const MAX_LINES = 300;
-const MAX_LINE_LENGTH = 8_000;
+const MAX_LINES = TAIL_PROTOCOL_LIMITS.paneLines;
+const MAX_LINE_LENGTH = TAIL_PROTOCOL_LIMITS.lineChars;
 const MAX_IDENTITIES = 2_000;
-const MAX_DRIVER_COMMANDS = 100;
-const MAX_DRIVER_SEGMENTS = 600;
-const MAX_DRIVER_CHARS = 256_000;
+const MAX_DRIVER_COMMANDS = TAIL_PROTOCOL_LIMITS.driverCommands;
+const MAX_DRIVER_SEGMENTS = TAIL_PROTOCOL_LIMITS.driverSegmentsPerCommand;
+const MAX_DRIVER_CHARS = TAIL_PROTOCOL_LIMITS.driverCharsPerCommand;
+const MAX_RUN_DRIVER_CHARS = TAIL_PROTOCOL_LIMITS.driverCharsPerRun;
+const MAX_PART_CHARS = 256_000;
+const MAX_RUN_PART_CHARS = 2_000_000;
+const MAX_ATTACHMENT_CHARS = 16_000;
+const MAX_RUN_ATTACHMENT_CHARS = 256_000;
 
-const emptyPanes = (): TailPanesDto => ({ baby: [], daddy: [], super: [], driver: [] });
+const emptyPanes = (): TailAgentPanesDto => ({ baby: [], daddy: [], super: [] });
 
 const inputOf = (state: Record<string, unknown>): Record<string, unknown> =>
   (state.input ?? {}) as Record<string, unknown>;
@@ -50,22 +58,16 @@ const inputOf = (state: Record<string, unknown>): Record<string, unknown> =>
 const toolDetail = (state: Record<string, unknown>): string => {
   const input = inputOf(state);
   if (typeof input.command === "string") return input.command.slice(0, 90);
-  if (typeof input.filePath === "string") return input.filePath.split("/worktree/").pop() ?? input.filePath;
+  if (typeof input.filePath === "string") return (input.filePath.split("/worktree/").pop() ?? input.filePath).slice(0, 256);
   if (typeof input.question === "string") return `"${input.question.slice(0, 80)}..."`;
   return typeof input.status === "string" ? input.status : "";
-};
-
-const toolOutput = (state: Record<string, unknown>): string => {
-  if (typeof state.output === "string") return state.output;
-  const metadata = (state.metadata ?? {}) as Record<string, unknown>;
-  return typeof metadata.output === "string" ? metadata.output : "";
 };
 
 const boundedLines = (text: string, style: TailPaneLineDto["style"]): TailPaneLineDto[] =>
   text
     .split("\n")
     .filter((line) => line.trim().length > 0)
-    .map((line) => ({ text: line.slice(0, MAX_LINE_LENGTH), style }));
+    .map((line) => ({ text: line.slice(-MAX_LINE_LENGTH), style }));
 
 const mergeText = (previous: string, next: string): string => {
   if (next === previous) return previous;
@@ -73,6 +75,18 @@ const mergeText = (previous: string, next: string): string => {
   if (previous.startsWith(next)) return previous;
   return next;
 };
+
+const boundedPartText = (text: string): string => text.slice(-MAX_PART_CHARS);
+
+const attachmentOf = (input: Record<string, unknown>): string | undefined =>
+  Object.keys(input).length === 0
+    ? undefined
+    : (() => {
+        const serialized = JSON.stringify(input, null, 2);
+        return serialized.length <= MAX_ATTACHMENT_CHARS
+          ? serialized
+          : JSON.stringify({ truncated: true, preview: serialized.slice(0, Math.floor(MAX_ATTACHMENT_CHARS / 2)) }, null, 2);
+      })();
 
 export const createTailPaneProjection = (
   speakerFor: (runId: string, sessionId: string) => TailSpeaker | undefined,
@@ -95,6 +109,26 @@ export const createTailPaneProjection = (
     for (const part of runParts.slice(0, -MAX_IDENTITIES)) {
       parts.delete(part.key);
     }
+    let retainedPartChars = 0;
+    let retainedAttachmentChars = 0;
+    for (const part of runParts.slice(-MAX_IDENTITIES).toReversed()) {
+      const remaining = MAX_RUN_PART_CHARS - retainedPartChars;
+      if (remaining <= 0) {
+        parts.delete(part.key);
+        continue;
+      }
+      if (part.text.length > remaining) {
+        part.text = part.text.slice(-remaining);
+      }
+      retainedPartChars += part.text.length;
+      if (part.attachment) {
+        if (retainedAttachmentChars + part.attachment.length > MAX_RUN_ATTACHMENT_CHARS) {
+          delete part.attachment;
+        } else {
+          retainedAttachmentChars += part.attachment.length;
+        }
+      }
+    }
     const commands = driverCommands.get(runId);
     if (commands && commands.size > MAX_DRIVER_COMMANDS) {
       const oldest = [...commands.entries()]
@@ -102,6 +136,25 @@ export const createTailPaneProjection = (
         .slice(0, commands.size - MAX_DRIVER_COMMANDS);
       for (const [commandId] of oldest) {
         commands.delete(commandId);
+      }
+    }
+    if (commands) {
+      let remainingChars = MAX_RUN_DRIVER_CHARS;
+      for (const command of [...commands.values()].sort((a, b) => b.order - a.order)) {
+        let commandChars = command.segments.reduce((total, segment) => total + segment.text.length, 0);
+        while (commandChars > remainingChars && command.segments.length > 0) {
+          const first = command.segments[0];
+          if (!first) break;
+          const excess = commandChars - remainingChars;
+          if (first.text.length <= excess) {
+            commandChars -= first.text.length;
+            command.segments.shift();
+          } else {
+            first.text = first.text.slice(excess);
+            commandChars = remainingChars;
+          }
+        }
+        remainingChars -= commandChars;
       }
     }
     if (seenEvents.size > MAX_IDENTITIES * 4) {
@@ -114,7 +167,7 @@ export const createTailPaneProjection = (
     }
   };
 
-  const render = (runId: string): TailPanesDto => {
+  const render = (runId: string): TailAgentPanesDto => {
     const panes = emptyPanes();
     const ordered = [...parts.values()]
       .filter((part) => part.key.startsWith(`${runId}:`))
@@ -128,7 +181,6 @@ export const createTailPaneProjection = (
           style: "tool",
           ...(part.attachment ? { attachment: part.attachment } : {}),
         });
-        lines.push(...boundedLines(part.text, "text"));
       } else {
         lines.push(...boundedLines(part.text, part.kind === "reasoning" ? "think" : "text"));
       }
@@ -137,36 +189,38 @@ export const createTailPaneProjection = (
     panes.daddy = panes.daddy.slice(-MAX_LINES);
     panes.super = panes.super.slice(-MAX_LINES);
     panes.super = [...panes.super, ...(verdictLines.get(runId) ?? [])].slice(-MAX_LINES);
-    const commands = [...(driverCommands.get(runId)?.values() ?? [])].sort((a, b) => a.order - b.order);
-    for (const command of commands) {
-      panes.driver.push({ text: `[${command.phase}] $ ${command.command}`.slice(0, MAX_LINE_LENGTH), style: "tool" });
-      for (const segment of command.segments) {
-        panes.driver.push(...boundedLines(segment.text, segment.stream === "stderr" ? "think" : "text"));
-      }
-      if (command.terminal) {
-        panes.driver.push({
-          text: command.terminal.timedOut ? "timed out" : `exit ${command.terminal.exitCode}`,
-          style: command.terminal.status === "error" ? "think" : "tool",
-        });
-      }
-    }
-    panes.driver = panes.driver.slice(-MAX_LINES);
     return panes;
   };
 
+  const renderDriverCommands = (runId: string): TailDriverCommandDto[] =>
+    [...(driverCommands.get(runId)?.entries() ?? [])]
+      .sort(([, a], [, b]) => a.order - b.order)
+      .map(([commandId, command]) => ({
+        commandId,
+        phase: command.phase,
+        command: command.command,
+        startedAt: command.startedAt,
+        segments: command.segments.map((segment) => ({ ...segment })),
+        terminal: command.terminal ? { ...command.terminal } : null,
+      }));
+
   const replace = (runId: string): void => {
-    publish({ kind: "tail.panes.replaced", runId, panes: render(runId) });
+    publish({ kind: "tail.agent.panes.replaced", runId, panes: render(runId) });
   };
 
   const projectDriver = (event: Extract<TailEvent, { kind: "tail.driver.command" | "tail.driver.delta" }>): void => {
     const commands = driverCommands.get(event.runId) ?? new Map<string, DriverCommand>();
     const existing = commands.get(event.commandId);
     if (event.kind === "tail.driver.command" && event.status === "running") {
-      if (!existing) {
+      if (existing) {
+        existing.phase = event.phase;
+        existing.command = event.command.slice(0, MAX_LINE_LENGTH);
+      } else {
         commands.set(event.commandId, {
           order: nextOrder++,
           phase: event.phase,
-          command: event.command,
+          command: event.command.slice(0, MAX_LINE_LENGTH),
+          startedAt: event.at,
           segments: [],
         });
       }
@@ -174,7 +228,8 @@ export const createTailPaneProjection = (
       const command = existing ?? {
         order: nextOrder++,
         phase: event.phase,
-        command: event.commandId,
+        command: event.commandId.slice(0, MAX_LINE_LENGTH),
+        startedAt: event.at,
         segments: [],
       };
       const last = command.segments.at(-1);
@@ -199,16 +254,25 @@ export const createTailPaneProjection = (
         }
       }
       commands.set(event.commandId, command);
-    } else if (existing) {
-      existing.terminal = {
+    } else {
+      const command = existing ?? {
+        order: nextOrder++,
+        phase: event.phase,
+        command: event.command.slice(0, MAX_LINE_LENGTH),
+        startedAt: event.at,
+        segments: [],
+      };
+      command.terminal = {
         status: event.status,
         exitCode: event.exitCode,
         timedOut: event.timedOut,
+        finishedAt: event.at,
       };
+      commands.set(event.commandId, command);
     }
     driverCommands.set(event.runId, commands);
     trimRun(event.runId);
-    replace(event.runId);
+    publish(event);
   };
 
   const projectVerdict = (runId: string, lines: string[]): void => {
@@ -233,8 +297,9 @@ export const createTailPaneProjection = (
       const partId = typeof props.partID === "string" ? props.partID : "";
       if (sessionId && messageId && partId) {
         const key = keyOf(runId, sessionId, messageId, partId);
-        parts.delete(key);
+        const removed = parts.delete(key);
         removedParts.add(key);
+        if (removed) replace(runId);
       }
       trimRun(runId);
       return;
@@ -259,39 +324,42 @@ export const createTailPaneProjection = (
         const status = previousTerminal && incomingStatus !== "completed" && incomingStatus !== "error"
           ? previous.status
           : incomingStatus;
-        const output = toolOutput(state);
-        parts.set(key, {
+        const attachment = attachmentOf(input);
+        const next: ProjectedPart = {
           key, sessionId, messageId, partId, speaker, kind: "tool",
           order: previous?.order ?? nextOrder++,
-          text: mergeText(previous?.text ?? "", output),
+          text: "",
           tool: typeof raw.tool === "string" ? raw.tool : "tool",
           status,
           detail: toolDetail(state),
-          ...(Object.keys(input).length > 0 ? { attachment: JSON.stringify(input, null, 2) } : {}),
-        });
+          ...(attachment ? { attachment } : {}),
+        };
+        parts.set(key, next);
+        const statusChanged = previous !== undefined && previous.status !== status;
         if (!previous) {
-          publish({ kind: "tail.pane.tool", runId, speaker, status: status === "error" ? "error" : status === "completed" ? "completed" : "running", tool: typeof raw.tool === "string" ? raw.tool : "tool", detail: toolDetail(state), ...(Object.keys(input).length > 0 ? { input: JSON.stringify(input, null, 2) } : {}) });
+          publish({ kind: "tail.pane.tool", runId, speaker, status: status === "error" ? "error" : status === "completed" ? "completed" : "running", tool: next.tool, detail: next.detail, ...(attachment ? { input: attachment } : {}) });
         }
-        const appendOnly = output.startsWith(previous?.text ?? "");
-        const markerChanged = previous !== undefined && (previous.status === "error") !== (status === "error");
-        const delta = appendOnly ? output.slice((previous?.text ?? "").length) : "";
-        if (!appendOnly || markerChanged) {
+        const visibleChanged = previous !== undefined && (
+          (previous.status === "error") !== (status === "error") ||
+          previous.tool !== next.tool ||
+          previous.detail !== next.detail ||
+          previous.attachment !== next.attachment
+        );
+        if (visibleChanged || statusChanged) {
           replace(runId);
-        } else if (delta) {
-          publish({ kind: "tail.pane.delta", runId, speaker, style: "text", text: delta });
         }
         trimRun(runId);
         return;
       }
       const text = typeof raw.text === "string" ? raw.text : "";
-      const merged = mergeText(previous?.text ?? "", text);
+      const merged = boundedPartText(mergeText(previous?.text ?? "", text));
       parts.set(key, { key, sessionId, messageId, partId, speaker, kind: type, order: previous?.order ?? nextOrder++, text: merged, tool: "", status: "", detail: "" });
       const appendOnly = merged.startsWith(previous?.text ?? "");
       const delta = appendOnly ? merged.slice((previous?.text ?? "").length) : "";
       if (!appendOnly) {
         replace(runId);
       } else if (delta) {
-        publish({ kind: "tail.pane.delta", runId, speaker, style: type === "reasoning" ? "think" : "text", text: delta });
+          publish({ kind: "tail.pane.delta", runId, speaker, style: type === "reasoning" ? "think" : "text", text: delta.slice(-MAX_PART_CHARS) });
       }
       trimRun(runId);
       return;
@@ -308,8 +376,8 @@ export const createTailPaneProjection = (
       removedParts.delete(key);
       const previous = parts.get(key);
       const kind = previous?.kind === "reasoning" ? "reasoning" : "text";
-      parts.set(key, { key, sessionId, messageId, partId, speaker, kind, order: previous?.order ?? nextOrder++, text: `${previous?.text ?? ""}${delta}`, tool: "", status: "", detail: "" });
-      publish({ kind: "tail.pane.delta", runId, speaker, style: kind === "reasoning" ? "think" : "text", text: delta });
+      parts.set(key, { key, sessionId, messageId, partId, speaker, kind, order: previous?.order ?? nextOrder++, text: boundedPartText(`${previous?.text ?? ""}${delta}`), tool: "", status: "", detail: "" });
+      publish({ kind: "tail.pane.delta", runId, speaker, style: kind === "reasoning" ? "think" : "text", text: delta.slice(-MAX_PART_CHARS) });
       trimRun(runId);
     }
   };
@@ -331,15 +399,10 @@ export const createTailPaneProjection = (
         if (type === "tool") {
           const state = (raw.state ?? {}) as Record<string, unknown>;
           const input = inputOf(state);
-          const historyOutput = toolOutput(state);
-          const text = previous
-            ? historyOutput.startsWith(previous.text)
-              ? historyOutput
-              : previous.text
-            : historyOutput;
+          const attachment = attachmentOf(input);
           const historyStatus = typeof state.status === "string" ? state.status : "completed";
           const status = historyStatus === "completed" || historyStatus === "error" ? historyStatus : previous?.status ?? historyStatus;
-          parts.set(key, { key, sessionId, messageId, partId, speaker, kind: "tool", order: previous?.order ?? nextOrder++, text, tool: raw.tool ?? previous?.tool ?? "tool", status, detail: toolDetail(state) || previous?.detail || "", ...(Object.keys(input).length > 0 ? { attachment: JSON.stringify(input, null, 2) } : previous?.attachment ? { attachment: previous.attachment } : {}) });
+          parts.set(key, { key, sessionId, messageId, partId, speaker, kind: "tool", order: previous?.order ?? nextOrder++, text: "", tool: raw.tool ?? previous?.tool ?? "tool", status, detail: toolDetail(state) || previous?.detail || "", ...(attachment ? { attachment } : previous?.attachment ? { attachment: previous.attachment } : {}) });
         } else {
           const historyText = raw.text ?? "";
           const text = previous
@@ -347,7 +410,8 @@ export const createTailPaneProjection = (
               ? historyText
               : previous.text
             : historyText;
-          parts.set(key, { key, sessionId, messageId, partId, speaker, kind: type, order: previous?.order ?? nextOrder++, text, tool: "", status: "", detail: "" });
+          const bounded = boundedPartText(text);
+          parts.set(key, { key, sessionId, messageId, partId, speaker, kind: type, order: previous?.order ?? nextOrder++, text: bounded, tool: "", status: "", detail: "" });
         }
       }
     }
@@ -374,5 +438,5 @@ export const createTailPaneProjection = (
     verdictLines.delete(runId);
   };
 
-  return { project, mergeHistory, panes: render, projectDriver, projectVerdict, mergeVerdict, clearRun };
+  return { project, mergeHistory, panes: render, driverCommands: renderDriverCommands, projectDriver, projectVerdict, mergeVerdict, clearRun };
 };

@@ -458,11 +458,29 @@ export interface TailPaneLineDto {
   attachment?: string;
 }
 
-export interface TailPanesDto {
+export interface TailAgentPanesDto {
   baby: TailPaneLineDto[];
   daddy: TailPaneLineDto[];
   super: TailPaneLineDto[];
-  driver: TailPaneLineDto[];
+}
+
+export interface TailDriverSegmentDto {
+  stream: "stdout" | "stderr";
+  text: string;
+}
+
+export interface TailDriverCommandDto {
+  commandId: string;
+  phase: VerificationPhaseDto;
+  command: string;
+  startedAt: string;
+  segments: TailDriverSegmentDto[];
+  terminal: {
+    status: "completed" | "error";
+    exitCode: number;
+    timedOut: boolean;
+    finishedAt: string;
+  } | null;
 }
 
 export interface TailSnapshotDto {
@@ -480,7 +498,8 @@ export interface TailSnapshotDto {
   contextTokens: number;
   turn: number;
   rotations: number;
-  panes: TailPanesDto;
+  panes: TailAgentPanesDto;
+  driverCommands: TailDriverCommandDto[];
   journal: TailJournalLineDto[];
   lastSeq: number;
 }
@@ -529,7 +548,7 @@ export type TailEvent =
       detail: string;
       input?: string;
     }
-  | { kind: "tail.panes.replaced"; runId: string; panes: TailPanesDto }
+  | { kind: "tail.agent.panes.replaced"; runId: string; panes: TailAgentPanesDto }
   | {
       kind: "tail.driver.command";
       runId: string;
@@ -537,6 +556,7 @@ export type TailEvent =
       commandId: string;
       command: string;
       status: "running";
+      at: string;
     }
   | {
       kind: "tail.driver.command";
@@ -547,6 +567,7 @@ export type TailEvent =
       status: "completed" | "error";
       exitCode: number;
       timedOut: boolean;
+      at: string;
     }
   | {
       kind: "tail.driver.delta";
@@ -555,6 +576,7 @@ export type TailEvent =
       commandId: string;
       stream: "stdout" | "stderr";
       text: string;
+      at: string;
     }
   | {
       kind: "tail.super.verdict";
@@ -566,8 +588,32 @@ export type TailEvent =
       findings: string[];
       lines: string[];
     }
-  | { kind: "tail.run.changed"; runId: string; snapshot: TailSnapshotDto | null }
+  | { kind: "tail.run.changed"; runId: string | null; snapshot: TailSnapshotDto | null }
   | { kind: "tail.ping" };
+
+const TAIL_EVENT_KIND_MAP = {
+  "tail.journal": true,
+  "tail.stats": true,
+  "tail.pane.delta": true,
+  "tail.pane.tool": true,
+  "tail.agent.panes.replaced": true,
+  "tail.driver.command": true,
+  "tail.driver.delta": true,
+  "tail.super.verdict": true,
+  "tail.run.changed": true,
+  "tail.ping": true,
+} as const satisfies Record<TailEvent["kind"], true>;
+
+export const TAIL_EVENT_KINDS = Object.keys(TAIL_EVENT_KIND_MAP) as Array<keyof typeof TAIL_EVENT_KIND_MAP>;
+
+export const TAIL_PROTOCOL_LIMITS = {
+  paneLines: 300,
+  lineChars: 8_000,
+  driverCommands: 100,
+  driverSegmentsPerCommand: 600,
+  driverCharsPerCommand: 256_000,
+  driverCharsPerRun: 2_000_000,
+} as const;
 
 /* ------------------- event stream payload (SSE sidecar) ------------------- */
 

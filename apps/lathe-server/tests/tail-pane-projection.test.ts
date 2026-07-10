@@ -19,7 +19,7 @@ test("history projection preserves assistant parts and isolates composite identi
   deepStrictEqual(panes.daddy, [{ text: "review", style: "text" }]);
 });
 
-test("live and complete tool updates merge without duplicate output", () => {
+test("tool updates show the call but suppress result output", () => {
   const events: TailEvent[] = [];
   const projection = createTailPaneProjection(() => "baby", (event) => events.push(event));
   const part = (status: "running" | "completed", output: string) => ({
@@ -42,11 +42,63 @@ test("live and complete tool updates merge without duplicate output", () => {
 
   deepStrictEqual(projection.panes("run").baby.map((line) => line.text), [
     ". bash task check",
-    "one",
-    "two",
   ]);
   equal(events.filter((event) => event.kind === "tail.pane.tool").length, 1);
-  deepStrictEqual(events.filter((event) => event.kind === "tail.pane.delta").map((event) => event.kind === "tail.pane.delta" ? event.text : ""), ["one\n", "two\n"]);
+  equal(events.filter((event) => event.kind === "tail.agent.panes.replaced").length, 1);
+  deepStrictEqual(events.filter((event) => event.kind === "tail.pane.delta"), []);
+});
+
+test("later tool detail and input changes replace connected agent panes", () => {
+  const events: TailEvent[] = [];
+  const projection = createTailPaneProjection(() => "baby", (event) => events.push(event));
+  const update = (command: string) => ({
+    type: "message.part.updated",
+    properties: { part: { id: "tool", sessionID: "session", messageID: "message", type: "tool", tool: "bash", state: { status: "running", input: { command } } } },
+  });
+  projection.project("run", update("task check"));
+  projection.project("run", update("task test"));
+
+  equal(events.at(-1)?.kind, "tail.agent.panes.replaced");
+  equal(projection.panes("run").baby[0]?.text, ". bash task test");
+});
+
+test("agent part text and tool attachments are bounded before retention", () => {
+  const projection = createTailPaneProjection(() => "baby", () => {});
+  for (let index = 0; index < 9; index += 1) {
+    projection.project("run", {
+      type: "message.part.updated",
+      properties: { part: { id: `part-${index}`, sessionID: "session", messageID: "message", type: "text", text: String(index).repeat(256_000) } },
+    });
+  }
+  projection.project("run", {
+    type: "message.part.updated",
+    properties: { part: { id: "tool", sessionID: "session", messageID: "message", type: "tool", tool: "bash", state: { status: "running", input: { command: "x".repeat(20_000) } } } },
+  });
+
+  const panes = projection.panes("run").baby;
+  equal(panes.some((line) => line.text.startsWith("0")), false);
+  equal(panes.every((line) => line.text.length <= 8_000), true);
+  equal((panes.at(-1)?.attachment?.length ?? 0) <= 16_000, true);
+  JSON.parse(panes.at(-1)?.attachment ?? "{}");
+});
+
+test("authoritative projection retains the newest end of oversized lines", () => {
+  const projection = createTailPaneProjection(() => "baby", () => {});
+  const text = `${"old".repeat(4_000)}${"new".repeat(4_000)}`;
+  projection.project("run", {
+    type: "message.part.updated",
+    properties: {
+      part: {
+        id: "part",
+        sessionID: "session",
+        messageID: "message",
+        type: "text",
+        text,
+      },
+    },
+  });
+
+  equal(projection.panes("run").baby[0]?.text, text.slice(-8_000));
 });
 
 test("terminal history repairs tool state and later live updates cannot regress it", () => {
@@ -62,11 +114,12 @@ test("terminal history repairs tool state and later live updates cannot regress 
   }]);
   projection.project("run", part("running", "done\n"));
 
-  deepStrictEqual(projection.panes("run").baby.map((line) => line.text), ["x bash", "done"]);
+  deepStrictEqual(projection.panes("run").baby.map((line) => line.text), ["x bash"]);
 });
 
 test("event IDs deduplicate deltas and removal targets one composite part", () => {
-  const projection = createTailPaneProjection(() => "baby", () => {});
+  const events: TailEvent[] = [];
+  const projection = createTailPaneProjection(() => "baby", (event) => events.push(event));
   const updated = (messageID: string, id: string, text: string) => ({
     type: "message.part.updated",
     properties: { part: { id, sessionID: "session", messageID, type: "text", text } },
@@ -78,6 +131,7 @@ test("event IDs deduplicate deltas and removal targets one composite part", () =
   projection.project("run", { type: "message.part.removed", properties: { sessionID: "session", messageID: "one", partID: "same" } });
 
   deepStrictEqual(projection.panes("run").baby, [{ text: "second!", style: "text" }]);
+  equal(events.at(-1)?.kind, "tail.agent.panes.replaced");
 });
 
 test("late history cannot erase a newer live part or resurrect a removed part", () => {
@@ -130,11 +184,12 @@ test("divergent authoritative updates replace connected pane state", () => {
   projection.project("run", updated("corrected"));
 
   deepStrictEqual(projection.panes("run").baby, [{ text: "corrected", style: "text" }]);
-  equal(events.at(-1)?.kind, "tail.panes.replaced");
+  equal(events.at(-1)?.kind, "tail.agent.panes.replaced");
 });
 
 test("driver projection is updated before publication can be snapshotted", () => {
-  const projection = createTailPaneProjection(() => undefined, () => {});
+  const events: TailEvent[] = [];
+  const projection = createTailPaneProjection(() => undefined, (event) => events.push(event));
   projection.projectDriver({
     kind: "tail.driver.command",
     runId: "run",
@@ -142,6 +197,7 @@ test("driver projection is updated before publication can be snapshotted", () =>
     commandId: "one",
     command: "pnpm test",
     status: "running",
+    at: "2026-07-10T18:00:00.000Z",
   });
   projection.projectDriver({
     kind: "tail.driver.delta",
@@ -150,6 +206,7 @@ test("driver projection is updated before publication can be snapshotted", () =>
     commandId: "one",
     stream: "stdout",
     text: "passing\n",
+    at: "2026-07-10T18:00:01.000Z",
   });
   projection.projectDriver({
     kind: "tail.driver.command",
@@ -160,29 +217,35 @@ test("driver projection is updated before publication can be snapshotted", () =>
     status: "completed",
     exitCode: 0,
     timedOut: false,
+    at: "2026-07-10T18:00:02.000Z",
   });
 
-  deepStrictEqual(projection.panes("run").driver, [
-    { text: "[convergence] $ pnpm test", style: "tool" },
-    { text: "passing", style: "text" },
-    { text: "exit 0", style: "tool" },
-  ]);
+  deepStrictEqual(projection.driverCommands("run"), [{
+    commandId: "one",
+    phase: "convergence",
+    command: "pnpm test",
+    startedAt: "2026-07-10T18:00:00.000Z",
+    segments: [{ stream: "stdout", text: "passing\n" }],
+    terminal: { status: "completed", exitCode: 0, timedOut: false, finishedAt: "2026-07-10T18:00:02.000Z" },
+  }]);
+  deepStrictEqual(events.map((event) => event.kind), ["tail.driver.command", "tail.driver.delta", "tail.driver.command"]);
 });
 
 test("driver projection preserves split chunks independently for concurrent commands", () => {
   const projection = createTailPaneProjection(() => undefined, () => {});
   for (const [commandId, command] of [["one", "first"], ["two", "second"]] as const) {
-    projection.projectDriver({ kind: "tail.driver.command", runId: "run", phase: "report", commandId, command, status: "running" });
+    projection.projectDriver({ kind: "tail.driver.command", runId: "run", phase: "report", commandId, command, status: "running", at: "2026-07-10T18:00:00.000Z" });
   }
-  projection.projectDriver({ kind: "tail.driver.delta", runId: "run", phase: "report", commandId: "one", stream: "stdout", text: "hel" });
-  projection.projectDriver({ kind: "tail.driver.delta", runId: "run", phase: "report", commandId: "two", stream: "stdout", text: "other\n" });
-  projection.projectDriver({ kind: "tail.driver.delta", runId: "run", phase: "report", commandId: "one", stream: "stdout", text: "lo\n" });
+  projection.projectDriver({ kind: "tail.driver.delta", runId: "run", phase: "report", commandId: "one", stream: "stdout", text: "hel", at: "2026-07-10T18:00:01.000Z" });
+  projection.projectDriver({ kind: "tail.driver.delta", runId: "run", phase: "report", commandId: "two", stream: "stdout", text: "other\n", at: "2026-07-10T18:00:01.000Z" });
+  projection.projectDriver({ kind: "tail.driver.delta", runId: "run", phase: "report", commandId: "one", stream: "stdout", text: "lo\n", at: "2026-07-10T18:00:02.000Z" });
 
-  deepStrictEqual(projection.panes("run").driver.map((line) => line.text), [
-    "[report] $ first",
-    "hello",
-    "[report] $ second",
-    "other",
+  deepStrictEqual(projection.driverCommands("run").map((command) => ({
+    command: command.command,
+    output: command.segments.map((segment) => segment.text).join(""),
+  })), [
+    { command: "first", output: "hello\n" },
+    { command: "second", output: "other\n" },
   ]);
 });
 

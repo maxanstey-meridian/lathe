@@ -76,6 +76,31 @@ test("reviewer: a successful call returns a reviewed outcome", async () => {
   equal(sends(), 1, "no retries on success");
 });
 
+test("reviewer: an empty current exchange does not reuse a stale verdict", async () => {
+  const old = { ...textResponse(ACCEPT_JSON), info: { ...textResponse(ACCEPT_JSON).info, id: "old" } };
+  const current = textResponse("");
+  current.info.id = "current";
+  let sent = false;
+  const executor: Executor = {
+    createSession: async () => "session-1",
+    sendMessage: async () => {
+      sent = true;
+      return current;
+    },
+    listMessages: async () => sent ? [old, current] : [old],
+    deleteSession: async () => {},
+    abortSession: async () => {},
+  };
+  const reviewer = createReviewer(executor, model, 5000, 0);
+
+  const outcome = await reviewer.superReview(input());
+
+  equal(outcome.kind, "reviewed");
+  if (outcome.kind === "reviewed") {
+    equal(outcome.review.verdict, "escalate");
+  }
+});
+
 test("reviewer: a persistent transient drop retries then returns unreachable", async () => {
   const { executor, sends } = makeExecutor(async () => {
     throw new Error("socket hang up");
@@ -140,16 +165,16 @@ test("reviewer: a transient PROVIDER error (HTTP 200 + error field) is retried",
 test("reviewer: authorFollowup uses the latest assistant reply, not stale history", async () => {
   const latestPacket = `---\nsummary: fresh attempt\noutcomes:\n  - id: fix-a\n    description: fresh\n---\n\n# fresh packet`;
   const { executor } = makeExecutor(async () => textResponse("fallback"));
-  executor.listMessages = async () => [
-    {
+  let listCall = 0;
+  const stale = {
       info: { id: "old", sessionID: "s", role: "assistant", model: "test" as unknown as string },
       parts: [{ type: "text", text: "---\nsummary: stale attempt\n---\n\n# stale packet" }],
-    },
-    {
+    };
+  const latest = {
       info: { id: "new", sessionID: "s", role: "assistant", model: "test" as unknown as string },
       parts: [{ type: "text", text: latestPacket }],
-    },
-  ];
+    };
+  executor.listMessages = async () => listCall++ === 0 ? [stale] : [stale, latest];
   const reviewer = createReviewer(executor, model, 5000, 1);
 
   const outcome = await reviewer.authorFollowup({

@@ -12,8 +12,16 @@
 // loop and the bridge's concrete Ref (the application cannot import the bridge).
 // ---------------------------------------------------------------------------
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { spawn } from "node:child_process";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { TurnResponse } from "../../domain/agent-response.js";
 import { priorReconciliationAccepted, rotationGateState } from "../../domain/gate-decisions.js";
 import { initialGateState } from "../../domain/gate.js";
@@ -49,6 +57,118 @@ export type BridgeBinding<Ref> = {
 };
 
 type RunMetaPaths = { repo: string; worktree: string; base: string; branch: string };
+
+const SETUP_KILL_GRACE_MS = 500;
+
+const abortError = (): Error => {
+  const error = new Error("setup command cancelled");
+  error.name = "AbortError";
+  return error;
+};
+
+const runSetupCommand = (
+  command: string,
+  worktree: string,
+  dir: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<void> =>
+  new Promise((resolvePromise, reject) => {
+    const root = realpathSync(resolve(worktree));
+    const cwd = realpathSync(resolve(root, dir));
+    const fromRoot = relative(root, cwd);
+    if (
+      fromRoot === ".." ||
+      fromRoot.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
+      isAbsolute(fromRoot)
+    ) {
+      reject(new Error(`setup command cwd escapes sandbox: ${dir}`));
+      return;
+    }
+
+    if (signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+
+    const child = spawn("/bin/zsh", ["-c", command], {
+      cwd,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    let terminationCause: "timeout" | "cancelled" | undefined;
+    let settled = false;
+    let exited = false;
+    let termination: Promise<void> | undefined;
+
+    const append = (chunk: Buffer): void => {
+      output = `${output}${chunk.toString("utf8")}`.slice(-1_000);
+    };
+    child.stdout.on("data", append);
+    child.stderr.on("data", append);
+
+    const terminate = (cause: "timeout" | "cancelled"): void => {
+      if (termination || !child.pid) {
+        return;
+      }
+      if (!exited) {
+        terminationCause = cause;
+      }
+      try {
+        process.kill(-child.pid, "SIGTERM");
+      } catch {
+        return;
+      }
+      termination = new Promise((resolveTermination) => {
+        const killTimer = setTimeout(() => {
+          try {
+            process.kill(-child.pid!, "SIGKILL");
+          } catch {
+            // The process group already exited.
+          } finally {
+            resolveTermination();
+          }
+        }, SETUP_KILL_GRACE_MS);
+        killTimer.unref();
+      });
+    };
+    const onAbort = (): void => terminate("cancelled");
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const timeout = setTimeout(() => terminate("timeout"), timeoutMs);
+    timeout.unref();
+
+    const finish = async (error?: Error): Promise<void> => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+      await termination;
+      if (terminationCause === "cancelled") {
+        reject(abortError());
+      } else if (terminationCause === "timeout") {
+        reject(new Error(`setup command timed out: ${command}\n${output}`));
+      } else if (error) {
+        reject(new Error(`setup command failed: ${command}\n${output || error.message}`));
+      } else {
+        resolvePromise();
+      }
+    };
+
+    child.once("error", (error) => void finish(error));
+    child.once("exit", () => {
+      exited = true;
+    });
+    child.once("close", (code, closeSignal) => {
+      void finish(
+        code === 0 && !closeSignal
+          ? undefined
+          : new Error(`exit ${code ?? closeSignal ?? "unknown"}`),
+      );
+    });
+  });
 
 const daddySessionIsStale = async (
   executor: RunPorts["executor"],
@@ -159,6 +279,22 @@ export const makeExecuteRun =
           writeFileSync(dst, content);
         }
       }
+      const setup = config.repos[repoPath]?.setup;
+      if (setup) {
+        for (const command of setup.commands) {
+          journal(ports, runId, 0, {
+            event: "driver_note",
+            note: `setup: ${command.command}`,
+          });
+          await runSetupCommand(
+            command.command,
+            worktree,
+            command.dir,
+            config.thresholds.verificationTimeoutMs,
+            signal,
+          );
+        }
+      }
     } else {
       // Resume: REFRESH config-derived gate fields (cadence + mutation patterns)
       // from current config; preserve run-state (phase, baseline,
@@ -172,6 +308,10 @@ export const makeExecuteRun =
         checkpointLoc: config.thresholds.checkpointLoc,
         mutationCommandPatterns: config.mutationCommandPatterns,
       });
+    }
+
+    if (signal?.aborted) {
+      throw abortError();
     }
 
     // Daddy: ONE session for the run's whole life (M6). The adapter creates a

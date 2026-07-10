@@ -4,7 +4,12 @@
 // on it. node:http (not fetch): a long-lived GET that streams until closed.
 
 import { request as httpRequest } from "node:http";
-import type { Events, OpencodeEvent, EventSubscription, OpencodeMessage } from "../../application/ports/events.js";
+import type {
+  Events,
+  OpencodeEvent,
+  EventSubscription,
+  OpencodeMessage,
+} from "../../application/ports/events.js";
 import type { Config } from "../../config/schemas.js";
 
 type OpenCodeMessage = {

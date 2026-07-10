@@ -24,47 +24,15 @@ import { RunNotAnswerableError, RunNotFoundError, NonChainTipError, TerminalRunE
 import type { Supervisor } from "./supervisor.js";
 import { configToDto } from "./config-to-dto.js";
 import { runToSummary, runToDetail } from "./run-to-dto.js";
+import type { AppDeps, PreparedTailSnapshot } from "./server-host.js";
+export { createEventBus, createTailEventBus } from "./server-host.js";
+export type { AppDeps, EventBus, PreparedTailSnapshot, TailEventBus } from "./server-host.js";
 
 /**
  * In-process fan-out for live events. The supervisor calls publish() with the
  * projected wire event; every open /events stream gets it. Trivial pub/sub —
  * the durability/replay story is SQLite (readJournalSince), not this buffer.
  */
-export interface EventBus {
-  publish(seq: number, event: LatheEvent): void;
-  subscribe(onEvent: (seq: number, event: LatheEvent) => void): () => void;
-}
-
-export interface TailEventBus {
-  publish(event: TailEvent): void;
-  subscribe(onEvent: (event: TailEvent) => void): () => void;
-}
-
-export const createEventBus = (): EventBus => {
-  const subs = new Set<(seq: number, event: LatheEvent) => void>();
-  return {
-    publish: (seq, event) => { for (const s of subs) s(seq, event); },
-    subscribe: (onEvent) => { subs.add(onEvent); return () => subs.delete(onEvent); },
-  };
-};
-
-export const createTailEventBus = (): TailEventBus => {
-  const subs = new Set<(event: TailEvent) => void>();
-  return {
-    publish: (event) => { for (const s of subs) s(event); },
-    subscribe: (onEvent) => { subs.add(onEvent); return () => subs.delete(onEvent); },
-  };
-};
-
-export interface AppDeps {
-  bus: EventBus;
-  /** Resumable replay on reconnect — SQLite events table (P01's readJournalSince). */
-  readEventsSince: (seq: number) => { seq: number; event: LatheEvent }[];
-  tailBus?: TailEventBus;
-  readTailEventsSince?: (seq: number, runId: string) => TailEvent[];
-  prepareTailSnapshot?: (runId: string | null) => Promise<string | null>;
-}
-
 export interface CreateAppOptions {
   readonly logger?: boolean;
   readonly cors?: boolean;
@@ -319,7 +287,7 @@ export const createApp = (
       },
 
       getTail: async ({ params }) => {
-        const snapshot = supervisor.getTailSnapshot(params.runId);
+        const snapshot = await supervisor.prepareTailSnapshot(params.runId);
         if (!snapshot) {
           throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
         }
@@ -327,7 +295,7 @@ export const createApp = (
       },
 
       getActiveTail: async () => {
-        return supervisor.getActiveTailSnapshot();
+        return supervisor.prepareActiveTailSnapshot();
       },
 
       getSettings: async () => {
@@ -507,11 +475,11 @@ export const createApp = (
   );
 
   app.get("/tail/active/events", (c) =>
-    streamTailSse(c, deps, () => supervisor.getActiveTailSnapshot(), null),
+    streamTailSse(c, deps, null),
   );
 
   app.get("/tail/:runId/events", (c) =>
-    streamTailSse(c, deps, () => supervisor.getTailSnapshot(c.req.param("runId")) ?? null, c.req.param("runId")),
+    streamTailSse(c, deps, c.req.param("runId")),
   );
 
   // Unhandled handler errors become a structured 500 — same envelope rivetHttpError
@@ -533,7 +501,6 @@ const tailEventSeq = (event: TailEvent): number | null =>
 const streamTailSse = (
   c: Context,
   deps: AppDeps,
-  resolveSnapshot: () => TailSnapshotDto | null,
   fallbackRunId: string | null,
 ) =>
   streamSSE(c, async (stream) => {
@@ -546,86 +513,35 @@ const streamTailSse = (
 
     const lastId = Number.parseInt(c.req.header("Last-Event-ID") ?? "0", 10);
     const since = Number.isInteger(lastId) ? lastId : -1;
-    const safeResolveSnapshot = (): TailSnapshotDto | null => {
-      try {
-        return resolveSnapshot();
-      } catch {
-        return null;
-      }
-    };
-    const queue: Array<{ event: TailEvent; representedByBootstrap: boolean }> = [];
+    const queue: Array<{ revision: number; event: TailEvent }> = [];
     const emittedDurable = new Set<string>();
     let notify: (() => void) | null = null;
     let activeSnapshot: TailSnapshotDto | null = null;
     let runId = fallbackRunId;
     let lastSeq = since;
-    let bootstrapResolved = false;
-    let transitionGeneration = 0;
-    const resolvePreparedSnapshot = async (
-      requestedRunId: string | null,
-      generation?: number,
-    ): Promise<TailSnapshotDto | null | undefined> => {
-      if (!deps.prepareTailSnapshot) {
-        return safeResolveSnapshot();
-      }
-      let target = requestedRunId;
-      while (!stream.aborted) {
-        const prepared = await deps.prepareTailSnapshot(target);
-        if (generation !== undefined && generation !== transitionGeneration) {
-          return undefined;
-        }
-        const snapshot = safeResolveSnapshot();
-        if (fallbackRunId !== null || (snapshot?.runId ?? null) === prepared) {
-          return snapshot;
-        }
-        target = snapshot?.runId ?? null;
-      }
-      return undefined;
-    };
+    let representedThroughRevision = 0;
+    let lastPingAt = Date.now();
+    const prepare = async (target: string | null): Promise<PreparedTailSnapshot> =>
+      deps.prepareTailSnapshot
+        ? deps.prepareTailSnapshot(target)
+        : { snapshot: null, revision: tailBus.revision() };
     stream.onAbort(() => notify?.());
-    const unsub = tailBus.subscribe((event) => {
-      if (!bootstrapResolved) {
-        queue.push({ event, representedByBootstrap: true });
-        return;
-      }
-      const eventRunId = tailEventRunId(event);
-      let currentSnapshot = activeSnapshot;
-      let currentRunId = fallbackRunId ?? runId;
-      if (fallbackRunId === null && eventRunId && eventRunId !== runId) {
-        const generation = ++transitionGeneration;
-        void (async () => {
-          const preparedSnapshot = await resolvePreparedSnapshot(eventRunId, generation);
-          if (preparedSnapshot === undefined) return;
-          currentSnapshot = preparedSnapshot;
-          currentRunId = currentSnapshot?.runId ?? eventRunId;
-          activeSnapshot = currentSnapshot;
-          runId = currentRunId;
-          queue.push({ event: { kind: "tail.run.changed", runId: currentRunId, snapshot: activeSnapshot }, representedByBootstrap: false });
-          notify?.();
-        })();
-        return;
-      }
-      if (currentRunId && eventRunId && eventRunId !== currentRunId) {
-        return;
-      }
-      const seq = tailEventSeq(event);
-      if (seq !== null && seq < lastSeq) {
-        return;
-      }
-      queue.push({ event, representedByBootstrap: false });
+    const unsub = tailBus.subscribe((revision, event) => {
+      queue.push({ revision, event });
       notify?.();
     });
 
     try {
-      activeSnapshot = await resolvePreparedSnapshot(fallbackRunId) ?? null;
+      const prepared = await prepare(fallbackRunId);
+      activeSnapshot = prepared.snapshot;
+      representedThroughRevision = prepared.revision;
       runId = activeSnapshot?.runId ?? fallbackRunId;
-      bootstrapResolved = true;
       if (activeSnapshot) {
         lastSeq = Math.max(lastSeq, activeSnapshot.lastSeq);
       }
       await stream.writeSSE({
         event: "tail.run.changed",
-        data: JSON.stringify({ kind: "tail.run.changed", runId: runId ?? "", snapshot: activeSnapshot } satisfies TailEvent),
+        data: JSON.stringify({ kind: "tail.run.changed", runId, snapshot: activeSnapshot } satisfies TailEvent),
       });
 
       if (runId) {
@@ -648,22 +564,48 @@ const streamTailSse = (
       }
 
       while (!stream.aborted) {
+        if (fallbackRunId === null) {
+          const selectedRunId = deps.resolveActiveTailRunId
+            ? deps.resolveActiveTailRunId()
+            : activeSnapshot?.runId ?? null;
+          if (selectedRunId !== runId) {
+            const transition = await prepare(null);
+            if (stream.aborted) break;
+            activeSnapshot = transition.snapshot;
+            representedThroughRevision = transition.revision;
+            runId = activeSnapshot?.runId ?? null;
+            if (activeSnapshot) lastSeq = Math.max(lastSeq, activeSnapshot.lastSeq);
+            await stream.writeSSE({
+              event: "tail.run.changed",
+              data: JSON.stringify({ kind: "tail.run.changed", runId, snapshot: activeSnapshot } satisfies TailEvent),
+            });
+            continue;
+          }
+        }
         if (queue.length === 0) {
           let timer: ReturnType<typeof setTimeout> | undefined;
-          await new Promise<void>((r) => { notify = r; timer = setTimeout(r, 15_000); });
+          const waitMs = fallbackRunId === null ? 1_000 : 15_000;
+          await new Promise<void>((r) => { notify = r; timer = setTimeout(r, waitMs); });
           if (timer) clearTimeout(timer);
           notify = null;
           if (stream.aborted) break;
           if (queue.length === 0) {
-            await stream.writeSSE({ event: "tail.ping", data: JSON.stringify({ kind: "tail.ping" } satisfies TailEvent) });
+            if (Date.now() - lastPingAt >= 15_000) {
+              await stream.writeSSE({ event: "tail.ping", data: JSON.stringify({ kind: "tail.ping" } satisfies TailEvent) });
+              lastPingAt = Date.now();
+            }
             continue;
           }
         }
         const queued = queue.shift()!;
-        if (queued.representedByBootstrap) {
+        if (queued.revision <= representedThroughRevision) {
           continue;
         }
         const event = queued.event;
+        const eventRunId = tailEventRunId(event);
+        if (eventRunId !== null && eventRunId !== runId) {
+          continue;
+        }
         const seq = tailEventSeq(event);
         const fingerprint = JSON.stringify(event);
         if ((seq !== null && seq < lastSeq) || (seq !== null && emittedDurable.has(fingerprint))) {

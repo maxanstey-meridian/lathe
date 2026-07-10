@@ -115,9 +115,11 @@ const extractSegments = (text: string): JsonSegment[] => {
 
     const end = jsonEnd(text, start);
     if (end === null) {
-      segments.push({ kind: "text", text: text[start] ?? "" });
-      index = start + 1;
-      continue;
+      // An incomplete outer object/array may already contain complete nested
+      // values. Do not buttonify those fragments while the outer value streams.
+      segments.push({ kind: "text", text: text.slice(start) });
+      index = text.length;
+      break;
     }
 
     if (end - start <= MIN_LENGTH) {

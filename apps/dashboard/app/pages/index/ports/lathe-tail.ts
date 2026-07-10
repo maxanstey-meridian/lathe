@@ -1,8 +1,7 @@
+import type { TailViewState } from "@lathe/tail-state";
 import type { Ref } from "vue";
 
 import { useProvideInject } from "~/composables/useProvideInject";
-
-import type { TailViewState } from "../logic/tail-state";
 
 export interface LatheTail {
   readonly state: Ref<TailViewState>;

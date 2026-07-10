@@ -649,8 +649,9 @@ const fakeSupervisor = (order: string[], config = ConfigSchema.parse({})): Super
   lastVerdict: () => null,
   listStaged: () => [],
   outcomes: () => "",
-  getTailSnapshot: () => undefined,
-  getActiveTailSnapshot: () => null,
+  prepareTailSnapshot: async () => undefined,
+  prepareActiveTailSnapshot: async () => null,
+  resolveActiveTailRunId: () => null,
   getStatus: () => ({ activeRuns: [], queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
   getReview: () => ({ runs: [] }),
 });

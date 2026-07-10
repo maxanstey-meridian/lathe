@@ -10,10 +10,10 @@
 import { type ChildProcess } from "node:child_process";
 import type { Server } from "node:http";
 import type { BridgePort } from "../../application/ports/bridge.js";
+import { noopDriverOutput, type DriverOutput } from "../../application/ports/driver-output.js";
 import type { ModelConfig } from "../../application/ports/executor.js";
 import type { Repo } from "../../application/ports/repo.js";
 import type { Store } from "../../application/ports/store.js";
-import { noopDriverOutput, type DriverOutput } from "../../application/ports/driver-output.js";
 import { convergeRun } from "../../application/use-cases/converge-run.js";
 import { makeExecuteRun, type BridgeBinding } from "../../application/use-cases/execute-run.js";
 import {
@@ -152,7 +152,16 @@ export const runDriver = async (
   const verify = createVerify();
   const caffeinate = createCaffeinate();
 
-  const ports: RunPorts = { configSource, store, repo, executor, planner, clock, verify, driverOutput };
+  const ports: RunPorts = {
+    configSource,
+    store,
+    repo,
+    executor,
+    planner,
+    clock,
+    verify,
+    driverOutput,
+  };
 
   // The bridge port (the lock) holds the serve substrate. bind() acquires the
   // lock and brings opencode up; close() tears both down. The driver loop calls
@@ -211,7 +220,16 @@ export const runDriver = async (
   };
 
   const executeRun = makeExecuteRun(ports, binding);
-  const convergeStep = convergeRun({ store, repo, reviewer, verify, driverOutput, clock, config, paths });
+  const convergeStep = convergeRun({
+    store,
+    repo,
+    reviewer,
+    verify,
+    driverOutput,
+    clock,
+    config,
+    paths,
+  });
 
   await runLoop(
     config,

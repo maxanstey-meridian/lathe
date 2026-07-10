@@ -13,12 +13,12 @@ import type { FinalReview, AskPlannerInput } from "../../domain/review.js";
 import type { BlockedReason } from "../../domain/run.js";
 import type { BridgeIntent } from "../../domain/turn.js";
 import type { Clock } from "../ports/clock.js";
+import type { DriverOutput } from "../ports/driver-output.js";
 import type { Executor } from "../ports/executor.js";
 import type { Planner } from "../ports/planner.js";
 import type { Repo } from "../ports/repo.js";
 import type { Store } from "../ports/store.js";
 import type { Verify } from "../ports/verify.js";
-import type { DriverOutput } from "../ports/driver-output.js";
 
 // ---------------------------------------------------------------------------
 // ConfigSource — supervisor-owned live config (ARCHITECTURE §14)

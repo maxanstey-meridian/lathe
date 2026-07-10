@@ -157,6 +157,27 @@ export const tryParseFinalReview = (raw: string): FinalReview | null => {
   return null;
 };
 
+export const diagnoseFinalReviewParse = (raw: string): string => {
+  let syntaxError: string | null = null;
+  for (const candidate of balancedObjects(raw).reverse()) {
+    let value: unknown;
+    try {
+      value = JSON.parse(candidate);
+    } catch (err) {
+      syntaxError ??= err instanceof Error ? err.message : String(err);
+      continue;
+    }
+    const parsed = FinalReview.safeParse(value);
+    if (parsed.success) {
+      continue;
+    }
+    return parsed.error.issues
+      .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+      .join("; ");
+  }
+  return syntaxError ?? "no JSON object found in the reply";
+};
+
 // Fail closed: a final-review that still won't parse becomes request_changes.
 export const parseFinalReview = (raw: string): FinalReview =>
   tryParseFinalReview(raw) ?? {

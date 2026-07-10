@@ -34,6 +34,9 @@ importers:
       '@lathe/contract':
         specifier: workspace:*
         version: link:../../packages/contract
+      '@lathe/tail-state':
+        specifier: workspace:*
+        version: link:../../packages/tail-state
       '@nuxt/ui':
         specifier: ^4.6.1
         version: 4.9.0(ab84649aebea05f95bb90dc22e8a2fa2)
@@ -161,6 +164,9 @@ importers:
       '@lathe/contract':
         specifier: workspace:*
         version: link:../contract
+      '@lathe/tail-state':
+        specifier: workspace:*
+        version: link:../tail-state
       '@modelcontextprotocol/sdk':
         specifier: ^1.12.0
         version: 1.29.0(zod@3.25.76)
@@ -192,6 +198,28 @@ importers:
       tsup:
         specifier: ^8.5.0
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.16)(supports-color@10.2.2)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
+      tsx:
+        specifier: ^4.20.0
+        version: 4.22.4
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
+  packages/tail-state:
+    dependencies:
+      '@lathe/contract':
+        specifier: workspace:*
+        version: link:../contract
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.19.21
+      oxfmt:
+        specifier: ^0.55.0
+        version: 0.55.0
+      oxlint:
+        specifier: ^1.70.0
+        version: 1.70.0
       tsx:
         specifier: ^4.20.0
         version: 4.22.4

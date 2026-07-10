@@ -3,53 +3,22 @@
 // Daddy, and Super-daddy, a driver-event strip, and a status bar with the
 // tokens-until-rotation gauge. Writes nothing.
 
-import type { TailEvent, TailLineStyle, TailPaneLineDto, TailSnapshotDto, TailSpeaker } from "@lathe/contract";
+import type { TailEvent, TailSnapshotDto } from "@lathe/contract";
+import {
+  applyTailEvent,
+  isTerminalTailStatus,
+  tailStateFromSnapshot,
+  visiblePaneLines,
+} from "@lathe/tail-state";
+import type { TailPaneLine as PaneLine, TailPaneState as PaneState } from "@lathe/tail-state";
 import { render, Box, Text, useApp, useInput } from "ink";
 import React from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 export type TailUiDeps = {
   snapshot: TailSnapshotDto;
   subscribe: (onEvent: (event: TailEvent) => void) => { close: () => void };
 };
-
-const TERMINAL_STATUSES = ["ready_for_review", "blocked", "failed", "accepted"];
-
-type LineStyle = TailLineStyle | "tool";
-type PaneLine = { text: string; style: LineStyle };
-type PaneState = { lines: PaneLine[]; current: string; currentStyle: LineStyle; lastAt: number };
-
-const paneFromLines = (lines: TailPaneLineDto[]): PaneState => ({
-  lines: lines.slice(-300),
-  current: "",
-  currentStyle: "text",
-  lastAt: 0,
-});
-
-const pushDelta = (pane: PaneState, delta: string, style: LineStyle): PaneState => {
-  let { lines, current, currentStyle } = pane;
-  if (style !== currentStyle && current.trim()) {
-    lines = [...lines, { text: current, style: currentStyle }];
-    current = "";
-  }
-  currentStyle = style;
-  const segments = (current + delta).split("\n");
-  current = segments.pop() ?? "";
-  const newLines = segments.filter((s) => s.trim().length > 0).map((text) => ({ text, style }));
-  lines = [...lines, ...newLines].slice(-300);
-  return { lines, current, currentStyle, lastAt: Date.now() };
-};
-
-const pushToolLine = (pane: PaneState, text: string): PaneState => ({
-  lines: [
-    ...pane.lines,
-    ...(pane.current.trim() ? [{ text: pane.current, style: pane.currentStyle }] : []),
-    { text, style: "tool" as const },
-  ].slice(-300),
-  current: "",
-  currentStyle: pane.currentStyle,
-  lastAt: Date.now(),
-});
 
 const fmtDuration = (ms: number): string => {
   const s = Math.floor(ms / 1000);
@@ -82,10 +51,7 @@ const Pane = ({
 }) => {
   // 10s window: tool gaps (installs, typechecks) shouldn't flip "active" to "waiting".
   const active = Date.now() - pane.lastAt < 10_000;
-  const visible: PaneLine[] = [
-    ...pane.lines,
-    ...(pane.current.trim() ? [{ text: pane.current, style: pane.currentStyle }] : []),
-  ].slice(-(height - 3));
+  const visible: PaneLine[] = visiblePaneLines(pane).slice(-(height - 3));
   return (
     <Box
       flexDirection="column"
@@ -124,32 +90,24 @@ const Pane = ({
 
 const TailApp = ({ snapshot: initialSnapshot, subscribe }: TailUiDeps) => {
   const { exit } = useApp();
-  const [snapshot, setSnapshot] = useState<TailSnapshotDto | null>(initialSnapshot);
-  const [baby, setBaby] = useState<PaneState>(paneFromLines(initialSnapshot.panes.baby));
-  const [daddy, setDaddy] = useState<PaneState>(paneFromLines(initialSnapshot.panes.daddy));
-  const [superPane, setSuperPane] = useState<PaneState>(paneFromLines(initialSnapshot.panes.super));
-  const [driver, setDriver] = useState<PaneState>(paneFromLines(initialSnapshot.panes.driver));
-  const [events, setEvents] = useState<string[]>(
-    initialSnapshot.journal
-      .filter((entry) => entry.driver)
-      .map((entry) => entry.line.split("\n")[0] ?? "")
-      .slice(-50),
-  );
+  const [tail, setTail] = useState(() => tailStateFromSnapshot(initialSnapshot));
   const [now, setNow] = useState(Date.now());
-  const [stats, setStats] = useState({
-    ctx: initialSnapshot.contextTokens,
-    turn: initialSnapshot.turn,
-    rotations: initialSnapshot.rotations,
-    done: initialSnapshot.outcomesDone,
-    total: initialSnapshot.outcomesTotal,
-    gate: initialSnapshot.gateReason ?? "",
-    status: initialSnapshot.status,
-  });
-  const charsThisTurn = useRef(0);
-  const currentRunId = useRef(initialSnapshot.runId);
+  const snapshot = tail.snapshot;
+  const stats = tail.stats;
+  const baby = tail.panes.baby;
+  const daddy = tail.panes.daddy;
+  const superPane = tail.panes.super;
+  const driver = tail.panes.driver;
+  const events = tail.driverEvents;
   const startedAt = snapshot?.startedAt ? Date.parse(snapshot.startedAt) : Date.now();
-  const label = snapshot ? runLabel(snapshot.runId, snapshot.summary ?? undefined) : "no active run";
-  const babyModel = snapshot ? (snapshot.promoted ? `⬆ ${snapshot.models.promoted}` : snapshot.models.baby) : "";
+  const label = snapshot
+    ? runLabel(snapshot.runId, snapshot.summary ?? undefined)
+    : "no active run";
+  const babyModel = snapshot
+    ? snapshot.promoted
+      ? `⬆ ${snapshot.models.promoted}`
+      : snapshot.models.baby
+    : "";
 
   useInput((input, key) => {
     if (input === "q" || (key.ctrl && input === "c")) {
@@ -163,118 +121,8 @@ const TailApp = ({ snapshot: initialSnapshot, subscribe }: TailUiDeps) => {
   }, []);
 
   useEffect(() => {
-    const apply = (speaker: TailSpeaker, fn: (p: PaneState) => PaneState) => {
-      if (speaker === "baby") {
-        setBaby(fn);
-      } else if (speaker === "daddy") {
-        setDaddy(fn);
-      } else {
-        setSuperPane(fn);
-      }
-    };
-
     const sub = subscribe((event) => {
-      if (event.kind === "tail.run.changed") {
-        if (event.snapshot) {
-          currentRunId.current = event.snapshot.runId;
-          setSnapshot(event.snapshot);
-          setEvents(
-            event.snapshot.journal
-              .filter((entry) => entry.driver)
-              .map((entry) => entry.line.split("\n")[0] ?? "")
-              .slice(-50),
-          );
-          setStats({
-            ctx: event.snapshot.contextTokens,
-            turn: event.snapshot.turn,
-            rotations: event.snapshot.rotations,
-            done: event.snapshot.outcomesDone,
-            total: event.snapshot.outcomesTotal,
-            gate: event.snapshot.gateReason ?? "",
-            status: event.snapshot.status,
-          });
-          setBaby(paneFromLines(event.snapshot.panes.baby));
-          setDaddy(paneFromLines(event.snapshot.panes.daddy));
-          setSuperPane(paneFromLines(event.snapshot.panes.super));
-          setDriver(paneFromLines(event.snapshot.panes.driver));
-          charsThisTurn.current = 0;
-        } else {
-          currentRunId.current = "";
-          setSnapshot(null);
-          setEvents([]);
-          setBaby(paneFromLines([]));
-          setDaddy(paneFromLines([]));
-          setSuperPane(paneFromLines([]));
-          setDriver(paneFromLines([]));
-          charsThisTurn.current = 0;
-        }
-        return;
-      }
-
-      if ("runId" in event && event.runId !== currentRunId.current) {
-        return;
-      }
-      if (event.kind === "tail.panes.replaced") {
-        setBaby(paneFromLines(event.panes.baby));
-        setDaddy(paneFromLines(event.panes.daddy));
-        setSuperPane(paneFromLines(event.panes.super));
-        setDriver(paneFromLines(event.panes.driver));
-        return;
-      }
-      if (event.kind === "tail.journal") {
-        if (event.driver) {
-          setEvents((prev) => [...prev, event.line.split("\n")[0] ?? ""].slice(-50));
-        }
-        return;
-      }
-      if (event.kind === "tail.stats") {
-        charsThisTurn.current = 0;
-        setSnapshot((prev) => prev ? ({ ...prev, promoted: event.promoted, status: event.status }) : prev);
-        setStats({
-          ctx: event.contextTokens,
-          turn: event.turn,
-          rotations: event.rotations,
-          done: event.outcomesDone,
-          total: event.outcomesTotal,
-          gate: event.gateReason ?? "",
-          status: event.status,
-        });
-        return;
-      }
-      if (event.kind === "tail.pane.delta") {
-        if (event.speaker === "baby") {
-          charsThisTurn.current += event.text.length;
-        }
-        apply(event.speaker, (p) => pushDelta(p, event.text, event.style));
-        return;
-      }
-      if (event.kind === "tail.pane.tool") {
-        apply(event.speaker, (p) =>
-          pushToolLine(
-            p,
-            `${event.status === "error" ? "✗" : "·"} ${event.tool}${event.detail ? ` ${event.detail}` : ""}`,
-          ),
-        );
-        return;
-      }
-      if (event.kind === "tail.driver.delta") {
-        setDriver((pane) => pushDelta(pane, event.text, event.stream === "stderr" ? "think" : "text"));
-        return;
-      }
-      if (event.kind === "tail.driver.command") {
-        setDriver((pane) => pushToolLine(
-          pane,
-          event.status === "running"
-            ? `[${event.phase}] $ ${event.command}`
-            : event.timedOut
-              ? "timed out"
-              : `exit ${event.exitCode ?? 1}`,
-        ));
-        return;
-      }
-      if (event.kind === "tail.super.verdict") {
-        return;
-      }
+      setTail((current) => applyTailEvent(current, event, Date.now()));
     });
     return () => {
       sub.close();
@@ -288,6 +136,9 @@ const TailApp = ({ snapshot: initialSnapshot, subscribe }: TailUiDeps) => {
       </Box>
     );
   }
+  if (!stats) {
+    return null;
+  }
 
   const rows = process.stdout.rows ?? 35;
   const columns = process.stdout.columns ?? 80;
@@ -298,11 +149,11 @@ const TailApp = ({ snapshot: initialSnapshot, subscribe }: TailUiDeps) => {
   const daddyWidth = Math.floor((frameWidth - babyWidth) / 2);
   const superWidth = frameWidth - babyWidth - daddyWidth;
   const paneHeight = Math.max(8, rows - 9);
-  const ctxEstimate = stats.ctx + Math.round(charsThisTurn.current / 4);
+  const ctxEstimate = stats.contextTokens + Math.round(tail.charsThisTurn / 4);
   const fraction = Math.min(1, snapshot.budget > 0 ? ctxEstimate / snapshot.budget : 0);
   const barWidth = 24;
   const filled = Math.round(fraction * barWidth);
-  const terminal = TERMINAL_STATUSES.includes(stats.status);
+  const terminal = isTerminalTailStatus(stats.status);
 
   return (
     <Box flexDirection="column" width={frameWidth} overflow="hidden">
@@ -341,20 +192,28 @@ const TailApp = ({ snapshot: initialSnapshot, subscribe }: TailUiDeps) => {
         overflow="hidden"
         paddingX={1}
       >
-        {[
-          ...driver.lines,
-          ...(driver.current.trim() ? [{ text: driver.current, style: driver.currentStyle }] : []),
-        ].slice(-3).map((line, i) => (
-          <Text key={`driver-${i}`} dimColor={line.style === "think"} color={line.style === "tool" ? "yellow" : undefined} wrap="truncate-end">
-            {line.text}
-          </Text>
-        ))}
-        {driver.lines.length === 0 && !driver.current.trim() && events.slice(-3).map((line, i) => (
-          <Text key={i} wrap="truncate-end">
-            {line}
-          </Text>
-        ))}
-        {driver.lines.length === 0 && !driver.current.trim() && events.length === 0 && <Text dimColor>no driver events yet</Text>}
+        {visiblePaneLines(driver)
+          .slice(-3)
+          .map((line, i) => (
+            <Text
+              key={`driver-${i}`}
+              dimColor={line.style === "think"}
+              color={line.style === "tool" ? "yellow" : undefined}
+              wrap="truncate-end"
+            >
+              {line.text}
+            </Text>
+          ))}
+        {driver.lines.length === 0 &&
+          !driver.current.trim() &&
+          events.slice(-3).map((line, i) => (
+            <Text key={i} wrap="truncate-end">
+              {line}
+            </Text>
+          ))}
+        {driver.lines.length === 0 && !driver.current.trim() && events.length === 0 && (
+          <Text dimColor>no driver events yet</Text>
+        )}
       </Box>
       <Box paddingX={1}>
         <Text wrap="truncate-end">
@@ -365,9 +224,9 @@ const TailApp = ({ snapshot: initialSnapshot, subscribe }: TailUiDeps) => {
           </Text>{" "}
           {(ctxEstimate / 1000).toFixed(1)}k/{(snapshot.budget / 1000).toFixed(0)}k
           {stats.rotations > 0 ? ` ♻×${stats.rotations}` : ""}
-          {"  "}⏱ {fmtDuration(now - startedAt)} turn {stats.turn || "1"} ✓{stats.done}/
-          {stats.total}
-          {stats.gate ? <Text color="red"> ⛔ {stats.gate.slice(0, 30)}</Text> : ""}
+          {"  "}⏱ {fmtDuration(now - startedAt)} turn {stats.turn || "1"} ✓{stats.outcomesDone}/
+          {stats.outcomesTotal}
+          {stats.gateReason ? <Text color="red"> ⛔ {stats.gateReason.slice(0, 30)}</Text> : ""}
           {terminal ? <Text color="yellow"> [{stats.status}]</Text> : ""}
           <Text color="cyan"> {label}</Text>
           <Text dimColor> q quits</Text>

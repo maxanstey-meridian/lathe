@@ -1,22 +1,9 @@
-import { type TailEvent } from "@lathe/contract";
+import { TAIL_EVENT_KINDS, type TailEvent } from "@lathe/contract";
+import { applyTailEvent, tailStateFromSnapshot } from "@lathe/tail-state";
 import { onUnmounted, ref, watch } from "vue";
 
 import { daemonTailEventsUrl, daemonTailRunEventsUrl } from "../logic/daemon-url";
-import { applyTailEvent, tailStateFromSnapshot } from "../logic/tail-state";
 import type { LatheTail } from "../ports/lathe-tail";
-
-const TAIL_EVENT_KINDS = [
-  "tail.journal",
-  "tail.stats",
-  "tail.pane.delta",
-  "tail.pane.tool",
-  "tail.panes.replaced",
-  "tail.driver.command",
-  "tail.driver.delta",
-  "tail.super.verdict",
-  "tail.run.changed",
-  "tail.ping",
-] as const;
 
 export const useLatheTail = (): LatheTail => {
   const runtimeConfig = useRuntimeConfig();
@@ -41,6 +28,10 @@ export const useLatheTail = (): LatheTail => {
     generation += 1;
     const ownGeneration = generation;
     eventSource?.close();
+    state.value = tailStateFromSnapshot(null);
+    isLoading.value = true;
+    isLive.value = false;
+    errorMessage.value = null;
 
     const url = selectedRunId.value
       ? daemonTailRunEventsUrl(runtimeConfig.public.apiBaseUrl, selectedRunId.value)
@@ -51,7 +42,6 @@ export const useLatheTail = (): LatheTail => {
     source.onopen = () => {
       if (ownGeneration !== generation) return;
       isLive.value = true;
-      isLoading.value = false;
     };
 
     source.onerror = () => {
@@ -67,6 +57,9 @@ export const useLatheTail = (): LatheTail => {
         const event = JSON.parse(raw.data) as TailEvent;
         errorMessage.value = null;
         state.value = applyTailEvent(state.value, event, Date.now());
+        if (event.kind === "tail.run.changed") {
+          isLoading.value = false;
+        }
       });
     }
 

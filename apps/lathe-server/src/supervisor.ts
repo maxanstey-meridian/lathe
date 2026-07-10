@@ -51,9 +51,11 @@ import {
 } from "@lathe/core";
 import type { OpencodeEvent, OpencodeMessage } from "@lathe/core";
 
-import type { EventBus, AppDeps, LatheEvent, TailEventBus } from "./app.js";
+import type { EventBus, AppDeps, TailEventBus } from "./server-host.js";
 import type { Reviewer, ReviewDto, StatusDto, TailEvent, TailSnapshotDto, TailSpeaker } from "@lathe/contract";
-import { createEventBus, createTailEventBus } from "./app.js";
+import type { LatheEvent } from "@lathe/contract";
+import { createEventBus, createTailEventBus } from "./server-host.js";
+import { createTailProjectionRetention } from "./tail-projection-retention.js";
 import { projectJournalEvent } from "./event-projection.js";
 import type { ProjectionContext } from "./event-projection.js";
 import { createTailPaneProjection, type TailPaneProjection } from "./tail-pane-projection.js";
@@ -175,10 +177,12 @@ export type Supervisor = {
   getStatus(): StatusDto;
   /** Morning triage snapshot for `lathe review`. */
   getReview(): ReviewDto;
-  /** Full daemon-owned snapshot for tail presentation. */
-  getTailSnapshot(runId: string): TailSnapshotDto | undefined;
-  /** Active run/convergence tail snapshot, or null when nothing is active. */
-  getActiveTailSnapshot(): TailSnapshotDto | null;
+  /** Hydrated daemon-owned snapshot for tail presentation. */
+  prepareTailSnapshot(runId: string): Promise<TailSnapshotDto | undefined>;
+  /** Hydrated active run/convergence snapshot, or null when nothing is active. */
+  prepareActiveTailSnapshot(): Promise<TailSnapshotDto | null>;
+  /** Canonical active tail target without hydration. */
+  resolveActiveTailRunId(): string | null;
   /** Outcome roll-up for run detail DTOs. */
   outcomes(runId: string): string;
   /** Packet/journal-backed fields for run DTOs. */
@@ -222,6 +226,17 @@ type TailStats = Pick<
   | "status"
   | "promoted"
 >;
+
+export const _testMergePolledTailStats = (
+  contextTokens: number,
+  previous: TailStats | undefined,
+  canonical: Omit<TailStats, "contextTokens">,
+): TailStats => ({
+  ...canonical,
+  contextTokens,
+  turn: previous?.turn ?? canonical.turn,
+  rotations: previous?.rotations ?? canonical.rotations,
+});
 
 const TAIL_SNAPSHOT_JOURNAL_LIMIT = 500;
 
@@ -324,6 +339,15 @@ export const resolveSpeaker = (store: Store, runId: string, sessionId: string): 
   return undefined;
 };
 
+export const _testSelectActiveTailRunId = (
+  activeRuns: Array<{ runId: string; startedAt: string }>,
+  activeConvergences: Array<{ runId: string; startedAt: string }>,
+): string | null => {
+  const newest = <T extends { runId: string; startedAt: string }>(entries: T[]): T | undefined =>
+    entries.toSorted((a, b) => b.startedAt.localeCompare(a.startedAt) || b.runId.localeCompare(a.runId))[0];
+  return newest(activeRuns)?.runId ?? newest(activeConvergences)?.runId ?? null;
+};
+
 export const createOpenCodeTailProjector = (
   speakerFor: (runId: string, sessionId: string) => "baby" | "daddy" | "super" | undefined,
   publish: (event: TailEvent) => void,
@@ -331,6 +355,8 @@ export const createOpenCodeTailProjector = (
 
 type TailHydrator = {
   hydrateRun(runId: string, force?: boolean): Promise<void>;
+  clearRun(runId: string): void;
+  isHydrating(runId: string): boolean;
 };
 
 const createTailHydrator = (
@@ -338,6 +364,7 @@ const createTailHydrator = (
   store: Store,
   projection: TailPaneProjection,
   publish: (event: TailEvent) => void,
+  settled: () => void,
 ): TailHydrator => {
   const readHistory = createMessageHistoryReader(config);
   const hydrated = new Map<string, string>();
@@ -390,16 +417,23 @@ const createTailHydrator = (
         await Promise.all(
           (["baby", "daddy", "super"] as const).map((speaker) => hydrateSpeaker(runId, speaker, forceThisPass)),
         );
-        publish({ kind: "tail.panes.replaced", runId, panes: projection.panes(runId) });
+        publish({ kind: "tail.agent.panes.replaced", runId, panes: projection.panes(runId) });
       } while (state.forceRequested);
     })().finally(() => {
       inFlight.delete(runId);
+      settled();
     });
     inFlight.set(runId, state);
     return state.promise;
   };
 
-  return { hydrateRun };
+  const clearRun = (runId: string): void => {
+    for (const key of hydrated.keys()) {
+      if (key.startsWith(`${runId}:`)) hydrated.delete(key);
+    }
+  };
+
+  return { hydrateRun, clearRun, isHydrating: (runId) => inFlight.has(runId) };
 };
 
 const startTailOpenCode = (
@@ -410,6 +444,9 @@ const startTailOpenCode = (
   pollIntervalMs: number,
   tailProjector: TailPaneProjection,
   hydrator: TailHydrator,
+  publishTokenStats: (runId: string, contextTokens: number) => void,
+  onRunActive: (runId: string) => void,
+  onRunInactive: (runId: string) => void,
 ): TailOpenCodeHandle => {
   const events = createEvents(config);
   const readContextTokens = createContextTokenReader(config);
@@ -419,6 +456,7 @@ const startTailOpenCode = (
   const onOpenCodeEvent = tailProjector.project;
 
   const ensureRun = (meta: RunMeta): void => {
+    onRunActive(meta.runId);
     if (subscriptions.has(meta.runId)) {
       void hydrator.hydrateRun(meta.runId);
       return;
@@ -439,6 +477,7 @@ const startTailOpenCode = (
       sub.close();
     }
     subscriptions.delete(runId);
+    onRunInactive(runId);
   };
 
   const syncSubscriptions = (): void => {
@@ -462,27 +501,7 @@ const startTailOpenCode = (
         if (typeof tokens !== "number") {
           continue;
         }
-        const counts = (() => {
-          try {
-            const ledger = store.readLedger(runId);
-            return { done: ledger.outcomes.filter((outcome) => outcome.status === "done").length, total: ledger.outcomes.length };
-          } catch {
-            return { done: 0, total: 0 };
-          }
-        })();
-        tailBus.publish({
-          kind: "tail.stats",
-          runId,
-          at: new Date().toISOString(),
-          contextTokens: tokens,
-          turn: 0,
-          rotations: 0,
-          outcomesDone: counts.done,
-          outcomesTotal: counts.total,
-          gateReason: null,
-          status: meta.status,
-          promoted: meta.promoted,
-        });
+        publishTokenStats(runId, tokens);
       }
     } finally {
       tokenPollInFlight = false;
@@ -532,10 +551,8 @@ export const createSupervisor = (
 
   // Derive a single "compatibility" active run from multi-row state:
   // newest startedAt descending, or undefined if no active runs.
-  const firstActiveRun = () => {
-    const runs = store.listActiveRuns().sort((a, b) => (b.startedAt > a.startedAt ? 1 : -1));
-    return runs[0];
-  };
+  const activeTailRunId = (): string | null =>
+    _testSelectActiveTailRunId(store.listActiveRuns(), store.listActiveConvergences());
 
   // --- Lifecycle seams ---
 
@@ -567,7 +584,8 @@ export const createSupervisor = (
     (runId, sessionId) => resolveSpeaker(store, runId, sessionId),
     (event) => tailBus.publish(event),
   );
-  const tailHydrator = createTailHydrator(config, store, tailProjection, (event) => tailBus.publish(event));
+  let enforceTailRetention = (): void => {};
+  const tailHydrator = createTailHydrator(config, store, tailProjection, (event) => tailBus.publish(event), () => enforceTailRetention());
   const driverOutput: DriverOutput = {
     verification: (
       runId: string,
@@ -582,6 +600,7 @@ export const createSupervisor = (
             commandId: event.commandId,
             stream: event.stream,
             text: event.chunk,
+            at: clock.nowIso(),
           }
         : event.kind === "started"
           ? {
@@ -591,6 +610,7 @@ export const createSupervisor = (
               commandId: event.commandId,
               command: event.command,
               status: "running",
+              at: clock.nowIso(),
             }
           : {
             kind: "tail.driver.command",
@@ -599,8 +619,9 @@ export const createSupervisor = (
             commandId: event.commandId,
             command: event.command,
             status: event.exitCode === 0 ? "completed" : "error",
-            exitCode: event.exitCode,
-            timedOut: event.timedOut,
+              exitCode: event.exitCode,
+              timedOut: event.timedOut,
+              at: clock.nowIso(),
           };
       tailProjection.projectDriver(wire);
     },
@@ -668,6 +689,16 @@ export const createSupervisor = (
   };
 
   const tailStatsByRun = new Map<string, TailStats>();
+  const tailRetention = createTailProjectionRetention(
+    8,
+    (runId) => tailHydrator.isHydrating(runId),
+    (runId) => {
+      tailProjection.clearRun(runId);
+      tailHydrator.clearRun(runId);
+      tailStatsByRun.delete(runId);
+    },
+  );
+  enforceTailRetention = tailRetention.enforce;
 
   const cacheTailStats = (snapshot: TailSnapshotDto): TailStats => {
     const stats: TailStats = {
@@ -682,6 +713,25 @@ export const createSupervisor = (
     };
     tailStatsByRun.set(snapshot.runId, stats);
     return stats;
+  };
+
+  const publishPolledTailStats = (runId: string, contextTokens: number): void => {
+    const meta = store.readMetaIfExists(runId);
+    if (!meta) return;
+    const journalStats = store.readJournalStats(runId);
+    const counts = outcomeCounts(runId);
+    const previous = tailStatsByRun.get(runId);
+    const stats = _testMergePolledTailStats(contextTokens, previous, {
+      turn: journalStats.turn,
+      rotations: journalStats.rotations,
+      outcomesDone: counts.done,
+      outcomesTotal: counts.total,
+      gateReason: gateLatchReason(runId),
+      status: meta.status,
+      promoted: meta.promoted,
+    });
+    tailStatsByRun.set(runId, stats);
+    tailBus.publish({ kind: "tail.stats", runId, at: clock.nowIso(), ...stats });
   };
 
   const updateTailStats = (runId: string, event: JournalEvent): TailStats | undefined => {
@@ -718,13 +768,12 @@ export const createSupervisor = (
     return next;
   };
 
-  const getTailSnapshot = (runId: string): TailSnapshotDto | undefined => {
+  const buildTailSnapshot = (runId: string): TailSnapshotDto | undefined => {
     const meta = store.readMetaIfExists(runId);
     if (!meta) {
       return undefined;
     }
-    void tailHydrator.hydrateRun(runId);
-
+    tailRetention.touch(runId);
     const journalRows = store.readRecentJournalWithSeq(runId, TAIL_SNAPSHOT_JOURNAL_LIMIT);
     const latestReview = store.readJournal(runId).findLast((event) => event.event === "super_review");
     if (latestReview?.event === "super_review") {
@@ -757,6 +806,7 @@ export const createSupervisor = (
       turn: journalStats.turn,
       rotations: journalStats.rotations,
       panes: tailProjection.panes(runId),
+      driverCommands: tailProjection.driverCommands(runId),
       journal: journalRows.map(({ seq, event }) => ({
         seq,
         at: event.at,
@@ -768,6 +818,29 @@ export const createSupervisor = (
     };
     cacheTailStats(snapshot);
     return snapshot;
+  };
+
+  const prepareRunTailSnapshot = async (runId: string) => {
+    if (!store.readMetaIfExists(runId)) {
+      return { snapshot: null, revision: tailBus.revision() };
+    }
+    await tailHydrator.hydrateRun(runId);
+    const snapshot = buildTailSnapshot(runId) ?? null;
+    return { snapshot, revision: tailBus.revision() };
+  };
+
+  const prepareActiveTailState = async () => {
+    let runId = activeTailRunId();
+    while (runId) {
+      await tailHydrator.hydrateRun(runId);
+      const current = activeTailRunId();
+      if (current === runId) {
+        const snapshot = buildTailSnapshot(runId) ?? null;
+        return { snapshot, revision: tailBus.revision() };
+      }
+      runId = current;
+    }
+    return { snapshot: null, revision: tailBus.revision() };
   };
 
   const runReadModel = (runId: string): RunReadModel => {
@@ -888,7 +961,7 @@ export const createSupervisor = (
       ];
     });
 
-    const snapshot = getTailSnapshot(runId);
+    const snapshot = buildTailSnapshot(runId);
     if (!snapshot) {
       return events;
     }
@@ -923,6 +996,9 @@ export const createSupervisor = (
     pollIntervalMs,
     tailProjection,
     tailHydrator,
+    publishPolledTailStats,
+    (runId) => tailRetention.pin(runId),
+    (runId) => tailRetention.unpin(runId),
   );
 
   return {
@@ -1036,16 +1112,16 @@ export const createSupervisor = (
       return { runs };
     },
 
-    getTailSnapshot(runId: string): TailSnapshotDto | undefined {
-      return getTailSnapshot(runId);
+    async prepareTailSnapshot(runId: string): Promise<TailSnapshotDto | undefined> {
+      return (await prepareRunTailSnapshot(runId)).snapshot ?? undefined;
     },
 
-    getActiveTailSnapshot(): TailSnapshotDto | null {
-      const runId = firstActiveRun()?.runId ?? store.listActiveConvergences()[0]?.runId;
-      if (!runId) {
-        return null;
-      }
-      return getTailSnapshot(runId) ?? null;
+    async prepareActiveTailSnapshot(): Promise<TailSnapshotDto | null> {
+      return (await prepareActiveTailState()).snapshot;
+    },
+
+    resolveActiveTailRunId(): string | null {
+      return activeTailRunId();
     },
 
     listStaged(): Array<{ runId: string; parentRunId: string | undefined }> {
@@ -1101,13 +1177,9 @@ export const createSupervisor = (
         },
         readTailEventsSince: (seq: number, runId: string): TailEvent[] =>
           replayTailEventsSince(seq, runId),
-        prepareTailSnapshot: async (runId: string | null): Promise<string | null> => {
-          const target = runId ?? firstActiveRun()?.runId ?? store.listActiveConvergences()[0]?.runId;
-          if (target) {
-            await tailHydrator.hydrateRun(target);
-          }
-          return target ?? null;
-        },
+        prepareTailSnapshot: (runId: string | null) =>
+          runId === null ? prepareActiveTailState() : prepareRunTailSnapshot(runId),
+        resolveActiveTailRunId: () => activeTailRunId(),
       };
     },
 

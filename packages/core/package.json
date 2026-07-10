@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@lathe/contract": "workspace:*",
+    "@lathe/tail-state": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "ink": "^5.1.0",
     "react": "^18.3.1",

@@ -146,17 +146,16 @@ test("runAutoFix: completion is reported outside the isolated presentation obser
   const wt = tempWorktree();
   try {
     const results: Array<{ command: string; exitCode: number }> = [];
-    await makeVerify().runAutoFix(
-      [{ command: "printf fixed" }],
-      ["src/file.ts"],
-      wt,
-      5_000,
-      {
-        onEvent: () => { throw new Error("presentation failed"); },
-        onResult: (result) => results.push(result),
+    await makeVerify().runAutoFix([{ command: "printf fixed" }], ["src/file.ts"], wt, 5_000, {
+      onEvent: () => {
+        throw new Error("presentation failed");
       },
+      onResult: (result) => results.push(result),
+    });
+    deepStrictEqual(
+      results.map(({ exitCode }) => exitCode),
+      [0],
     );
-    deepStrictEqual(results.map(({ exitCode }) => exitCode), [0]);
   } finally {
     cleanup(wt);
   }
@@ -186,19 +185,20 @@ test("run: streams stdout before command completion", async () => {
   try {
     let settled = false;
     let firstChunk: (() => void) | undefined;
-    const observed = new Promise<void>((resolve) => { firstChunk = resolve; });
-    const running = makeVerify().run(
-      [{ command: "printf first; sleep 0.2; printf second" }],
-      wt,
-      5_000,
-      {
+    const observed = new Promise<void>((resolve) => {
+      firstChunk = resolve;
+    });
+    const running = makeVerify()
+      .run([{ command: "printf first; sleep 0.2; printf second" }], wt, 5_000, {
         onEvent: (event) => {
           if (event.kind === "output") {
             firstChunk?.();
           }
         },
-      },
-    ).finally(() => { settled = true; });
+      })
+      .finally(() => {
+        settled = true;
+      });
 
     await observed;
     equal(settled, false, "first chunk is observable while the process is still running");
@@ -221,8 +221,17 @@ test("run: tags stdout and stderr and emits one terminal event", async () => {
     );
 
     equal(result?.exitCode, 7);
-    deepStrictEqual(events.filter((event) => event.kind === "output").map((event) => event.stream).sort(), ["stderr", "stdout"]);
-    deepStrictEqual(events.filter((event) => event.kind === "finished").map((event) => event.exitCode), [7]);
+    deepStrictEqual(
+      events
+        .filter((event) => event.kind === "output")
+        .map((event) => event.stream)
+        .sort(),
+      ["stderr", "stdout"],
+    );
+    deepStrictEqual(
+      events.filter((event) => event.kind === "finished").map((event) => event.exitCode),
+      [7],
+    );
   } finally {
     cleanup(wt);
   }
@@ -232,19 +241,39 @@ test("run: timeout returns 124 and cancellation returns 130", async () => {
   const wt = tempWorktree();
   try {
     const timeoutEvents: Array<{ kind: string; timedOut?: boolean }> = [];
-    const [timedOut] = await makeVerify().run(
-      [{ command: "sleep 5" }],
-      wt,
-      30,
-      { onEvent: (event) => timeoutEvents.push(event) },
-    );
+    const [timedOut] = await makeVerify().run([{ command: "sleep 5" }], wt, 30, {
+      onEvent: (event) => timeoutEvents.push(event),
+    });
     equal(timedOut?.exitCode, 124);
     equal(timeoutEvents.find((event) => event.kind === "finished")?.timedOut, true);
 
     const controller = new AbortController();
-    const cancelled = makeVerify().run([{ command: "sleep 5" }], wt, 5_000, { signal: controller.signal });
+    const cancelled = makeVerify().run([{ command: "sleep 5" }], wt, 5_000, {
+      signal: controller.signal,
+    });
     setTimeout(() => controller.abort(), 30);
     equal((await cancelled)[0]?.exitCode, 130);
+  } finally {
+    cleanup(wt);
+  }
+});
+
+test("run: the first termination cause wins while process-group cleanup is pending", async () => {
+  const wt = tempWorktree();
+  try {
+    const cancellation = new AbortController();
+    const cancelled = makeVerify().run([{ command: "trap '' TERM; sleep 5" }], wt, 80, {
+      signal: cancellation.signal,
+    });
+    setTimeout(() => cancellation.abort(), 20);
+    equal((await cancelled)[0]?.exitCode, 130);
+
+    const lateCancellation = new AbortController();
+    const timedOut = makeVerify().run([{ command: "trap '' TERM; sleep 5" }], wt, 20, {
+      signal: lateCancellation.signal,
+    });
+    setTimeout(() => lateCancellation.abort(), 80);
+    equal((await timedOut)[0]?.exitCode, 124);
   } finally {
     cleanup(wt);
   }
@@ -256,7 +285,12 @@ test("run: cancellation escalates to kill a SIGTERM-resistant descendant", async
   try {
     const controller = new AbortController();
     const running = makeVerify().run(
-      [{ command: "(trap '' TERM; while true; do sleep 1; done) </dev/null >/dev/null 2>&1 & echo $! > descendant.pid; wait" }],
+      [
+        {
+          command:
+            "(trap '' TERM; while true; do sleep 1; done) </dev/null >/dev/null 2>&1 & echo $! > descendant.pid; wait",
+        },
+      ],
       wt,
       5_000,
       { signal: controller.signal },
@@ -292,11 +326,7 @@ test("run: cancellation escalates to kill a SIGTERM-resistant descendant", async
 test("run: a command that exits before the deadline is not misclassified while descendants hold pipes", async () => {
   const wt = tempWorktree();
   try {
-    const [result] = await makeVerify().run(
-      [{ command: "sleep 1 & disown; exit 0" }],
-      wt,
-      50,
-    );
+    const [result] = await makeVerify().run([{ command: "sleep 1 & disown; exit 0" }], wt, 50);
     equal(result?.exitCode, 0);
   } finally {
     cleanup(wt);
@@ -307,12 +337,9 @@ test("run: abort after process exit does not reclassify success as cancellation"
   const wt = tempWorktree();
   try {
     const controller = new AbortController();
-    const running = makeVerify().run(
-      [{ command: "sleep 1 & disown; exit 0" }],
-      wt,
-      5_000,
-      { signal: controller.signal },
-    );
+    const running = makeVerify().run([{ command: "sleep 1 & disown; exit 0" }], wt, 5_000, {
+      signal: controller.signal,
+    });
     setTimeout(() => controller.abort(), 150);
     equal((await running)[0]?.exitCode, 0);
   } finally {
@@ -341,8 +368,14 @@ test("run: repeated commands get distinct IDs, preserve input order, and ignore 
     );
 
     equal(new Set(ids).size, 2);
-    deepStrictEqual(results.map((result) => result.command), ["sleep 0.05; printf one", "printf two"]);
-    deepStrictEqual(results.map((result) => result.exitCode), [0, 0]);
+    deepStrictEqual(
+      results.map((result) => result.command),
+      ["sleep 0.05; printf one", "printf two"],
+    );
+    deepStrictEqual(
+      results.map((result) => result.exitCode),
+      [0, 0],
+    );
   } finally {
     cleanup(wt);
   }

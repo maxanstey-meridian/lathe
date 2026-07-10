@@ -4,10 +4,10 @@ import { mount } from "@vue/test-utils";
 
 import type { StatusDto } from "../app/pages/index/ports/lathe-status";
 import type { TailSnapshotDto } from "@lathe/contract";
+import { tailStateFromSnapshot } from "@lathe/tail-state";
 import { provideLatheStatus } from "../app/pages/index/ports/lathe-status";
 import { provideLatheTail } from "../app/pages/index/ports/lathe-tail";
 import { provideLatheActions } from "../app/pages/index/ports/lathe-actions";
-import { tailStateFromSnapshot } from "../app/pages/index/logic/tail-state";
 import TailView from "../app/pages/index/components/TailView.vue";
 
 const makeSnapshot = (runId: string): TailSnapshotDto => ({
@@ -25,7 +25,8 @@ const makeSnapshot = (runId: string): TailSnapshotDto => ({
   contextTokens: 0,
   turn: 0,
   rotations: 0,
-  panes: { baby: [], daddy: [], super: [], driver: [] },
+  panes: { baby: [], daddy: [], super: [] },
+  driverCommands: [],
   journal: [],
   lastSeq: 0,
 });
@@ -44,6 +45,7 @@ const mountTailView = (
   statusRef: Ref<StatusDto | null>,
   tailRef: Ref<ReturnType<typeof tailStateFromSnapshot>>,
   stopMock: { callCount: number; lastRunId: string | null },
+  tailLoading = ref(false),
 ) => {
   const Harness = defineComponent({
     setup() {
@@ -58,7 +60,7 @@ const mountTailView = (
       });
       provideLatheTail({
         state: tailRef,
-        isLoading: ref(false),
+        isLoading: tailLoading,
         isLive: ref(true),
         errorMessage: ref(null),
         now: ref(Date.parse("2026-07-01T18:00:00.000Z")),
@@ -130,6 +132,21 @@ test("TailView: Stop button hidden when tailed run is not in activeRuns", () => 
   wrapper.unmount();
 });
 
+test("TailView: Stop button is disabled by absence while a selected run is loading", async () => {
+  const statusRef = ref(makeStatus(["tail-run"]));
+  const tailRef = ref(tailStateFromSnapshot(makeSnapshot("tail-run")));
+  const stopMock = { callCount: 0, lastRunId: null };
+  const tailLoading = ref(false);
+  const wrapper = mountTailView(statusRef, tailRef, stopMock, tailLoading);
+
+  expect(stopButtons(wrapper).length).toBe(1);
+  tailLoading.value = true;
+  await nextTick();
+  expect(stopButtons(wrapper).length).toBe(0);
+
+  wrapper.unmount();
+});
+
 test("TailView: Stop action targets the tailed run id", async () => {
   const statusRef = ref(makeStatus(["tail-run", "other-run"]));
   const tailRef = ref(tailStateFromSnapshot(makeSnapshot("tail-run")));
@@ -152,5 +169,30 @@ test("TailView: Stop action targets the tailed run id", async () => {
   expect(stopMock.callCount).toBe(1);
   expect(stopMock.lastRunId).toBe("tail-run");
 
+  wrapper.unmount();
+});
+
+test("TailView: driver verification pane is vertically resizable", async () => {
+  const statusRef = ref(makeStatus(["tail-run"]));
+  const tailRef = ref(tailStateFromSnapshot(makeSnapshot("tail-run")));
+  const stopMock = { callCount: 0, lastRunId: null };
+  const wrapper = mountTailView(statusRef, tailRef, stopMock);
+  const grid = wrapper.get(".tail-grid").element as HTMLElement;
+  const driverRegion = wrapper.get('[data-testid="driver-region"]');
+  Object.defineProperties(grid, {
+    clientHeight: { configurable: true, value: 400 },
+  });
+  Object.defineProperties(driverRegion.element, {
+    clientHeight: { configurable: true, value: 160 },
+  });
+
+  await wrapper.get('[aria-label="Resize agent and driver verification panes"]').trigger("pointerdown", {
+    button: 0,
+    clientY: 500,
+  });
+  window.dispatchEvent(new PointerEvent("pointermove", { clientY: 450 }));
+  await nextTick();
+
+  expect(driverRegion.attributes("style")).toContain("height: 210px");
   wrapper.unmount();
 });

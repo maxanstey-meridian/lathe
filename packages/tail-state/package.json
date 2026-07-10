@@ -1,0 +1,23 @@
+{
+  "name": "@lathe/tail-state",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "tsx --test tests/*.test.ts",
+    "lint": "oxlint src tests",
+    "fmt": "oxfmt src tests"
+  },
+  "dependencies": {
+    "@lathe/contract": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "oxfmt": "^0.55.0",
+    "oxlint": "^1.70.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.7.0"
+  }
+}

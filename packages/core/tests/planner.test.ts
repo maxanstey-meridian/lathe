@@ -114,6 +114,84 @@ describe("createPlanner.consult", () => {
     assert.match(consultPrompt, /Session rotations: 2/);
     assert.match(consultPrompt, /test-outcome: in_progress; evidence=started/);
   });
+
+  it("rejects an accepted code decision until Daddy inspects the repository", async () => {
+    const validJson = JSON.stringify({
+      status: "proceed",
+      answer: "ok",
+      constraints: [],
+      evidence_used: ["src/example.ts"],
+      safe_next_action: "continue",
+      human_decision_needed: null,
+    });
+    const sent: string[] = [];
+    const mockExecutor = {
+      createSession: async () => "test-session",
+      sendMessage: async (_sessionId: string, prompt: string) => {
+        sent.push(prompt);
+        if (sent.length === 1) {
+          return mockResponse("PLANNER_OK");
+        }
+        if (sent.length === 2) {
+          return mockResponse(validJson);
+        }
+        return {
+          ...mockResponse(validJson),
+          parts: [
+            { type: "tool", tool: "read", state: { status: "completed" } },
+            { type: "text", text: validJson },
+          ],
+        };
+      },
+      listMessages: async () => [],
+      deleteSession: async () => {},
+    } as unknown as Executor;
+
+    const planner = createPlanner(mockExecutor, modelConfig, 30000);
+    await planner.handshake("seed", "test-dir");
+    const result = await planner.consult({
+      ...minConsult(),
+      questionType: "architecture_discoverable",
+    });
+
+    assert.equal(result.status, "proceed");
+    assert.equal(sent.length, 3);
+    assert.match(sent[2] ?? "", /used no repository inspection tool/);
+    assert.match(sent[2] ?? "", /Use read, grep, glob, GitNexus, or ast-grep now/);
+  });
+
+  it("stops when accepted replies remain ungrounded after all re-asks", async () => {
+    const ungroundedJson = JSON.stringify({
+      status: "proceed",
+      answer: "ok",
+      constraints: [],
+      evidence_used: [],
+      safe_next_action: "continue",
+      human_decision_needed: null,
+    });
+    let sendCount = 0;
+    const executor = {
+      createSession: async () => "test-session",
+      sendMessage: async () => {
+        sendCount++;
+        return sendCount === 1 ? mockResponse("PLANNER_OK") : mockResponse(ungroundedJson);
+      },
+      listMessages: async () => [],
+      deleteSession: async () => {},
+    } as unknown as Executor;
+
+    const planner = createPlanner(executor, modelConfig, 30000);
+    await planner.handshake("seed", "test-dir");
+    const result = await planner.consult({
+      ...minConsult(),
+      questionType: "architecture_discoverable",
+    });
+
+    assert.equal(sendCount, 5);
+    assert.equal(result.status, "stop");
+    assert.equal(result.human_decision_needed, null);
+    assert.match(result.answer, /used no repository inspection tool/);
+  });
 });
 
 describe("createPlanner.syncMaxDecisions", () => {
@@ -174,6 +252,58 @@ describe("createPlanner.syncMaxDecisions", () => {
       ]),
       /Daddy sync failed/,
     );
+  });
+
+  it("recovers sync ack from a non-final message in the current exchange", async () => {
+    let listCalls = 0;
+    let sendCalls = 0;
+    const executor = {
+      createSession: async () => "test-session",
+      sendMessage: async () => {
+        sendCalls++;
+        return sendCalls === 1 ? mockResponse("PLANNER_OK") : emptyAssistant;
+      },
+      listMessages: async () => {
+        listCalls++;
+        if (listCalls === 1) {
+          return [];
+        }
+        if (listCalls === 2) {
+          return [
+            {
+              info: { id: "seed", sessionID: "s", role: "assistant" },
+              parts: [{ type: "text", text: "PLANNER_OK" }],
+            },
+          ];
+        }
+        if (listCalls === 3) {
+          return [
+            {
+              info: { id: "old", sessionID: "s", role: "assistant" },
+              parts: [{ type: "text", text: "old" }],
+            },
+          ];
+        }
+        return [
+          {
+            info: { id: "old", sessionID: "s", role: "assistant" },
+            parts: [{ type: "text", text: "old" }],
+          },
+          {
+            info: { id: "sync", sessionID: "s", role: "assistant" },
+            parts: [{ type: "text", text: "DADDY_SYNC_OK" }],
+          },
+          emptyAssistant,
+        ];
+      },
+      deleteSession: async () => {},
+    } as unknown as Executor;
+
+    const planner = createPlanner(executor, modelConfig, 30000);
+    await planner.handshake("seed", "test-dir");
+    await planner.syncMaxDecisions?.([
+      { timestamp: "2026-06-29T19:30:53.925Z", question: "Continue?", answer: "Yes." },
+    ]);
   });
 });
 
@@ -271,7 +401,7 @@ describe("createPlanner.finalReview", () => {
     assert.deepEqual(result.findings, ["fence parsed"]);
   });
 
-  it("fails closed to request_changes after two parse failures", async () => {
+  it("escalates after all re-asks fail to parse", async () => {
     let sendCount = 0;
     const mockExecutor = {
       createSession: async () => "test-session",
@@ -292,18 +422,19 @@ describe("createPlanner.finalReview", () => {
 
     assert.equal(
       sendCount,
-      3,
-      "sendMessage called three times: handshake + finalReview + retry nudge",
+      5,
+      "sendMessage called five times: handshake + finalReview + 3 re-asks",
     );
-    assert.equal(result.verdict, "request_changes");
+    assert.equal(result.verdict, "escalate");
+    assert.ok(result.human_decision_needed);
   });
 });
 
 // The fix2 scar: a multi-step mini-model turn leaves its FINAL message empty with the
-// verdict in an EARLIER assistant message. Single-turn extractText dropped it and
-// parked a healthy run; the all-message harvest recovers it without a re-ask. Covers
-// BOTH consult and finalReview, and confirms each still fails closed on a real empty.
-describe("createPlanner all-message harvest (fix2)", () => {
+// verdict in an EARLIER assistant message in the SAME exchange. Single-turn extractText
+// dropped it and parked a healthy run; current-exchange harvest recovers it without
+// reading stale JSON from earlier Daddy turns.
+describe("createPlanner current-exchange harvest (fix2)", () => {
   const verdictInEarlierMessage = (verdict: string): Executor =>
     ({
       createSession: async () => "test-session",
@@ -314,14 +445,42 @@ describe("createPlanner all-message harvest (fix2)", () => {
           return n === 1 ? mockResponse("PLANNER_OK") : emptyAssistant;
         };
       })(),
-      listMessages: async () => [
-        { info: { id: "u", sessionID: "s", role: "user" }, parts: [] },
-        {
-          info: { id: "a1", sessionID: "s", role: "assistant" },
-          parts: [{ type: "text", text: verdict }],
-        },
-        emptyAssistant,
-      ],
+      listMessages: (() => {
+        let calls = 0;
+        return async () => {
+          calls++;
+          if (calls === 1) {
+            return [];
+          }
+          if (calls === 2) {
+            return [
+              {
+                info: { id: "seed", sessionID: "s", role: "assistant" },
+                parts: [{ type: "text", text: "PLANNER_OK" }],
+              },
+            ];
+          }
+          if (calls === 3) {
+            return [
+              {
+                info: { id: "seed", sessionID: "s", role: "assistant" },
+                parts: [{ type: "text", text: "PLANNER_OK" }],
+              },
+            ];
+          }
+          return [
+            {
+              info: { id: "seed", sessionID: "s", role: "assistant" },
+              parts: [{ type: "text", text: "PLANNER_OK" }],
+            },
+            {
+              info: { id: "a1", sessionID: "s", role: "assistant" },
+              parts: [{ type: "text", text: verdict }],
+            },
+            emptyAssistant,
+          ];
+        };
+      })(),
       deleteSession: async () => {},
     }) as unknown as Executor;
 
@@ -333,7 +492,7 @@ describe("createPlanner all-message harvest (fix2)", () => {
     assert.equal(result.status, "proceed", "the buried verdict was harvested, not dropped");
   });
 
-  it("consult still fails closed to stop when the reply is genuinely empty", async () => {
+  it("consult stops when the reply remains genuinely empty", async () => {
     const executor = {
       createSession: async () => "test-session",
       sendMessage: (() => {
@@ -350,36 +509,64 @@ describe("createPlanner all-message harvest (fix2)", () => {
     await planner.handshake("seed", "test-dir");
     const result = await planner.consult(minConsult());
     assert.equal(result.status, "stop");
+    assert.equal(result.human_decision_needed, null);
+    assert.match(result.answer, /Last issue: Unexpected end of JSON input/);
   });
 });
 
-describe("createPlanner.finalReview latest-reply harvest", () => {
-  it("does not re-parse a stale final-review JSON object from an earlier Daddy message", async () => {
-    let sendCount = 0;
+describe("createPlanner.finalReview all-message harvest", () => {
+  it("recovers current-exchange JSON when the final message is empty", async () => {
     const staleReview = JSON.stringify({
       verdict: "request_changes",
       findings: ["stale finding from an earlier final review"],
       notes: "old review",
     });
+    const freshReview = JSON.stringify({
+      verdict: "accept",
+      findings: ["looks good now"],
+      notes: "all clear",
+    });
+    let listCalls = 0;
+    let sendCalls = 0;
     const executor = {
       createSession: async () => "test-session",
       sendMessage: async () => {
-        sendCount++;
-        if (sendCount === 1) {
-          return mockResponse("PLANNER_OK");
-        }
-        return mockResponse("I inspected the current files but forgot to emit JSON.");
+        sendCalls++;
+        return sendCalls === 1 ? mockResponse("PLANNER_OK") : emptyAssistant;
       },
-      listMessages: async () => [
-        {
-          info: { id: "old", sessionID: "s", role: "assistant" },
-          parts: [{ type: "text", text: staleReview }],
-        },
-        {
-          info: { id: "latest", sessionID: "s", role: "assistant" },
-          parts: [{ type: "text", text: "I inspected the current files but forgot to emit JSON." }],
-        },
-      ],
+      listMessages: async () => {
+        listCalls++;
+        if (listCalls === 1) {
+          return [];
+        }
+        if (listCalls === 2) {
+          return [
+            {
+              info: { id: "seed", sessionID: "s", role: "assistant" },
+              parts: [{ type: "text", text: "PLANNER_OK" }],
+            },
+          ];
+        }
+        if (listCalls === 3) {
+          return [
+            {
+              info: { id: "old", sessionID: "s", role: "assistant" },
+              parts: [{ type: "text", text: staleReview }],
+            },
+          ];
+        }
+        return [
+          {
+            info: { id: "old", sessionID: "s", role: "assistant" },
+            parts: [{ type: "text", text: staleReview }],
+          },
+          {
+            info: { id: "current", sessionID: "s", role: "assistant" },
+            parts: [{ type: "text", text: freshReview }],
+          },
+          emptyAssistant,
+        ];
+      },
       deleteSession: async () => {},
     } as unknown as Executor;
 
@@ -387,10 +574,73 @@ describe("createPlanner.finalReview latest-reply harvest", () => {
     await planner.handshake("seed", "test-dir");
     const result = await planner.finalReview(minPacket(), minLedger(), minReport());
 
-    assert.equal(sendCount, 3, "latest unparseable reply should trigger the one allowed re-ask");
-    assert.equal(result.verdict, "request_changes");
-    assert.deepEqual(result.findings, [
-      "Daddy's final-review response was not valid JSON; failing closed to request_changes.",
-    ]);
+    assert.equal(result.verdict, "accept");
+    assert.deepEqual(result.findings, ["looks good now"]);
+  });
+
+  it("does not parse stale final-review JSON when the current exchange is empty", async () => {
+    const staleReview = JSON.stringify({
+      verdict: "request_changes",
+      findings: ["stale finding from an earlier final review"],
+      notes: "old review",
+    });
+    let listCalls = 0;
+    let sendCalls = 0;
+    const executor = {
+      createSession: async () => "test-session",
+      sendMessage: async () => {
+        sendCalls++;
+        return sendCalls === 1 ? mockResponse("PLANNER_OK") : emptyAssistant;
+      },
+      listMessages: async () => {
+        listCalls++;
+        if (listCalls === 1) {
+          return [];
+        }
+        if (listCalls === 2) {
+          return [
+            {
+              info: { id: "seed", sessionID: "s", role: "assistant" },
+              parts: [{ type: "text", text: "PLANNER_OK" }],
+            },
+          ];
+        }
+        return [
+          {
+            info: { id: "old", sessionID: "s", role: "assistant" },
+            parts: [{ type: "text", text: staleReview }],
+          },
+          emptyAssistant,
+        ];
+      },
+      deleteSession: async () => {},
+    } as unknown as Executor;
+
+    const planner = createPlanner(executor, modelConfig, 30000);
+    await planner.handshake("seed", "test-dir");
+    const result = await planner.finalReview(minPacket(), minLedger(), minReport());
+
+    assert.equal(result.verdict, "escalate");
+    assert.ok(result.human_decision_needed);
+  });
+
+  it("escalates when all replies are genuinely empty (no stale fallback)", async () => {
+    let sendCount = 0;
+    const executor = {
+      createSession: async () => "test-session",
+      sendMessage: async () => {
+        sendCount++;
+        return sendCount === 1 ? mockResponse("PLANNER_OK") : emptyAssistant;
+      },
+      listMessages: async () => [emptyAssistant],
+      deleteSession: async () => {},
+    } as unknown as Executor;
+
+    const planner = createPlanner(executor, modelConfig, 30000);
+    await planner.handshake("seed", "test-dir");
+    const result = await planner.finalReview(minPacket(), minLedger(), minReport());
+
+    assert.equal(result.verdict, "escalate");
+    assert.ok(result.human_decision_needed);
   });
 });

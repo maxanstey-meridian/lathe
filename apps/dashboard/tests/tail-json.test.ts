@@ -95,6 +95,25 @@ test("multiple JSON payloads are extracted independently", () => {
   }
 });
 
+test("multiline object block becomes JSON with key count", () => {
+  const block = `{
+  "status": "proceed_with_constraints",
+  "answer": "Proceed.",
+  "constraints": ["keep tests focused"],
+  "evidence_used": ["journal", "diff"],
+  "safe_next_action": "submit report",
+  "human_decision_needed": null
+}`;
+
+  const result = classifyLine(block);
+  assert.equal(result.kind, "json");
+  if (result.kind === "json") {
+    assert.equal(result.label, "{6 keys}");
+    assert.equal(result.payloads.length, 1);
+    assert.ok(result.formatted.includes('  "status": "proceed_with_constraints"'));
+  }
+});
+
 test("short bracket token in long line stays text", () => {
   const line = "this is a deliberately long line before an index token [0] and then trailing text past eighty chars";
   assert.equal(classifyLine(line).kind, "text");

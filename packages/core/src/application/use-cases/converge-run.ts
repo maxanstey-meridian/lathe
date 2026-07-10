@@ -26,11 +26,11 @@ import {
 import { parsePacketShape } from "../../domain/packet.js";
 import type { OutcomeDef, Packet } from "../../domain/packet.js";
 import type { Clock } from "../ports/clock.js";
+import { noopDriverOutput, type DriverOutput } from "../ports/driver-output.js";
 import type { Repo } from "../ports/repo.js";
 import type { Reviewer, SuperReviewResult } from "../ports/reviewer.js";
 import type { Store, ConvergenceLogEntry } from "../ports/store.js";
 import type { Verify, VerificationResult } from "../ports/verify.js";
-import { noopDriverOutput, type DriverOutput } from "../ports/driver-output.js";
 
 // ---------------------------------------------------------------------------
 // Dependencies
@@ -135,7 +135,9 @@ const slugFromRunId = (runId: string, pass: number): string => {
 // ---------------------------------------------------------------------------
 // Main entry point — matches `ConvergeCallback`.
 
-export const convergeRun = (deps: ConvergeDeps): ((runId: string, signal?: AbortSignal) => Promise<void>) => {
+export const convergeRun = (
+  deps: ConvergeDeps,
+): ((runId: string, signal?: AbortSignal) => Promise<void>) => {
   const { store, repo, reviewer, verify, driverOutput = noopDriverOutput, clock, config } = deps;
 
   return async (runId: string, signal?: AbortSignal): Promise<void> => {
@@ -188,13 +190,14 @@ export const convergeRun = (deps: ConvergeDeps): ((runId: string, signal?: Abort
           {
             signal,
             onEvent: (event) => driverOutput.verification(runId, "autofix", event),
-            onResult: (result) => store.appendJournal(runId, {
-              event: "verification_run",
-              command: result.command,
-              exitCode: result.exitCode,
-              turn: 0,
-              at: clock.nowIso(),
-            }),
+            onResult: (result) =>
+              store.appendJournal(runId, {
+                event: "verification_run",
+                command: result.command,
+                exitCode: result.exitCode,
+                turn: 0,
+                at: clock.nowIso(),
+              }),
           },
         );
         if (signal?.aborted) {

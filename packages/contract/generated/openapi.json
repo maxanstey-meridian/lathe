@@ -2601,6 +2601,114 @@
           "human_decision_needed"
         ]
       },
+      "TailAgentPanesDto": {
+        "type": "object",
+        "properties": {
+          "baby": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TailPaneLineDto"
+            }
+          },
+          "daddy": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TailPaneLineDto"
+            }
+          },
+          "super": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TailPaneLineDto"
+            }
+          }
+        },
+        "required": [
+          "baby",
+          "daddy",
+          "super"
+        ]
+      },
+      "TailDriverCommandDto": {
+        "type": "object",
+        "properties": {
+          "commandId": {
+            "type": "string"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/VerificationPhaseDto"
+          },
+          "command": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "segments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TailDriverSegmentDto"
+            }
+          },
+          "terminal": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "completed",
+                  "error"
+                ]
+              },
+              "exitCode": {
+                "type": "number"
+              },
+              "timedOut": {
+                "type": "boolean"
+              },
+              "finishedAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "exitCode",
+              "timedOut",
+              "finishedAt"
+            ]
+          }
+        },
+        "required": [
+          "commandId",
+          "phase",
+          "command",
+          "startedAt",
+          "segments",
+          "terminal"
+        ]
+      },
+      "TailDriverSegmentDto": {
+        "type": "object",
+        "properties": {
+          "stream": {
+            "type": "string",
+            "enum": [
+              "stdout",
+              "stderr"
+            ]
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stream",
+          "text"
+        ]
+      },
       "TailJournalLineDto": {
         "type": "object",
         "properties": {
@@ -2674,41 +2782,6 @@
           "style"
         ]
       },
-      "TailPanesDto": {
-        "type": "object",
-        "properties": {
-          "baby": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/TailPaneLineDto"
-            }
-          },
-          "daddy": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/TailPaneLineDto"
-            }
-          },
-          "super": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/TailPaneLineDto"
-            }
-          },
-          "driver": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/TailPaneLineDto"
-            }
-          }
-        },
-        "required": [
-          "baby",
-          "daddy",
-          "super",
-          "driver"
-        ]
-      },
       "TailSnapshotDto": {
         "type": "object",
         "properties": {
@@ -2764,7 +2837,13 @@
             "type": "number"
           },
           "panes": {
-            "$ref": "#/components/schemas/TailPanesDto"
+            "$ref": "#/components/schemas/TailAgentPanesDto"
+          },
+          "driverCommands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TailDriverCommandDto"
+            }
           },
           "journal": {
             "type": "array",
@@ -2792,6 +2871,7 @@
           "turn",
           "rotations",
           "panes",
+          "driverCommands",
           "journal",
           "lastSeq"
         ]
@@ -3044,6 +3124,14 @@
           "failed",
           "accepted",
           "stopped"
+        ]
+      },
+      "VerificationPhaseDto": {
+        "type": "string",
+        "enum": [
+          "report",
+          "convergence",
+          "autofix"
         ]
       },
       "ConvergeDecisionDto_Author": {

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, type CSSProperties } from "vue";
 
-import { formatTailDuration } from "../logic/tail-state";
+import { isTerminalTailStatus } from "@lathe/tail-state";
+
+import { formatTailDuration } from "../logic/tail-presentation";
 import { injectLatheActions } from "../ports/lathe-actions";
 import { injectLatheStatus } from "../ports/lathe-status";
 import { injectLatheTail } from "../ports/lathe-tail";
@@ -13,8 +15,12 @@ const actions = injectLatheActions();
 
 const showStopConfirm = ref(false);
 const tailGrid = ref<HTMLElement | null>(null);
+const driverRegion = ref<HTMLElement | null>(null);
 const paneFractions = ref<[number, number, number]>([1, 1, 1]);
+const driverHeight = ref(160);
 const minPaneFraction = 0.45;
+const minDriverHeight = 80;
+const minAgentHeight = 120;
 
 let stopDragging: (() => void) | null = null;
 
@@ -28,7 +34,9 @@ const closeStopConfirm = (): void => {
 
 const tailedRunId = computed(() => tail.state.value.snapshot?.runId ?? null);
 const isActiveRun = computed(() =>
-  tailedRunId.value ? status.status.value?.activeRuns.some((r) => r.runId === tailedRunId.value) ?? false : false,
+  !tail.isLoading.value && tailedRunId.value
+    ? status.status.value?.activeRuns.some((r) => r.runId === tailedRunId.value) ?? false
+    : false,
 );
 
 const handleStop = async (): Promise<void> => {
@@ -47,6 +55,7 @@ const handleStop = async (): Promise<void> => {
 
 const resetPaneWidths = (): void => {
   paneFractions.value = [1, 1, 1];
+  driverHeight.value = 160;
 };
 
 const tailGridStyle = computed<CSSProperties>(() => ({
@@ -100,12 +109,57 @@ const startPaneDrag = (dividerIndex: 0 | 1, event: PointerEvent): void => {
   window.addEventListener("pointercancel", onPointerUp);
 };
 
+const startDriverDrag = (event: PointerEvent): void => {
+  if (event.button !== 0 || tailGrid.value === null || driverRegion.value === null) {
+    return;
+  }
+
+  event.preventDefault();
+  stopDragging?.();
+
+  const startY = event.clientY;
+  const startHeight = driverRegion.value.clientHeight;
+  const availableHeight = tailGrid.value.clientHeight + startHeight;
+  const maxDriverHeight = Math.max(minDriverHeight, availableHeight - minAgentHeight);
+
+  const onPointerMove = (moveEvent: PointerEvent): void => {
+    const proposed = startHeight - (moveEvent.clientY - startY);
+    driverHeight.value = Math.min(maxDriverHeight, Math.max(minDriverHeight, proposed));
+  };
+
+  const onPointerUp = (): void => {
+    stopDragging?.();
+  };
+
+  stopDragging = () => {
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", onPointerUp);
+    window.removeEventListener("pointercancel", onPointerUp);
+    stopDragging = null;
+  };
+
+  window.addEventListener("pointermove", onPointerMove);
+  window.addEventListener("pointerup", onPointerUp);
+  window.addEventListener("pointercancel", onPointerUp);
+};
+
 onBeforeUnmount(() => {
   stopDragging?.();
 });
 
 const snapshot = computed(() => tail.state.value.snapshot);
 const stats = computed(() => tail.state.value.stats);
+const activeDriverCommands = computed(() =>
+  tail.state.value.driverCommands
+    .filter((command) => command.terminal === null)
+    .map((command) => {
+      const startedAt = Date.parse(command.startedAt);
+      const duration = Number.isFinite(startedAt)
+        ? formatTailDuration(Math.max(0, tail.now.value - startedAt))
+        : "running";
+      return `${command.command} · ${duration}`;
+    }),
+);
 const babyModel = computed(() => {
   const current = snapshot.value;
   if (current === null) {
@@ -172,7 +226,7 @@ const contextColorClass = computed(() => {
 });
 const isTerminal = computed(() => {
   const currentStats = stats.value;
-  return currentStats !== null && ["ready_for_review", "blocked", "failed", "accepted"].includes(currentStats.status);
+  return currentStats !== null && isTerminalTailStatus(currentStats.status);
 });
 </script>
 
@@ -252,23 +306,30 @@ const isTerminal = computed(() => {
           <TailPane title="super-daddy" :model="snapshot.models.super" :pane="tail.state.value.panes.super" accent="blue" :now="tail.now.value" />
         </div>
 
-        <TailPane
-          title="driver verification"
-          model="stdout / stderr"
-          :pane="tail.state.value.panes.driver"
-          accent="amber"
-          :now="tail.now.value"
-          class="h-40 shrink-0"
+        <button
+          class="hidden h-1.5 shrink-0 cursor-row-resize bg-slate-800 transition-colors hover:bg-cyan-500/70 active:bg-cyan-400 touch-none lg:block"
+          type="button"
+          aria-label="Resize agent and driver verification panes"
+          title="Drag to resize driver verification pane"
+          @pointerdown="startDriverDrag"
         />
 
-        <section class="shrink-0 border-t border-slate-800 bg-slate-900 px-4 py-1.5 font-mono text-xs text-slate-500">
-          <div v-if="tail.state.value.driverEvents.length" class="space-y-0.5">
-            <p v-for="(event, index) in tail.state.value.driverEvents.slice(-3)" :key="`${index}-${event}`" class="truncate">
-              {{ event }}
-            </p>
-          </div>
-          <p v-else class="text-slate-700">no driver events</p>
-        </section>
+        <div
+          ref="driverRegion"
+          data-testid="driver-region"
+          class="min-h-0 shrink-0"
+          :style="{ height: `${driverHeight}px` }"
+        >
+          <TailPane
+            title="driver verification"
+            model="stdout / stderr"
+            :pane="tail.state.value.panes.driver"
+            accent="amber"
+            :now="tail.now.value"
+            :activity="activeDriverCommands"
+            class="h-full"
+          />
+        </div>
       </template>
 
       <div v-else class="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 font-mono text-sm text-slate-700">

@@ -150,8 +150,11 @@ export const writeOpencodeConfig = (
       }
 
       // Daddy resolves through opencode's global auth, so it is intentionally
-      // not declared in the generated provider map.
-      if (!providerMap.has(config.superdaddy.providerId)) {
+      // not declared in the generated provider map. Super-daddy joins the same
+      // way when baseUrl is null (built-in provider resolving through global
+      // auth, e.g. zai-coding-plan, ollama-cloud). When baseUrl is set, the
+      // provider entry overrides the endpoint (e.g. openai → Codex backend).
+      if (!providerMap.has(config.superdaddy.providerId) && config.superdaddy.baseUrl !== null) {
         // Super-daddy only joins when its providerId is unused by baby entries.
         providerObj[config.superdaddy.providerId] = {
           options: {

@@ -3,6 +3,7 @@ import createOpenApiClient, { type Client, type ClientOptions } from "openapi-fe
 import type { paths } from "../generated/schema.js";
 
 export type * from "./lathe.contract.js";
+export { TAIL_EVENT_KINDS, TAIL_PROTOCOL_LIMITS } from "./lathe.contract.js";
 export type { components, paths } from "../generated/schema.js";
 
 export type RivetFetch = (input: Request) => Promise<Response>;

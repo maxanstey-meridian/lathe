@@ -1,14 +1,22 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-
 import type { VerificationProcessEvent } from "../application/ports/driver-output.js";
-import type { Verify, VerificationResult, VerificationRunOptions } from "../application/ports/verify.js";
+import type {
+  Verify,
+  VerificationResult,
+  VerificationRunOptions,
+} from "../application/ports/verify.js";
 
 const OUTPUT_TAIL_LENGTH = 400;
 const KILL_GRACE_MS = 500;
 
-const observe = (options: VerificationRunOptions | undefined, event: VerificationProcessEvent): void => {
+type TerminationCause = "timeout" | "cancelled";
+
+const observe = (
+  options: VerificationRunOptions | undefined,
+  event: VerificationProcessEvent,
+): void => {
   try {
     options?.onEvent?.(event);
   } catch {
@@ -30,12 +38,10 @@ const runOne = (
       stdio: ["ignore", "pipe", "pipe"],
     });
     let outputTail = "";
-    let timedOut = false;
-    let cancelled = false;
+    let terminationCause: TerminationCause | undefined;
     let settled = false;
     let exited = false;
     let terminationStarted = false;
-    let killTimer: ReturnType<typeof setTimeout> | undefined;
     let termination: Promise<void> | undefined;
 
     const completeResult = (result: VerificationResult): void => {
@@ -67,7 +73,7 @@ const runOne = (
         return;
       }
       termination = new Promise((resolveTermination) => {
-        killTimer = setTimeout(() => {
+        setTimeout(() => {
           try {
             process.kill(-child.pid!, "SIGKILL");
           } catch {
@@ -79,10 +85,14 @@ const runOne = (
       });
     };
 
-    const onAbort = (): void => {
-      cancelled ||= !exited;
+    const requestTermination = (cause: TerminationCause): void => {
+      if (exited || terminationCause !== undefined) {
+        return;
+      }
+      terminationCause = cause;
       killGroup();
     };
+    const onAbort = (): void => requestTermination("cancelled");
     if (options?.signal?.aborted) {
       onAbort();
     } else {
@@ -90,8 +100,7 @@ const runOne = (
     }
 
     const timeout = setTimeout(() => {
-      timedOut = !exited;
-      killGroup();
+      requestTermination("timeout");
     }, timeoutMs);
     timeout.unref();
 
@@ -102,17 +111,16 @@ const runOne = (
     child.once("spawn", () => {
       observe(options, { kind: "started", commandId, command });
     });
-    child.once("error", (error) => {
+    child.once("error", async (error) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timeout);
-      if (killTimer && !terminationStarted) {
-        clearTimeout(killTimer);
-      }
       options?.signal?.removeEventListener("abort", onAbort);
-      const exitCode = timedOut ? 124 : cancelled ? 130 : 1;
+      await termination;
+      const timedOut = terminationCause === "timeout";
+      const exitCode = timedOut ? 124 : terminationCause === "cancelled" ? 130 : 1;
       if (!outputTail) {
         outputTail = error.message.slice(-OUTPUT_TAIL_LENGTH);
       }
@@ -125,12 +133,18 @@ const runOne = (
       }
       settled = true;
       clearTimeout(timeout);
-      if (killTimer && !terminationStarted) {
-        clearTimeout(killTimer);
-      }
       options?.signal?.removeEventListener("abort", onAbort);
       await termination;
-      const exitCode = timedOut ? 124 : cancelled ? 130 : typeof code === "number" ? code : signal ? 1 : 0;
+      const timedOut = terminationCause === "timeout";
+      const exitCode = timedOut
+        ? 124
+        : terminationCause === "cancelled"
+          ? 130
+          : typeof code === "number"
+            ? code
+            : signal
+              ? 1
+              : 0;
       if (!outputTail && timedOut) {
         outputTail = "timed out";
       }
@@ -142,9 +156,11 @@ const runOne = (
 export const createVerify = (): Verify => ({
   run: async (commands, worktree, timeoutMs, options): Promise<VerificationResult[]> => {
     const cwd = resolve(worktree);
-    return Promise.all(commands.map((item, index) =>
-      runOne(item.command, `${index + 1}-${randomUUID()}`, cwd, timeoutMs, options),
-    ));
+    return Promise.all(
+      commands.map((item, index) =>
+        runOne(item.command, `${index + 1}-${randomUUID()}`, cwd, timeoutMs, options),
+      ),
+    );
   },
 
   runAutoFix: async (commands, expectedSurface, worktree, timeoutMs, options): Promise<void> => {
@@ -158,7 +174,13 @@ export const createVerify = (): Verify => ({
       if (options?.signal?.aborted) {
         break;
       }
-      await runOne(`${item.command} ${args}`, `${index + 1}-${randomUUID()}`, cwd, timeoutMs, options);
+      await runOne(
+        `${item.command} ${args}`,
+        `${index + 1}-${randomUUID()}`,
+        cwd,
+        timeoutMs,
+        options,
+      );
     }
   },
 });

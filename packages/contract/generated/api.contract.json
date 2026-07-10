@@ -2536,6 +2536,162 @@
       ]
     },
     {
+      "name": "TailAgentPanesDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "baby",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "TailPaneLineDto"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "daddy",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "TailPaneLineDto"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "super",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "TailPaneLineDto"
+            }
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "TailDriverCommandDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "commandId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "phase",
+          "type": {
+            "kind": "ref",
+            "name": "VerificationPhaseDto"
+          },
+          "optional": false
+        },
+        {
+          "name": "command",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "startedAt",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "segments",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "TailDriverSegmentDto"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "terminal",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "inlineObject",
+              "properties": [
+                {
+                  "name": "status",
+                  "type": {
+                    "kind": "stringUnion",
+                    "values": [
+                      "completed",
+                      "error"
+                    ]
+                  }
+                },
+                {
+                  "name": "exitCode",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "number"
+                  }
+                },
+                {
+                  "name": "timedOut",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "boolean"
+                  }
+                },
+                {
+                  "name": "finishedAt",
+                  "type": {
+                    "kind": "primitive",
+                    "type": "string"
+                  }
+                }
+              ]
+            }
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "TailDriverSegmentDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "stream",
+          "type": {
+            "kind": "stringUnion",
+            "values": [
+              "stdout",
+              "stderr"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "text",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
       "name": "TailJournalLineDto",
       "typeParameters": [],
       "properties": [
@@ -2650,56 +2806,6 @@
             "type": "string"
           },
           "optional": true
-        }
-      ]
-    },
-    {
-      "name": "TailPanesDto",
-      "typeParameters": [],
-      "properties": [
-        {
-          "name": "baby",
-          "type": {
-            "kind": "array",
-            "element": {
-              "kind": "ref",
-              "name": "TailPaneLineDto"
-            }
-          },
-          "optional": false
-        },
-        {
-          "name": "daddy",
-          "type": {
-            "kind": "array",
-            "element": {
-              "kind": "ref",
-              "name": "TailPaneLineDto"
-            }
-          },
-          "optional": false
-        },
-        {
-          "name": "super",
-          "type": {
-            "kind": "array",
-            "element": {
-              "kind": "ref",
-              "name": "TailPaneLineDto"
-            }
-          },
-          "optional": false
-        },
-        {
-          "name": "driver",
-          "type": {
-            "kind": "array",
-            "element": {
-              "kind": "ref",
-              "name": "TailPaneLineDto"
-            }
-          },
-          "optional": false
         }
       ]
     },
@@ -2832,7 +2938,18 @@
           "name": "panes",
           "type": {
             "kind": "ref",
-            "name": "TailPanesDto"
+            "name": "TailAgentPanesDto"
+          },
+          "optional": false
+        },
+        {
+          "name": "driverCommands",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "ref",
+              "name": "TailDriverCommandDto"
+            }
           },
           "optional": false
         },
@@ -3205,6 +3322,14 @@
         "failed",
         "accepted",
         "stopped"
+      ]
+    },
+    {
+      "name": "VerificationPhaseDto",
+      "values": [
+        "report",
+        "convergence",
+        "autofix"
       ]
     }
   ],

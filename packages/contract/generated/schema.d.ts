@@ -730,6 +730,30 @@ export interface components {
             notes: string;
             human_decision_needed: string | null;
         };
+        TailAgentPanesDto: {
+            baby: components["schemas"]["TailPaneLineDto"][];
+            daddy: components["schemas"]["TailPaneLineDto"][];
+            super: components["schemas"]["TailPaneLineDto"][];
+        };
+        TailDriverCommandDto: {
+            commandId: string;
+            phase: components["schemas"]["VerificationPhaseDto"];
+            command: string;
+            startedAt: string;
+            segments: components["schemas"]["TailDriverSegmentDto"][];
+            terminal: {
+                /** @enum {string} */
+                status: "completed" | "error";
+                exitCode: number;
+                timedOut: boolean;
+                finishedAt: string;
+            } | null;
+        };
+        TailDriverSegmentDto: {
+            /** @enum {string} */
+            stream: "stdout" | "stderr";
+            text: string;
+        };
         TailJournalLineDto: {
             seq: number;
             at: string;
@@ -749,12 +773,6 @@ export interface components {
             style: "think" | "text" | "tool";
             attachment?: string;
         };
-        TailPanesDto: {
-            baby: components["schemas"]["TailPaneLineDto"][];
-            daddy: components["schemas"]["TailPaneLineDto"][];
-            super: components["schemas"]["TailPaneLineDto"][];
-            driver: components["schemas"]["TailPaneLineDto"][];
-        };
         TailSnapshotDto: {
             runId: string;
             summary: string | null;
@@ -770,7 +788,8 @@ export interface components {
             contextTokens: number;
             turn: number;
             rotations: number;
-            panes: components["schemas"]["TailPanesDto"];
+            panes: components["schemas"]["TailAgentPanesDto"];
+            driverCommands: components["schemas"]["TailDriverCommandDto"][];
             journal: components["schemas"]["TailJournalLineDto"][];
             lastSeq: number;
         };
@@ -829,6 +848,8 @@ export interface components {
         RunStatus: "queued" | "running" | "paused" | "converged" | "accepted" | "stopped" | "failed";
         /** @enum {string} */
         TailRunStatus: "queued" | "running" | "interrupted" | "ready_for_review" | "blocked" | "failed" | "accepted" | "stopped";
+        /** @enum {string} */
+        VerificationPhaseDto: "report" | "convergence" | "autofix";
         ConvergeDecisionDto_Author: {
             /**
              * @description discriminator enum property added by openapi-typescript

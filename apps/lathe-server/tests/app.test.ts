@@ -48,8 +48,8 @@ const tailSnapshot = (runId: string): TailSnapshotDto => ({
     baby: [{ text: "restored baby", style: "text" }],
     daddy: [],
     super: [],
-    driver: [],
   },
+  driverCommands: [],
   journal: [
     {
       seq: 7,
@@ -155,8 +155,9 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
       turn: 0,
       contextTokens: 0,
     }),
-    getTailSnapshot: (runId: string): TailSnapshotDto | undefined => metaStore.has(runId) ? tailSnapshot(runId) : undefined,
-    getActiveTailSnapshot: (): TailSnapshotDto | null => null,
+    prepareTailSnapshot: async (runId: string): Promise<TailSnapshotDto | undefined> => metaStore.has(runId) ? tailSnapshot(runId) : undefined,
+    prepareActiveTailSnapshot: async (): Promise<TailSnapshotDto | null> => null,
+    resolveActiveTailRunId: (): string | null => null,
     getStatus: () => ({
       activeRuns: [],
       queued: Array.from(metaStore.values())
@@ -303,8 +304,9 @@ const makeAcceptSupervisor = (meta: RunMeta, currentBranch: string, isDirty = fa
       turn: 0,
       contextTokens: 0,
     }),
-    getTailSnapshot: (_runId: string): TailSnapshotDto | undefined => undefined,
-    getActiveTailSnapshot: (): TailSnapshotDto | null => null,
+    prepareTailSnapshot: async (_runId: string): Promise<TailSnapshotDto | undefined> => undefined,
+    prepareActiveTailSnapshot: async (): Promise<TailSnapshotDto | null> => null,
+    resolveActiveTailRunId: (): string | null => null,
     getStatus: () => ({ activeRuns: [], queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
     getReview: () => ({ runs: [] }),
     listStaged: (): Array<{ runId: string; parentRunId: string | undefined }> => [],
@@ -980,6 +982,19 @@ test("GetTail returns 404 for a missing run", async () => {
   equal(res.status, 404);
 });
 
+test("GetTail awaits snapshot hydration before responding", async () => {
+  let release: ((snapshot: TailSnapshotDto) => void) | undefined;
+  const hydrated = new Promise<TailSnapshotDto>((resolve) => { release = resolve; });
+  const supervisor = makeFakeSupervisor({ prepareTailSnapshot: async () => hydrated });
+  const app = createApp(supervisor.appDeps, supervisor);
+  let settled = false;
+  const pending = app.request("http://localhost/tail/run").finally(() => { settled = true; });
+  await Promise.resolve();
+  equal(settled, false);
+  release?.(tailSnapshot("run"));
+  equal((await pending).status, 200);
+});
+
 test("GetActiveTail returns null when no active tail target exists", async () => {
   const supervisor = makeFakeSupervisor();
   const app = createApp(supervisor.appDeps, supervisor);
@@ -991,7 +1006,7 @@ test("GetActiveTail returns null when no active tail target exists", async () =>
 
 test("GetActiveTail returns the daemon active tail snapshot", async () => {
   const supervisor = makeFakeSupervisor({
-    getActiveTailSnapshot: () => tailSnapshot("active-tail"),
+    prepareActiveTailSnapshot: async () => tailSnapshot("active-tail"),
   });
   const app = createApp(supervisor.appDeps, supervisor);
 
@@ -1080,7 +1095,6 @@ test("Tail SSE: replay preserves distinct events sharing one journal sequence", 
 
 test("Tail SSE: events observed while preparing the snapshot are not appended twice", async () => {
   const tailBus = createTailEventBus();
-  const supervisor = makeFakeSupervisor({ getTailSnapshot: () => tailSnapshot("r1") });
   const app = createApp({
     bus: createEventBus(),
     readEventsSince: () => [],
@@ -1088,9 +1102,9 @@ test("Tail SSE: events observed while preparing the snapshot are not appended tw
     readTailEventsSince: () => [],
     prepareTailSnapshot: async () => {
       tailBus.publish({ kind: "tail.journal", runId: "r1", seq: 8, at: "2026-01-01T00:00:08Z", line: "captured", event: "run_started", driver: true });
-      return "r1";
+      return { snapshot: { ...tailSnapshot("r1"), lastSeq: 8 }, revision: tailBus.revision() };
     },
-  }, supervisor, { logger: false });
+  }, null as unknown as Supervisor, { logger: false });
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 2000);
@@ -1103,6 +1117,30 @@ test("Tail SSE: events observed while preparing the snapshot are not appended tw
   await reader.cancel();
   ok(!body.includes("id: 8"));
   ok(body.includes("id: 9"));
+});
+
+test("Tail SSE: an unsequenced event newer than the prepared snapshot revision is delivered", async () => {
+  const tailBus = createTailEventBus();
+  const app = createApp({
+    bus: createEventBus(),
+    readEventsSince: () => [],
+    tailBus,
+    readTailEventsSince: () => [],
+    prepareTailSnapshot: async () => {
+      const revision = tailBus.revision();
+      queueMicrotask(() => tailBus.publish({ kind: "tail.pane.delta", runId: "r1", speaker: "baby", style: "text", text: "after-snapshot" }));
+      return { snapshot: tailSnapshot("r1"), revision };
+    },
+  }, null as unknown as Supervisor, { logger: false });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2000);
+  const res = await app.request("http://localhost/tail/r1/events", { signal: controller.signal });
+  const reader = res.body!.getReader();
+  const body = await readUntilText(reader, "after-snapshot");
+  clearTimeout(timer);
+  await reader.cancel();
+  ok(body.includes("after-snapshot"));
 });
 
 test("Tail SSE: identical unsequenced live deltas are both delivered", async () => {
@@ -1129,31 +1167,31 @@ test("Tail SSE: identical unsequenced live deltas are both delivered", async () 
   equal(body.split('"text":"same"').length - 1, 2);
 });
 
-test("Tail SSE: active bootstrap hydrates the run selected after an in-flight transition", async () => {
-  let activeRunId = "parent";
+test("Tail SSE: active bootstrap uses the authoritative prepared target", async () => {
   const prepared: Array<string | null> = [];
-  const supervisor = makeFakeSupervisor({ getActiveTailSnapshot: () => tailSnapshot(activeRunId) });
+  const tailBus = createTailEventBus();
   const app = createApp({
     bus: createEventBus(),
     readEventsSince: () => [],
-    tailBus: createTailEventBus(),
+    tailBus,
     readTailEventsSince: () => [],
     prepareTailSnapshot: async (runId) => {
-      const selected = runId ?? activeRunId;
-      prepared.push(selected);
-      if (selected === "parent") activeRunId = "child";
-      return selected;
+      prepared.push(runId);
+      return { snapshot: tailSnapshot("child"), revision: tailBus.revision() };
     },
-  }, supervisor, { logger: false });
+    resolveActiveTailRunId: () => "child",
+  }, null as unknown as Supervisor, { logger: false });
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 2000);
   const res = await app.request("http://localhost/tail/active/events", { signal: controller.signal });
-  const chunk = await res.body!.getReader().read();
+  const reader = res.body!.getReader();
+  const chunk = await reader.read();
   clearTimeout(timer);
   const body = chunk.value ? new TextDecoder().decode(chunk.value) : "";
-  deepStrictEqual(prepared, ["parent", "child"]);
+  deepStrictEqual(prepared, [null]);
   ok(body.includes('"runId":"child"'));
+  await reader.cancel();
 });
 
 test("Tail SSE: run stream receives live matching tail events", async () => {
@@ -1205,21 +1243,49 @@ test("Tail SSE: first frame is an authoritative run snapshot", async () => {
 
 test("Tail SSE: active stream sends an authoritative null snapshot", async () => {
   const tailBus = createTailEventBus();
-  const supervisor = makeFakeSupervisor({ getActiveTailSnapshot: () => null });
   const app = createApp({
     bus: createEventBus(),
     readEventsSince: () => [],
     tailBus,
     readTailEventsSince: () => [],
-  }, supervisor, { logger: false });
+  }, null as unknown as Supervisor, { logger: false });
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 2000);
   const res = await app.request("http://localhost/tail/active/events", { signal: controller.signal });
-  const chunk = await res.body!.getReader().read();
+  const reader = res.body!.getReader();
+  const chunk = await reader.read();
   clearTimeout(timer);
   const body = chunk.value ? new TextDecoder().decode(chunk.value) : "";
   ok(body.includes("event: tail.run.changed"));
+  ok(body.includes('"snapshot":null'));
+  await reader.cancel();
+});
+
+test("Tail SSE: active stream transitions to null without another run event", async () => {
+  const tailBus = createTailEventBus();
+  let activeRunId: string | null = "r1";
+  const app = createApp({
+    bus: createEventBus(),
+    readEventsSince: () => [],
+    tailBus,
+    readTailEventsSince: () => [],
+    resolveActiveTailRunId: () => activeRunId,
+    prepareTailSnapshot: async () => ({
+      snapshot: activeRunId ? tailSnapshot(activeRunId) : null,
+      revision: tailBus.revision(),
+    }),
+  }, null as unknown as Supervisor, { logger: false });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3000);
+  const res = await app.request("http://localhost/tail/active/events", { signal: controller.signal });
+  const reader = res.body!.getReader();
+  await reader.read();
+  activeRunId = null;
+  const body = await readUntilText(reader, '"runId":null');
+  clearTimeout(timer);
+  await reader.cancel();
   ok(body.includes('"snapshot":null'));
 });
 
@@ -1345,6 +1411,16 @@ async function readUntilId(reader: ReadableStreamDefaultReader<Uint8Array>, targ
   let offset = 0;
   for (const c of chunks) { all.set(c, offset); offset += c.length; }
   return new TextDecoder().decode(all);
+}
+
+async function readUntilText(reader: ReadableStreamDefaultReader<Uint8Array>, target: string): Promise<string> {
+  let body = "";
+  while (!body.includes(target)) {
+    const { done, value } = await reader.read();
+    if (done || !value) break;
+    body += new TextDecoder().decode(value);
+  }
+  return body;
 }
 
 // ---------------------------------------------------------------------------

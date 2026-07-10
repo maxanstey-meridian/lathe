@@ -7,10 +7,10 @@ import { test } from "node:test";
 import type { Config, Clock, Repo, Paths, RunMeta } from "@lathe/core";
 import { makePaths, SqliteStoreAdapter, systemClock, buildRepo, Config as ConfigSchema } from "@lathe/core";
 import type { Supervisor } from "../src/supervisor.js";
-import { createSupervisor, NonChainTipError, TerminalRunError, RunNotFoundError, resolveSpeaker, createOpenCodeTailProjector, _testSyncSubscriptions } from "../src/supervisor.js";
+import { createSupervisor, NonChainTipError, TerminalRunError, RunNotFoundError, resolveSpeaker, createOpenCodeTailProjector, _testMergePolledTailStats, _testSelectActiveTailRunId, _testSyncSubscriptions } from "../src/supervisor.js";
 import { createEventBus } from "../src/app.js";
 
-test("OpenCode tail projector streams accumulated bash output as suffix deltas", () => {
+test("OpenCode tail projector suppresses accumulated tool output", () => {
   const events: import("@lathe/contract").TailEvent[] = [];
   const { project } = createOpenCodeTailProjector(
     (_runId, sessionId) => (sessionId === "baby-session" ? "baby" : undefined),
@@ -40,19 +40,44 @@ test("OpenCode tail projector streams accumulated bash output as suffix deltas",
   project("run-1", part("running", "phase one\nphase two\n"));
   project("run-1", part("completed", "phase one\nphase two\n"));
 
-  deepStrictEqual(events, [
-    {
-      kind: "tail.pane.tool",
-      runId: "run-1",
-      speaker: "baby",
-      status: "running",
-      tool: "bash",
-      detail: "task check",
-      input: '{\n  "command": "task check"\n}',
-    },
-    { kind: "tail.pane.delta", runId: "run-1", speaker: "baby", style: "text", text: "phase one\n" },
-    { kind: "tail.pane.delta", runId: "run-1", speaker: "baby", style: "text", text: "phase two\n" },
-  ]);
+  deepStrictEqual(events.map((event) => event.kind), ["tail.pane.tool", "tail.agent.panes.replaced"]);
+  const replacement = events[1];
+  equal(replacement?.kind, "tail.agent.panes.replaced");
+  if (replacement?.kind === "tail.agent.panes.replaced") {
+    deepStrictEqual(replacement.panes.baby.map((line) => line.text), [". bash task check"]);
+  }
+});
+
+test("token polling updates context tokens without overwriting canonical stats", () => {
+  const previous = {
+    contextTokens: 100,
+    turn: 7,
+    rotations: 2,
+    outcomesDone: 3,
+    outcomesTotal: 4,
+    gateReason: "awaiting review",
+    status: "blocked" as const,
+    promoted: true,
+  };
+
+  deepStrictEqual(_testMergePolledTailStats(250, previous, {
+    turn: 6,
+    rotations: 1,
+    outcomesDone: 4,
+    outcomesTotal: 5,
+    gateReason: "approval required",
+    status: "running",
+    promoted: false,
+  }), {
+    contextTokens: 250,
+    turn: 7,
+    rotations: 2,
+    outcomesDone: 4,
+    outcomesTotal: 5,
+    gateReason: "approval required",
+    status: "running",
+    promoted: false,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -329,8 +354,9 @@ test("acceptRun throws NonChainTipError for a non-chain-tip run", async () => {
     runReadModel: (runId: string) => ({ campaignId: runId, parentRunId: null, expectedSurface: [], pass: 1, turn: 0, contextTokens: 0 }),
     getStatus: () => ({ activeRuns: [], queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
     getReview: () => ({ runs: [] }),
-    getTailSnapshot: () => undefined,
-    getActiveTailSnapshot: () => null,
+    prepareTailSnapshot: async () => undefined,
+    prepareActiveTailSnapshot: async () => null,
+    resolveActiveTailRunId: () => null,
     acceptRun: (id: string): number => {
       if (stagedEntries.some(s => s.parentRunId === id)) {
         throw new NonChainTipError(id, "unknown");
@@ -514,8 +540,9 @@ test("acceptRun throws NonChainTipError with chainTip for a non-chain-tip run", 
     runReadModel: (runId: string) => ({ campaignId: runId, parentRunId: null, expectedSurface: [], pass: 1, turn: 0, contextTokens: 0 }),
     getStatus: () => ({ activeRuns: [], queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
     getReview: () => ({ runs: [] }),
-    getTailSnapshot: () => undefined,
-    getActiveTailSnapshot: () => null,
+    prepareTailSnapshot: async () => undefined,
+    prepareActiveTailSnapshot: async () => null,
+    resolveActiveTailRunId: () => null,
     acceptRun: (id: string): number => {
       if (stagedEntries.some(s => s.parentRunId === id)) {
         throw new NonChainTipError(id, childRunId);
@@ -558,8 +585,9 @@ test("acceptRun throws NonChainTipError with correct chainTip when multiple chai
     runReadModel: (runId: string) => ({ campaignId: runId, parentRunId: null, expectedSurface: [], pass: 1, turn: 0, contextTokens: 0 }),
     getStatus: () => ({ activeRuns: [], queued: [], parked: [], campaigns: [], staged: [], review: { readyForReview: 0, failed: 0 } }),
     getReview: () => ({ runs: [] }),
-    getTailSnapshot: () => undefined,
-    getActiveTailSnapshot: () => null,
+    prepareTailSnapshot: async () => undefined,
+    prepareActiveTailSnapshot: async () => null,
+    resolveActiveTailRunId: () => null,
     acceptRun: (id: string): number => {
       if (stagedEntries.some(s => s.parentRunId === id)) {
         throw new NonChainTipError(id, "b-child-chain");
@@ -679,6 +707,18 @@ test("resolveSpeaker matches a non-first active run baby session", async () => {
     // resolveSpeaker should return undefined for runA with session-b (runA has no babySessionId)
     equal(resolveSpeaker(store, runA, "session-b"), undefined, "speaker rejects run without session");
   });
+});
+
+test("active tail selection is deterministic and prefers active runs over convergences", () => {
+  equal(_testSelectActiveTailRunId([
+    { runId: "alpha", startedAt: "2026-01-01T00:00:00Z" },
+    { runId: "beta", startedAt: "2026-01-01T00:00:00Z" },
+  ], [{ runId: "newer-convergence", startedAt: "2026-01-02T00:00:00Z" }]), "beta");
+  equal(_testSelectActiveTailRunId([], [
+    { runId: "old", startedAt: "2026-01-01T00:00:00Z" },
+    { runId: "new", startedAt: "2026-01-02T00:00:00Z" },
+  ]), "new");
+  equal(_testSelectActiveTailRunId([], []), null);
 });
 
 test("_testSyncSubscriptions wires all active runs and convergences", async () => {

@@ -11,12 +11,14 @@ import type {
   Reviewer,
   SuperReviewOutcome,
 } from "../../application/ports/reviewer.js";
-import type { TurnResponse } from "../../domain/agent-response.js";
 import { parseSuperReview } from "../../domain/convergence.js";
 import type { AuthorFollowupInput, SuperReviewInput } from "../../domain/prompts.js";
 import { renderFollowupAuthoring, renderSuperReview } from "../../domain/prompts.js";
 import { classifyReviewerError, describeUnreachable } from "../../domain/reviewer-transport.js";
-import { harvestLatestReply, harvestReply } from "./harvest.js";
+import {
+  harvestReplySince,
+  snapshotMessageBoundary,
+} from "./harvest.js";
 
 // ---------------------------------------------------------------------------
 // Reviewer adapter implementation
@@ -64,9 +66,13 @@ export const createReviewer = (
   // retry up to maxTransportRetries; FATAL (auth, 400) → stop immediately. Resolves
   // to the harvested text, or `unreachable` with the last detail; never throws.
   type TurnOutcome =
-    | { kind: "text"; raw: string; response: TurnResponse }
+    | { kind: "text"; raw: string }
     | { kind: "unreachable"; detail: string };
-  const runTurn = async (sessionId: string, prompt: string, signal?: AbortSignal): Promise<TurnOutcome> => {
+  const runTurn = async (
+    sessionId: string,
+    prompt: string,
+    signal?: AbortSignal,
+  ): Promise<TurnOutcome> => {
     let lastDetail = "unknown error";
     for (let attempt = 0; ; attempt++) {
       if (signal?.aborted) {
@@ -74,8 +80,20 @@ export const createReviewer = (
       }
       let detail: string;
       try {
-        const response = await executor.sendMessage(sessionId, prompt, superdaddyModel, timeoutMs, signal);
-        const { text: raw, error } = await harvestReply(executor, sessionId, response);
+        const boundary = await snapshotMessageBoundary(executor, sessionId);
+        const response = await executor.sendMessage(
+          sessionId,
+          prompt,
+          superdaddyModel,
+          timeoutMs,
+          signal,
+        );
+        const { text: raw, error } = await harvestReplySince(
+          executor,
+          sessionId,
+          boundary,
+          response,
+        );
 
         // A provider/transport failure returns HTTP 200 with the failure on the
         // turn's `error` and no text — not the model returning a bad reply.
@@ -83,7 +101,7 @@ export const createReviewer = (
         if (error) {
           detail = error;
         } else {
-          return { kind: "text", raw, response };
+          return { kind: "text", raw };
         }
       } catch (err) {
         // A timeout or dead socket rejects out of sendMessage to here.
@@ -149,8 +167,7 @@ export const createReviewer = (
         raw: `«author unreachable»: ${turn.detail}`,
       };
     }
-    const { text } = await harvestLatestReply(executor, sessionId, turn.response);
-    return { kind: "authored", content: text, raw: turn.raw };
+    return { kind: "authored", content: turn.raw, raw: turn.raw };
   };
 
   return { superReview, authorFollowup };

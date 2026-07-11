@@ -12,6 +12,7 @@ export interface LatheSettings {
   readonly restarting: Ref<boolean>;
   readonly error: Ref<string | null>;
   readonly success: Ref<string | null>;
+  readonly restartRequired: Ref<boolean>;
   readonly reposParseError: Ref<string | null>;
   readonly dirty: ComputedRef<boolean>;
   load(): Promise<void>;
@@ -28,7 +29,9 @@ export const useLatheSettings = (c: RivetClient = client): LatheSettings => {
   const restarting = ref(false);
   const error = ref<string | null>(null);
   const success = ref<string | null>(null);
+  const restartRequired = ref(false);
   const reposParseError = ref<string | null>(null);
+  let saveInFlight: Promise<boolean> | null = null;
 
   const dirty = computed(() => {
     if (!loaded.value || !draft.value) return false;
@@ -43,8 +46,9 @@ export const useLatheSettings = (c: RivetClient = client): LatheSettings => {
       if (!result.data) {
         throw new Error("settings response was empty");
       }
-      loaded.value = result.data;
-      draft.value = JSON.parse(JSON.stringify(result.data)) as SettingsDto;
+      loaded.value = result.data.settings;
+      draft.value = JSON.parse(JSON.stringify(result.data.settings)) as SettingsDto;
+      restartRequired.value = result.data.restartRequired;
     } catch (err) {
       error.value = mapError(err);
     } finally {
@@ -52,31 +56,40 @@ export const useLatheSettings = (c: RivetClient = client): LatheSettings => {
     }
   };
 
-  const save = async (): Promise<boolean> => {
+  const save = (): Promise<boolean> => {
+    if (saveInFlight) return saveInFlight;
     error.value = null;
     reposParseError.value = null;
-    if (!draft.value) return false;
+    if (!draft.value) return Promise.resolve(false);
+    const submitted = JSON.parse(JSON.stringify(draft.value)) as SettingsDto;
     saving.value = true;
-    try {
-      const result = await c.PUT("/settings", { body: draft.value as SettingsDto });
-      if (!result.response.ok) {
-        const body = result.error as ErrorResponse | undefined;
-        throw body?.message ?? "save failed";
+    saveInFlight = (async () => {
+      try {
+        const result = await c.PUT("/settings", { body: submitted });
+        if (!result.response.ok) {
+          const body = result.error as ErrorResponse | undefined;
+          throw body?.message ?? "save failed";
+        }
+        if (!result.data) {
+          throw "save failed";
+        }
+        loaded.value = result.data.settings;
+        restartRequired.value = result.data.restartRequired;
+        if (JSON.stringify(draft.value) === JSON.stringify(submitted)) {
+          draft.value = JSON.parse(JSON.stringify(result.data.settings)) as SettingsDto;
+        }
+        success.value = "Settings saved";
+        setTimeout(() => { success.value = null; }, 3000);
+        return true;
+      } catch (err) {
+        error.value = mapError(err);
+        return false;
+      } finally {
+        saving.value = false;
+        saveInFlight = null;
       }
-      if (!result.data) {
-        throw "save failed";
-      }
-      loaded.value = result.data;
-      draft.value = JSON.parse(JSON.stringify(result.data)) as SettingsDto;
-      success.value = "Settings saved";
-      setTimeout(() => { success.value = null; }, 3000);
-      return true;
-    } catch (err) {
-      error.value = mapError(err);
-      return false;
-    } finally {
-      saving.value = false;
-    }
+    })();
+    return saveInFlight;
   };
 
   const restart = async (): Promise<boolean> => {
@@ -116,6 +129,7 @@ export const useLatheSettings = (c: RivetClient = client): LatheSettings => {
     restarting,
     error,
     success,
+    restartRequired,
     reposParseError,
     dirty,
     load,

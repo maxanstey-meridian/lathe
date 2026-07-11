@@ -30,11 +30,20 @@ const parseJson = (s: string): Obj => JSON.parse(s) as Obj;
 
 const resolveRunId = (db: DatabaseSync, runId: string | undefined): string | null => {
   if (runId) return runId;
-  const row = db.prepare("SELECT run FROM active_run ORDER BY run_id LIMIT 1").get() as
-    | { run: string }
+  const row = db.prepare(`
+    SELECT value FROM (
+      SELECT run AS value FROM active_run
+      UNION ALL
+      SELECT convergence AS value FROM active_convergence
+    )
+    ORDER BY json_extract(value, '$.startedAt') DESC,
+             json_extract(value, '$.runId') DESC
+    LIMIT 1
+  `).get() as
+    | { value: string }
     | undefined;
   if (!row) return null;
-  const active = parseJson(row.run);
+  const active = parseJson(row.value);
   return (active.runId as string) ?? null;
 };
 
@@ -84,7 +93,6 @@ const dbRun = (env: CliEnv, db: DatabaseSync, args: string[]): number => {
   env.log(kv("repo", meta.repo));
   if (meta.blockedReason) env.log(kv("blocked", meta.blockedReason));
   if (meta.blockedQuestion) env.log(kv("question", meta.blockedQuestion));
-  env.log(kv("reviewer unr.", meta.reviewerUnreachable));
   env.log(kv("promoted", meta.promoted));
   env.log(kv("updated", meta.updatedAt));
   env.log("");

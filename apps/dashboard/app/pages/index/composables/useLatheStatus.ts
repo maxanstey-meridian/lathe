@@ -3,13 +3,13 @@ import { computed, onUnmounted, ref } from "vue";
 
 import { connectLatheStatusLiveUpdates } from "./lathe-status-live";
 import { daemonEventsUrl } from "../logic/daemon-url";
-import type { LatheStatus, StatusDto } from "../ports/lathe-status";
+import type { LatheStatus, LatheStatusSnapshot } from "../ports/lathe-status";
 
 const POLL_INTERVAL_MS = 5_000;
 
 export const useLatheStatus = (): LatheStatus => {
   const runtimeConfig = useRuntimeConfig();
-  const status = ref<StatusDto | null>(null);
+  const status = ref<LatheStatusSnapshot | null>(null);
   const isLoading = ref(false);
   const errorMessage = ref<string | null>(null);
   const isLive = ref(false);

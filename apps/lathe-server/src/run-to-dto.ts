@@ -17,7 +17,6 @@ import type { RunDetailDto, RunStatus, RunSummaryDto } from "@lathe/contract";
 const DOMAIN_TO_WIRE: Record<RunMeta["status"], RunStatus> = {
   queued: "queued",
   running: "running",
-  interrupted: "interrupted",
   ready_for_review: "ready_for_review",
   blocked: "blocked",
   failed: "failed",

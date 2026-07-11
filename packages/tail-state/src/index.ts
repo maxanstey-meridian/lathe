@@ -38,9 +38,11 @@ export type TailStatsState = {
 
 export type TailViewState = {
   readonly snapshot: TailSnapshotDto | null;
+  readonly agentPanes: Record<TailSpeaker, TailPaneState>;
   readonly panes: Record<TailSpeaker | "driver", TailPaneState>;
   readonly driverCommands: TailDriverCommandDto[];
   readonly driverEvents: string[];
+  readonly acceptanceReviewLines: string[];
   readonly stats: TailStatsState | null;
   readonly charsThisTurn: number;
 };
@@ -64,13 +66,16 @@ const boundedAttachment = (attachment: string): string => {
 const boundedPaneLine = (line: TailPaneLine): TailPaneLine => ({
   ...line,
   text: line.text.slice(-TAIL_PROTOCOL_LIMITS.lineChars),
-  ...(line.attachment !== undefined
-    ? { attachment: boundedAttachment(line.attachment) }
-    : {}),
+  ...(line.attachment !== undefined ? { attachment: boundedAttachment(line.attachment) } : {}),
 });
 
 const boundedPaneLines = (lines: TailPaneLine[]): TailPaneLine[] =>
   lines.map(boundedPaneLine).slice(-TAIL_PROTOCOL_LIMITS.paneLines);
+
+const boundedReviewLines = (lines: string[]): string[] =>
+  lines
+    .map((text) => text.slice(-TAIL_PROTOCOL_LIMITS.lineChars))
+    .slice(-TAIL_PROTOCOL_LIMITS.paneLines);
 
 const boundedAgentPanes = (panes: TailAgentPanesDto): TailAgentPanesDto => ({
   baby: boundedPaneLines(panes.baby),
@@ -98,6 +103,20 @@ const agentPanesFromDto = (
   baby: paneFromLines(panes.baby),
   daddy: paneFromLines(panes.daddy),
   super: paneFromLines(panes.super),
+});
+
+const composeAgentPanes = (
+  panes: Record<TailSpeaker, TailPaneState>,
+  acceptanceReviewLines: string[],
+): Record<TailSpeaker, TailPaneState> => ({
+  ...panes,
+  super: {
+    ...panes.super,
+    lines: boundedPaneLines([
+      ...panes.super.lines,
+      ...acceptanceReviewLines.map((text) => ({ text, style: "tool" as const })),
+    ]),
+  },
 });
 
 const boundedDriverSegments = (
@@ -215,18 +234,28 @@ export const tailStateFromSnapshot = (snapshot: TailSnapshotDto | null): TailVie
   const commands = boundedDriverCommands(snapshot?.driverCommands ?? []);
   const driverEvents = snapshot ? driverEventsFromSnapshot(snapshot) : [];
   const panes = snapshot ? boundedAgentPanes(snapshot.panes) : null;
+  const acceptanceReviewLines = boundedReviewLines(snapshot?.acceptanceReviewLines ?? []);
+  const agentPanes = panes
+    ? agentPanesFromDto(panes)
+    : { baby: emptyTailPane(), daddy: emptyTailPane(), super: emptyTailPane() };
+  const composedPanes = composeAgentPanes(agentPanes, acceptanceReviewLines);
   return {
     snapshot: snapshot
-      ? { ...snapshot, panes: panes ?? snapshot.panes, driverCommands: commands }
+      ? {
+          ...snapshot,
+          panes: panes ?? snapshot.panes,
+          driverCommands: commands,
+          acceptanceReviewLines,
+        }
       : null,
+    agentPanes,
     panes: {
-      baby: panes ? paneFromLines(panes.baby) : emptyTailPane(),
-      daddy: panes ? paneFromLines(panes.daddy) : emptyTailPane(),
-      super: panes ? paneFromLines(panes.super) : emptyTailPane(),
+      ...composedPanes,
       driver: driverPane(commands, driverEvents),
     },
     driverCommands: commands,
     driverEvents,
+    acceptanceReviewLines,
     stats: snapshot ? tailStatsFromSnapshot(snapshot) : null,
     charsThisTurn: 0,
   };
@@ -281,10 +310,47 @@ const updatePane = (
   state: TailViewState,
   speaker: TailSpeaker,
   update: (pane: TailPaneState) => TailPaneState,
-): TailViewState => ({
-  ...state,
-  panes: { ...state.panes, [speaker]: update(state.panes[speaker]) },
-});
+): TailViewState => {
+  const agentPanes = { ...state.agentPanes, [speaker]: update(state.agentPanes[speaker]) };
+  return {
+    ...state,
+    agentPanes,
+    panes: { ...state.panes, ...composeAgentPanes(agentPanes, state.acceptanceReviewLines) },
+  };
+};
+
+const flushCurrent = (pane: TailPaneState): TailPaneState =>
+  pane.current.trim()
+    ? {
+        ...pane,
+        lines: boundedPaneLines([...pane.lines, { text: pane.current, style: pane.currentStyle }]),
+        current: "",
+      }
+    : pane;
+
+const replaceSuperReviewState = (
+  state: TailViewState,
+  lines: string[],
+  now: number,
+): TailViewState => {
+  const boundedLines = boundedReviewLines(lines);
+  const transcriptSuper = { ...flushCurrent(state.agentPanes.super), lastAt: now };
+  const agentPanes = { ...state.agentPanes, super: transcriptSuper };
+  const composedPanes = composeAgentPanes(agentPanes, boundedLines);
+  return {
+    ...state,
+    agentPanes,
+    acceptanceReviewLines: boundedLines,
+    snapshot: state.snapshot
+      ? {
+          ...state.snapshot,
+          acceptanceReviewLines: boundedLines,
+          panes: { ...state.snapshot.panes, super: transcriptSuper.lines },
+        }
+      : state.snapshot,
+    panes: { ...state.panes, ...composedPanes },
+  };
+};
 
 const sameRun = (state: TailViewState, runId: string): boolean =>
   state.snapshot === null || runId === state.snapshot.runId;
@@ -390,10 +456,16 @@ export const applyTailEvent = (
   switch (event.kind) {
     case "tail.agent.panes.replaced": {
       const panes = boundedAgentPanes(event.panes);
+      const acceptanceReviewLines = boundedReviewLines(event.acceptanceReviewLines);
+      const agentPanes = agentPanesFromDto(panes);
       return {
         ...state,
-        snapshot: state.snapshot ? { ...state.snapshot, panes } : state.snapshot,
-        panes: { ...state.panes, ...agentPanesFromDto(panes) },
+        agentPanes,
+        acceptanceReviewLines,
+        snapshot: state.snapshot
+          ? { ...state.snapshot, panes, acceptanceReviewLines }
+          : state.snapshot,
+        panes: { ...state.panes, ...composeAgentPanes(agentPanes, acceptanceReviewLines) },
       };
     }
     case "tail.journal": {
@@ -457,8 +529,9 @@ export const applyTailEvent = (
     case "tail.driver.delta":
     case "tail.driver.command":
       return withDriverCommands(state, applyDriverEvent(state.driverCommands, event), now);
+    case "tail.super.status":
     case "tail.super.verdict":
-      return state;
+      return replaceSuperReviewState(state, event.lines, now);
     default:
       return assertNever(event);
   }

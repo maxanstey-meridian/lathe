@@ -130,9 +130,17 @@ export const JournalEvent = z.discriminatedUnion("event", [
   // is not streamed, so without this the reviewer's verdict never reaches the tail. §SUPER-DADDY.
   z.object({
     ...base,
+    event: z.literal("super_review_status"),
+    pass: z.number().int(),
+    status: z.enum(["started", "cancelled", "failed"]),
+    detail: z.string().optional(),
+  }),
+  z.object({
+    ...base,
     event: z.literal("super_review"),
     pass: z.number().int(),
     verdict: FinalReviewVerdict,
+    proposedVerdict: FinalReviewVerdict.optional(),
     findings: z.array(z.string()),
   }),
   z.object({ ...base, event: z.literal("ladder_step"), count: z.number().int() }),
@@ -211,8 +219,17 @@ export const renderJournalEvent = (e: JournalEvent): string => {
       return `${t} 📋 report accepted: ${e.status}`;
     case "final_review":
       return `${t} 🔍 final review [${e.verdict}]${e.findings.length ? `\n   ${e.findings.join("\n   ")}` : ""}`;
+    case "super_review_status": {
+      if (e.status === "started") {
+        return `${t} acceptance review pass ${e.pass} started`;
+      }
+      if (e.status === "cancelled") {
+        return `${t} acceptance review pass ${e.pass} cancelled`;
+      }
+      return `${t} acceptance review pass ${e.pass} failed${e.detail ? `: ${e.detail}` : ""}`;
+    }
     case "super_review":
-      return `${t} acceptance review pass ${e.pass} [${e.verdict}]${e.findings.length ? `\n   ${e.findings.join("\n   ")}` : ""}`;
+      return `${t} acceptance review pass ${e.pass} [${e.verdict}]${e.proposedVerdict && e.proposedVerdict !== e.verdict ? ` (proposed ${e.proposedVerdict})` : ""}${e.findings.length ? `\n   ${e.findings.join("\n   ")}` : ""}`;
     case "ladder_step":
       return `${t} ⚠ no-progress ladder: ${e.count}`;
     case "parked":
@@ -233,4 +250,10 @@ export const renderJournalEvent = (e: JournalEvent): string => {
 };
 
 export const isDriverEvent = (e: JournalEvent): boolean =>
-  e.event !== "tool_call" && e.event !== "turn_ended" && e.event !== "prompt_sent";
+  e.event !== "tool_call" &&
+  e.event !== "turn_ended" &&
+  e.event !== "prompt_sent" &&
+  e.event !== "planner_exchange" &&
+  e.event !== "final_review" &&
+  e.event !== "super_review_status" &&
+  e.event !== "super_review";

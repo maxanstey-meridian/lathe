@@ -2,11 +2,11 @@ import { test, expect } from "vitest";
 import { computed, defineComponent, h, ref, type Ref } from "vue";
 import { mount } from "@vue/test-utils";
 
-import type { StatusDto } from "../app/pages/index/ports/lathe-status";
-import { provideLatheStatus } from "../app/pages/index/ports/lathe-status";
+import type { LatheStatusSnapshot } from "../app/pages/index/ports/lathe-status";
+import * as statusPort from "../app/pages/index/ports/lathe-status";
 import CommandBar from "../app/pages/index/components/CommandBar.vue";
 
-const makeStatus = (activeRuns: Array<{ runId: string; outcomes: string; gateLatched: string | null; recentEvents: Array<{ at: string; event: string }> }>): StatusDto => ({
+const makeStatus = (activeRuns: Array<{ runId: string; outcomes: string; gateLatched: string | null; recentEvents: Array<{ at: string; event: string }> }>): LatheStatusSnapshot => ({
   activeRuns,
   queued: [],
   parked: [],
@@ -16,17 +16,17 @@ const makeStatus = (activeRuns: Array<{ runId: string; outcomes: string; gateLat
   stopped: [],
 });
 
-const mountCommandBar = (statusRef: Ref<StatusDto | null>, activeTab = "console") => {
+const mountCommandBar = (statusRef: Ref<LatheStatusSnapshot | null>, activeTab = "console") => {
   const Harness = defineComponent({
     setup() {
-      provideLatheStatus({
-        status: statusRef,
-        isLoading: ref(false),
-        errorMessage: ref(null),
-        isDaemonReachable: computed(() => true),
-        isLive: ref(false),
-        refresh: async () => undefined,
-        requeue: async () => undefined,
+      statusPort["provideLatheStatus"]({
+          status: statusRef,
+          isLoading: ref(false),
+          errorMessage: ref(null),
+          isDaemonReachable: computed(() => true),
+          isLive: ref(false),
+          refresh: async () => undefined,
+          requeue: async () => undefined,
       });
       return () => h(CommandBar, { activeTab });
     },

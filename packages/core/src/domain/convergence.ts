@@ -73,7 +73,7 @@ export const SuperReview = z.object({
   convergence: ConvergenceSignal,
   commit_message: CommitMessage.nullable().default(null),
   notes: z.string().default(""),
-  human_decision_needed: z.string().nullable().default(null),
+  human_decision_needed: z.string().trim().min(1).nullable().default(null),
 });
 export type SuperReview = z.infer<typeof SuperReview>;
 
@@ -88,22 +88,79 @@ export type ConvergeDecision =
   | { action: "stop" }
   | { action: "escalate"; reason: string };
 
+export const ConvergeDecision = z.union([
+  z.object({ action: z.literal("author"), blockers: z.array(Finding), promote: z.boolean() }),
+  z.object({ action: z.literal("stop") }),
+  z.object({ action: z.literal("escalate"), reason: z.string() }),
+]);
+
+const PersistedVerificationResult = z.object({
+  command: z.string(),
+  exitCode: z.number(),
+  outputTail: z.string(),
+});
+
+const ConvergenceOperationIdentity = {
+  runId: z.string().min(1),
+  attempt: z.number().int().positive(),
+  autofixFingerprint: z.string().min(1),
+};
+
+const DecidedConvergenceOperation = {
+  ...ConvergenceOperationIdentity,
+  campaignId: z.string().min(1),
+  pass: z.number().int().positive(),
+  maxPasses: z.number().int().positive(),
+  decidedAt: z.string(),
+  verification: z.array(PersistedVerificationResult),
+  review: SuperReview,
+  reviewRaw: z.string(),
+  decision: ConvergeDecision,
+  effectiveDecision: ConvergeDecision.optional(),
+  amendedCommitSha: z.string().nullable().optional(),
+  amendExpectedHead: z.string().min(1).optional(),
+  amendExpectedTree: z.string().min(1).optional(),
+  amendMessage: z.string().min(1).optional(),
+  followup: z.object({ runId: z.string().min(1), packet: z.string().min(1) }).optional(),
+  followupPublication: z
+    .object({
+      branch: z.string().min(1),
+      expectedOldSha: z.string().min(1).nullable(),
+      expectedNewSha: z.string().min(1),
+    })
+    .optional(),
+};
+
+export const ConvergenceOperation = z.discriminatedUnion("phase", [
+  z.object({
+    ...ConvergenceOperationIdentity,
+    phase: z.enum(["autofix_started", "autofix_applied"]),
+  }),
+  z.object({
+    ...DecidedConvergenceOperation,
+    phase: z.enum(["decided", "amend_started", "effect_applied", "published"]),
+  }),
+]);
+export type ConvergenceOperation = z.infer<typeof ConvergenceOperation>;
+
 // Policy the caller supplies (it owns config, the pure decision does not): whether
 // the cap may spend ONE promoted pass, and whether THIS run already was that pass.
 export type PromotePolicy = { promoteAtCap: boolean; alreadyPromoted: boolean };
 
-// We trust the verdict. Order matters and every branch fails CLOSED toward Max,
-// with ONE deliberate escape hatch — the promoted pass at the cap:
-//   1. accept + human_decision_needed                 → escalate
-//   2. accept + green                                 → stop (the ONLY stop path)
-//   3. accept but verification red                    → escalate
+// The verdict is a proposal. Order matters and every contradiction fails CLOSED
+// toward Max, with ONE deliberate escape hatch — the promoted pass at the cap:
+//   1. any human_decision_needed                       → escalate
+//   2. accept + verification red                       → escalate
+//   3. accept + recommend_stop false                   → escalate
+//   4. accept + grounded P0/P1 finding                 → escalate
+//   5. accept + green + no contradiction               → stop (the ONLY stop path)
 //   ── at the cap (last resort) ──
-//   4. cap + promotion available + findings to author → author PROMOTED (Daddy's model)
-//   5. cap + promotion spent / nothing to author      → escalate
+//   6. cap + promotion available + findings to author → author PROMOTED (Daddy's model)
+//   7. cap + promotion spent / nothing to author      → escalate
 //   ── below the cap ──
-//   6. explicit escalate / human_decision_needed      → escalate
-//   7. request_changes with no findings               → escalate
-//   8. request_changes + passes left                  → author EVERY finding
+//   8. explicit escalate                               → escalate
+//   9. request_changes with no findings                → escalate
+//  10. request_changes + passes left                   → author EVERY finding
 //
 // The cap branch is the ONLY place an `escalate` verdict can be turned back into a
 // pass, and only once per campaign (alreadyPromoted guards re-promotion): before
@@ -116,20 +173,48 @@ export const decideConvergence = (
   maxPasses: number,
   promote: PromotePolicy = { promoteAtCap: false, alreadyPromoted: false },
 ): ConvergeDecision => {
-  // Accept is handled first so a clean accept is never diverted into a pass. A
-  // human_decision_needed on an accept is a genuine "ask Max" and still escalates.
+  if (review.human_decision_needed !== null) {
+    return { action: "escalate", reason: review.human_decision_needed };
+  }
+
+  // Accept is handled first so a mechanically consistent accept is never diverted
+  // into a pass. Contradictory signals fail closed rather than trusting the label.
   if (review.verdict === "accept") {
-    if (review.human_decision_needed) {
-      return { action: "escalate", reason: review.human_decision_needed };
+    if (!verificationGreen) {
+      return {
+        action: "escalate",
+        reason:
+          "reviewer accepted but a verification command is red — under-reported; not safe to auto-stop",
+      };
     }
-    if (verificationGreen) {
-      return { action: "stop" };
+    if (!review.convergence.recommend_stop) {
+      return {
+        action: "escalate",
+        reason:
+          "reviewer accepted with recommend_stop=false — contradictory; not safe to auto-stop",
+      };
     }
-    return {
-      action: "escalate",
-      reason:
-        "reviewer accepted but a verification command is red — under-reported; not safe to auto-stop",
-    };
+    const failedCommands = review.findings.filter(
+      (finding) => finding.grounding.kind === "command_fail",
+    );
+    if (failedCommands.length > 0) {
+      return {
+        action: "escalate",
+        reason: `reviewer accepted with ${failedCommands.length} failed command finding(s) — contradictory; not safe to auto-stop`,
+      };
+    }
+    const groundedBlockers = review.findings.filter(
+      (finding) =>
+        (finding.severity === "P0" || finding.severity === "P1") &&
+        finding.grounding.kind !== "none",
+    );
+    if (groundedBlockers.length > 0) {
+      return {
+        action: "escalate",
+        reason: `reviewer accepted with ${groundedBlockers.length} grounded P0/P1 finding(s) — contradictory; not safe to auto-stop`,
+      };
+    }
+    return { action: "stop" };
   }
 
   // Not accepted: request_changes or escalate. At the cap, the promoted pass is the
@@ -154,9 +239,9 @@ export const decideConvergence = (
     };
   }
 
-  // Below the cap an explicit escalate / human ask still parks for Max.
-  if (review.verdict === "escalate" || review.human_decision_needed) {
-    return { action: "escalate", reason: review.human_decision_needed ?? "reviewer escalated" };
+  // Below the cap an explicit escalate still parks for Max.
+  if (review.verdict === "escalate") {
+    return { action: "escalate", reason: "reviewer escalated" };
   }
   // request_changes below the cap — author every finding, no promotion.
   if (!canAuthor) {
@@ -202,7 +287,8 @@ export const parseSuperReview = (raw: string): SuperReview => {
     },
     commit_message: null,
     notes: "super-review response was not valid JSON; failing closed to escalate",
-    human_decision_needed: "The Acceptance Reviewer returned an unparseable verdict; inspect the run manually.",
+    human_decision_needed:
+      "The Acceptance Reviewer returned an unparseable verdict; inspect the run manually.",
   };
 };
 

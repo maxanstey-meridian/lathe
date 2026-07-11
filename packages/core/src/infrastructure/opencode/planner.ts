@@ -4,7 +4,9 @@
 
 import type { Executor, ModelConfig } from "../../application/ports/executor.js";
 import type { Planner } from "../../application/ports/planner.js";
-import type { Packet, OutcomeLedger, SubmitReport } from "../../domain/index.js";
+import type { OutcomeLedger } from "../../domain/outcomes.js";
+import type { Packet } from "../../domain/packet.js";
+import type { SubmitReport } from "../../domain/report.js";
 import { renderPlannerQuestion, renderFinalReview } from "../../domain/prompts.js";
 import { ACCEPTED_STATUSES, type PlannerResponse, type FinalReview } from "../../domain/review.js";
 import {
@@ -57,10 +59,20 @@ export const createPlanner = (
   // directory is the run's worktree: Daddy's session roots there (read-only — it
   // has no write/edit/patch/bash) so it can inspect the actual code when a
   // reconciliation/handoff question can't be answered from inline evidence alone.
-  const handshake = async (seedPrompt: string, directory: string): Promise<string> => {
+  const handshake = async (
+    seedPrompt: string,
+    directory: string,
+    signal?: AbortSignal,
+  ): Promise<string> => {
     daddySessionId = await executor.createSession("lathe-planner", directory);
     const boundary = await snapshotMessageBoundary(executor, daddySessionId);
-    const response = await executor.sendMessage(daddySessionId, seedPrompt, daddyModel, 30000);
+    const response = await executor.sendMessage(
+      daddySessionId,
+      seedPrompt,
+      daddyModel,
+      30000,
+      signal,
+    );
     const { text } = await harvestReplySince(executor, daddySessionId, boundary, response);
     if (!text.includes("PLANNER_OK")) {
       throw new Error(`Daddy handshake failed: expected "PLANNER_OK", got: ${text.slice(0, 200)}`);
@@ -75,6 +87,7 @@ export const createPlanner = (
 
   const syncMaxDecisions = async (
     decisions: { timestamp: string; question: string; answer: string }[],
+    signal?: AbortSignal,
   ): Promise<void> => {
     if (!daddySessionId) {
       throw new Error("handshake must be called before syncMaxDecisions");
@@ -92,7 +105,13 @@ export const createPlanner = (
     const prompt = `DADDY STATE SYNC — Max answered parked-run question(s). Treat these as authoritative run state for all later planning and final review. Do not rely on any older contrary premise from this session. Absorb this state and reply exactly DADDY_SYNC_OK.\n\n${body}`;
 
     const boundary = await snapshotMessageBoundary(executor, daddySessionId);
-    const response = await executor.sendMessage(daddySessionId, prompt, daddyModel, daddyTimeoutMs);
+    const response = await executor.sendMessage(
+      daddySessionId,
+      prompt,
+      daddyModel,
+      daddyTimeoutMs,
+      signal,
+    );
     const { text } = await harvestReplySince(executor, daddySessionId, boundary, response);
     if (!text.includes("DADDY_SYNC_OK")) {
       throw new Error(`Daddy sync failed: expected DADDY_SYNC_OK, got: ${text.slice(0, 200)}`);
@@ -104,6 +123,7 @@ export const createPlanner = (
   const consult = async (
     input: Parameters<Planner["consult"]>[0],
     context?: Parameters<Planner["consult"]>[1],
+    signal?: AbortSignal,
   ): Promise<PlannerResponse> => {
     if (!daddySessionId) {
       throw new Error("handshake must be called before consult");
@@ -121,7 +141,13 @@ export const createPlanner = (
     const rawReplies: string[] = [];
 
     const boundary = await snapshotMessageBoundary(executor, daddySessionId);
-    const response = await executor.sendMessage(daddySessionId, prompt, daddyModel, daddyTimeoutMs);
+    const response = await executor.sendMessage(
+      daddySessionId,
+      prompt,
+      daddyModel,
+      daddyTimeoutMs,
+      signal,
+    );
     const { text, toolNames } = await harvestReplySince(
       executor,
       daddySessionId,
@@ -141,7 +167,13 @@ export const createPlanner = (
       const reason = issue ?? diagnosePlannerParse(lastRaw);
       const nudge = issue ? groundingReaskNudge(reason) : jsonReaskNudge(reason);
       const retryBoundary = await snapshotMessageBoundary(executor, daddySessionId);
-      const retry = await executor.sendMessage(daddySessionId, nudge, daddyModel, daddyTimeoutMs);
+      const retry = await executor.sendMessage(
+        daddySessionId,
+        nudge,
+        daddyModel,
+        daddyTimeoutMs,
+        signal,
+      );
       const { text: retryText, toolNames: retryToolNames } = await harvestReplySince(
         executor,
         daddySessionId,
@@ -176,6 +208,7 @@ export const createPlanner = (
     packet: Packet,
     ledger: OutcomeLedger,
     report: SubmitReport,
+    signal?: AbortSignal,
   ): Promise<FinalReview> => {
     if (!daddySessionId) {
       throw new Error("handshake must be called before finalReview");
@@ -191,6 +224,7 @@ export const createPlanner = (
         prompt,
         daddyModel,
         daddyTimeoutMs,
+        signal,
       );
       const { text: raw } = await harvestReplySince(executor, daddySessionId, boundary, response);
       let parsed = tryParseFinalReview(raw);
@@ -204,7 +238,13 @@ export const createPlanner = (
         const reason = diagnoseFinalReviewParse(lastRaw);
         const nudge = jsonReaskNudge(reason);
         const retryBoundary = await snapshotMessageBoundary(executor, daddySessionId);
-        const retry = await executor.sendMessage(daddySessionId, nudge, daddyModel, daddyTimeoutMs);
+        const retry = await executor.sendMessage(
+          daddySessionId,
+          nudge,
+          daddyModel,
+          daddyTimeoutMs,
+          signal,
+        );
         const { text: retryText } = await harvestReplySince(
           executor,
           daddySessionId,
@@ -226,6 +266,9 @@ export const createPlanner = (
         human_decision_needed: `Daddy could not produce a parseable final-review verdict after ${MAX_REASKS + 1} attempts. Raw replies are in the findings.`,
       };
     } catch (err) {
+      if (signal?.aborted) {
+        throw err;
+      }
       const detail = err instanceof Error ? err.message : String(err);
       return {
         verdict: "escalate",

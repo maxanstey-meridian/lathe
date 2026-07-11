@@ -14,6 +14,7 @@ export const CampaignPass = z.object({
   attempt: z.number().int().min(1).default(1),
   pass: z.number().int().min(1),
   verdict: FinalReviewVerdict,
+  proposedVerdict: FinalReviewVerdict.optional(),
   groundedBlockers: z.number().int(),
   atIso: z.string(),
 });

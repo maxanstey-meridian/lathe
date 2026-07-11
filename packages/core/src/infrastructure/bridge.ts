@@ -17,17 +17,13 @@ import type { Store } from "../application/ports/store.js";
 import type { Paths } from "../config/paths.js";
 import type { Config } from "../config/schemas.js";
 import { classifyChangedFiles } from "../domain/gate-classification.js";
-import {
-  OutcomeStatus,
-  SubmitReport,
-  BlockedReason,
-  ACCEPTED_STATUSES,
-  clearedGateState,
-  type Packet,
-  type OutcomeLedger,
-  type Checkpoint,
-  type BridgeIntent,
-} from "../domain/index.js";
+import { OutcomeStatus, type OutcomeLedger, type Checkpoint } from "../domain/outcomes.js";
+import type { Packet } from "../domain/packet.js";
+import { SubmitReport } from "../domain/report.js";
+import { ACCEPTED_STATUSES } from "../domain/review.js";
+import { BlockedReason } from "../domain/run.js";
+import { clearedGateState } from "../domain/gate-decisions.js";
+import type { BridgeIntent } from "../domain/turn.js";
 import { JournalEvent } from "../domain/journal.js";
 import { isTestPath } from "../domain/report.js";
 import type { AskPlannerInput as DomainAskPlannerInput, QuestionType } from "../domain/review.js";
@@ -203,9 +199,6 @@ export type AskPlannerInput = {
   approach: string;
   evidence: string[];
 };
-
-// Re-export the domain AskPlannerInput for tests.
-export type { AskPlannerInput as DomainAskPlannerInput, QuestionType } from "../domain/review.js";
 
 export type UpdateOutcomesInput = {
   runId: string;

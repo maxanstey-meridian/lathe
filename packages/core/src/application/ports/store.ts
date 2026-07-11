@@ -5,61 +5,121 @@
 // The adapter holds Paths internally and resolves paths per-method.
 
 import type { StagedInfo } from "../../domain/chain.js";
-import type { ConvergeDecision, SuperReview } from "../../domain/convergence.js";
+import type {
+  ConvergeDecision,
+  ConvergenceOperation,
+  SuperReview,
+} from "../../domain/convergence.js";
 import type {
   RunMeta,
   ReviewState,
   Decision,
-  Checkpoint,
-  GateState,
   ActiveRun,
   ActiveConvergence,
-  OutcomeLedger,
-  Packet,
-  Campaign,
-  SubmitReport,
-} from "../../domain/index.js";
+} from "../../domain/run.js";
+import type { Checkpoint, OutcomeLedger } from "../../domain/outcomes.js";
+import type { GateState } from "../../domain/gate.js";
+import type { Packet } from "../../domain/packet.js";
+import type { Campaign } from "../../domain/campaign.js";
+import type { SubmitReport } from "../../domain/report.js";
 import type { JournalEvent } from "../../domain/journal.js";
+import type { AcceptanceOperation, RunStartupOperation } from "../../domain/operations.js";
 import type { Plan } from "../../domain/plan.js";
+import type { RunStatus } from "../../domain/run.js";
 import type { VerificationResult } from "./verify.js";
 
 // Queue entry — inline; no domain function consumes it.
+export type RepositoryLease = {
+  repo: string;
+  ownerId: string;
+  runId: string;
+  purpose: "execute" | "accept";
+  epoch: number;
+  acquiredAt: string;
+  heartbeatAt: string;
+  expiresAt: string;
+};
 export type QueueEntry = { runId: string; admittedAt: string };
+export type ClaimedQueueEntry = QueueEntry & { lease: RepositoryLease };
 export type JournalStats = { turn: number; contextTokens: number; rotations: number };
+export type RunTransition = {
+  runId: string;
+  expectedRevision: number;
+  expectedStatuses: RunStatus[];
+  meta: RunMeta;
+  activeRun?: ActiveRun | null;
+  lease?: RepositoryLease;
+  event?: JournalEvent;
+};
+export type CampaignAcceptance = {
+  runId: string;
+  expectedRevision: number;
+  expectedStatus: "accepted" | "ready_for_review";
+};
+export type AnswerTransition = {
+  runId: string;
+  expectedRevision: number;
+  expectedStatus: "blocked" | "failed";
+  meta: RunMeta;
+  decision: Decision;
+  gateState?: GateState;
+};
+export type ConvergencePublication = {
+  operation: ConvergenceOperation;
+  campaign: Campaign;
+  entry: ConvergenceLogEntry;
+  event: JournalEvent;
+  nits?: string;
+  runTransition?: RunTransition;
+  followup?: { runId: string; raw: string };
+  lease: RepositoryLease;
+};
 
-// Convergence log entry — a discriminated union so an UNREACHABLE attempt (transport drop, no verdict)
-// is logged honestly instead of forging an escalate SuperReview. The shared head
-// (at/runId/campaignId/pass/maxPasses/verification) is on both branches.
-type ConvergenceLogHead = {
+export type ConvergenceLogEntry = {
+  kind: "reviewed";
   at: string;
   runId: string;
   campaignId: string;
   pass: number;
   maxPasses: number;
   verification: { green: boolean; commands: VerificationResult[] };
+  decision: ConvergeDecision;
+  amendedCommitSha: string | null;
+  primary: SuperReview;
+  primaryRaw: string;
 };
-
-export type ConvergenceLogEntry =
-  | (ConvergenceLogHead & {
-      kind: "reviewed";
-      decision: ConvergeDecision;
-      amendedCommitSha: string | null;
-      primary: SuperReview;
-      primaryRaw: string;
-    })
-  | (ConvergenceLogHead & {
-      kind: "unreachable";
-      // 1-based index of this consecutive drop; budget = maxReviewerUnreachable.
-      detail: string;
-      attempt: number;
-      budget: number;
-    });
 
 export type Store = {
   // Run state (meta)
   readMeta(runId: string): RunMeta;
   readMetaIfExists(runId: string): RunMeta | undefined;
+  /** Insert bootstrap metadata. Existing run identities are never overwritten. */
   writeMeta(meta: RunMeta): void;
+  transitionRun(transition: RunTransition): RunMeta;
+  readRunStartup(runId: string, attempt: number): RunStartupOperation | undefined;
+  persistRunStartup(operation: RunStartupOperation, lease?: RepositoryLease): void;
+  initializeRunStartup(
+    operation: RunStartupOperation,
+    ledger: OutcomeLedger,
+    reviewState: ReviewState,
+    gateState: GateState,
+    lease?: RepositoryLease,
+  ): void;
+  activateRunStartup(
+    operation: RunStartupOperation,
+    transition: RunTransition & { lease: RepositoryLease },
+  ): RunMeta;
+  /** Atomically validate exact campaign member revisions and mark every member accepted. */
+  acceptCampaign(
+    members: CampaignAcceptance[],
+    acceptedInto: string,
+    lease?: RepositoryLease,
+  ): RunMeta[];
+  readAcceptanceOperation(campaignId: string): AcceptanceOperation | undefined;
+  persistAcceptanceOperation(operation: AcceptanceOperation, lease?: RepositoryLease): void;
+  commitAcceptanceOperation(operation: AcceptanceOperation, lease: RepositoryLease): RunMeta[];
+  /** Atomically persist the operator decision, authoritative gate state, and run transition. */
+  answerRun(transition: AnswerTransition): RunMeta;
   listRunIds(): string[];
   listMeta(): RunMeta[];
 
@@ -98,9 +158,14 @@ export type Store = {
   // Convergence (jsonl)
   appendConvergence(runId: string, entry: ConvergenceLogEntry): void;
   readConvergence(runId: string): ConvergenceLogEntry[];
+  readConvergenceOperation(runId: string, attempt: number): ConvergenceOperation | undefined;
+  persistConvergenceOperation(operation: ConvergenceOperation, lease: RepositoryLease): void;
+  publishConvergence(publication: ConvergencePublication): RunMeta | undefined;
 
   // Active run pointer — multi-row keyed by runId
   listActiveRuns(): ActiveRun[];
+  /** Rebuild the gate plugin projection from authoritative SQLite state. */
+  syncActiveRunProjection(): void;
   addActiveRun(run: ActiveRun): void;
   removeActiveRun(runId: string): void;
 
@@ -112,6 +177,13 @@ export type Store = {
   // Campaign
   readCampaign(campaignId: string): Campaign | undefined;
   writeCampaign(campaign: Campaign): void;
+  /** Commit follow-up metadata and campaign state together; packet markdown is a recoverable projection. */
+  admitQueueWithCampaign(
+    runId: string,
+    raw: string,
+    campaign: Campaign,
+    decision?: { runId: string; event: JournalEvent },
+  ): void;
   listCampaigns(): Campaign[];
   listRunsByCampaign(campaignId: string): RunMeta[];
 
@@ -119,14 +191,20 @@ export type Store = {
   listQueue(): QueueEntry[];
   admitQueue(runId: string, raw: string): void;
   archiveQueue(runId: string): void;
-  /** Atomically claim one queued run, excluding active repos. Returns undefined if no eligible runs. */
-  claimNextQueuedRun(excludedRepos: string[]): QueueEntry | undefined;
+  /** Atomically claim one queued run and acquire its repository lease. */
+  claimNextQueuedRun(excludedRepos: string[], ownerId?: string): ClaimedQueueEntry | undefined;
+  acquireRepositoryLease(
+    repo: string,
+    ownerId: string,
+    runId: string,
+    purpose: RepositoryLease["purpose"],
+  ): RepositoryLease | undefined;
+  listRepositoryLeases(): RepositoryLease[];
+  heartbeatRepositoryLease(lease: RepositoryLease): RepositoryLease | undefined;
+  releaseRepositoryLease(lease: RepositoryLease): boolean;
 
   // Queue packet read — fresh-run raw packet source
   readQueuePacket(runId: string): string | undefined;
-
-  // Meta from queue — build minimal RunMeta from a fresh queue packet
-  initMetaFromQueue(runId: string): RunMeta | undefined;
 
   // Staged-chain registry
   listStaged(): StagedInfo[];

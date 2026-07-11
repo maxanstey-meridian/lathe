@@ -130,7 +130,7 @@ lathe db <command> [args]      # read-only SQLite inspector (defaults to active 
 
 `lathe prepare <runId>` prepares reviewed work for merge. It requires a successful Acceptance Review, resolves to the campaign tip, fetches that branch into the source repo, removes all campaign sandboxes, deletes intermediate branches best-effort, then marks every campaign run `accepted` and records the fetched tip branch in `acceptedInto`. It does not merge or modify the source working tree. `lathe accept` remains a compatibility alias. The Human Operator owns inspection and the manual merge.
 
-The daemon API intentionally exposes the durable run statuses `interrupted`, `ready_for_review`, and `blocked`. This replaces the former lossy wire projections `paused` and `converged` and is a breaking contract change for exhaustive API consumers.
+The daemon API exposes durable run statuses directly, including `ready_for_review`, `blocked`, and `stopped`, rather than lossy wire-only projections.
 
 ## How It Works
 

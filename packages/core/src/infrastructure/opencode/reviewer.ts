@@ -1,7 +1,7 @@
 // Reviewer adapter: super-daddy convergence reviewer (CONTRACT §18 S2, S11).
 // Reads replies through the shared all-message harvest (the 0-char-final-message
 // scar). superReview separates a real REVIEW from an UNREACHABLE transport failure:
-// transient drops are retried, then resolve to an `unreachable` outcome (never a
+// transport drops resolve to an `unreachable` outcome (never a
 // forged escalate verdict). The use case decides what unreachable means for run
 // state. A parse failure stays a reviewed escalate (parseSuperReview fails closed).
 
@@ -14,25 +14,16 @@ import type {
 import { parseSuperReview } from "../../domain/convergence.js";
 import type { AuthorFollowupInput, SuperReviewInput } from "../../domain/prompts.js";
 import { renderFollowupAuthoring, renderSuperReview } from "../../domain/prompts.js";
-import { classifyReviewerError, describeUnreachable } from "../../domain/reviewer-transport.js";
-import {
-  harvestReplySince,
-  snapshotMessageBoundary,
-} from "./harvest.js";
+import { describeUnreachable } from "../../domain/reviewer-transport.js";
+import { harvestReplySince, snapshotMessageBoundary } from "./harvest.js";
 
 // ---------------------------------------------------------------------------
 // Reviewer adapter implementation
-
-// Small backoff between transport retries — a fresh connection after a dropped
-// socket usually lands; the delay just avoids hammering a flapping backend.
-const backoff = (attempt: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
 
 export const createReviewer = (
   executor: Executor,
   superdaddyModel: ModelConfig,
   timeoutMs: number,
-  maxTransportRetries = 2,
 ): Reviewer => {
   let reviewerSessionId: string | undefined;
   let currentWorktree: string | undefined;
@@ -60,67 +51,39 @@ export const createReviewer = (
     return reviewerSessionId;
   };
 
-  // One turn against the super-daddy session, with the transport-drop retry policy
-  // shared by review and authoring. A drop is NOT a result — it must be retried,
-  // never recorded. Classify each failure: TRANSIENT (socket hang up, 5xx, reset) →
-  // retry up to maxTransportRetries; FATAL (auth, 400) → stop immediately. Resolves
-  // to the harvested text, or `unreachable` with the last detail; never throws.
-  type TurnOutcome =
-    | { kind: "text"; raw: string }
-    | { kind: "unreachable"; detail: string };
+  // One turn against the super-daddy session. A transport failure is returned
+  // explicitly; lifecycle policy belongs to convergeRun.
+  type TurnOutcome = { kind: "text"; raw: string } | { kind: "unreachable"; detail: string };
   const runTurn = async (
     sessionId: string,
     prompt: string,
     signal?: AbortSignal,
   ): Promise<TurnOutcome> => {
-    let lastDetail = "unknown error";
-    for (let attempt = 0; ; attempt++) {
-      if (signal?.aborted) {
-        return { kind: "unreachable", detail: "aborted" };
-      }
-      let detail: string;
-      try {
-        const boundary = await snapshotMessageBoundary(executor, sessionId);
-        const response = await executor.sendMessage(
-          sessionId,
-          prompt,
-          superdaddyModel,
-          timeoutMs,
-          signal,
-        );
-        const { text: raw, error } = await harvestReplySince(
-          executor,
-          sessionId,
-          boundary,
-          response,
-        );
-
-        // A provider/transport failure returns HTTP 200 with the failure on the
-        // turn's `error` and no text — not the model returning a bad reply.
-        // Surface the real reason ("APIError (HTTP 503): …") for classification.
-        if (error) {
-          detail = error;
-        } else {
-          return { kind: "text", raw };
-        }
-      } catch (err) {
-        // A timeout or dead socket rejects out of sendMessage to here.
-        detail = err instanceof Error ? err.message : String(err);
-      }
-
-      if (signal?.aborted) {
-        return { kind: "unreachable", detail: "aborted" };
-      }
-
-      lastDetail = detail;
-      const isTransient = classifyReviewerError(detail) === "transient";
-      if (isTransient && attempt < maxTransportRetries) {
-        await backoff(attempt);
-        continue;
-      }
-      break;
+    if (signal?.aborted) {
+      return { kind: "unreachable", detail: "aborted" };
     }
-    return { kind: "unreachable", detail: lastDetail };
+    try {
+      const boundary = await snapshotMessageBoundary(executor, sessionId);
+      const response = await executor.sendMessage(
+        sessionId,
+        prompt,
+        superdaddyModel,
+        timeoutMs,
+        signal,
+      );
+      const { text: raw, error } = await harvestReplySince(executor, sessionId, boundary, response);
+
+      // A provider/transport failure returns HTTP 200 with the failure on the
+      // turn's `error` and no text — not the model returning a bad reply.
+      // Surface the real reason ("APIError (HTTP 503): …") for classification.
+      if (error) {
+        return { kind: "unreachable", detail: error };
+      } else {
+        return { kind: "text", raw };
+      }
+    } catch (err) {
+      return { kind: "unreachable", detail: err instanceof Error ? err.message : String(err) };
+    }
   };
 
   const superReview = async (
@@ -128,7 +91,17 @@ export const createReviewer = (
     onSessionBound?: (sessionId: string) => void,
     signal?: AbortSignal,
   ): Promise<SuperReviewOutcome> => {
-    const sessionId = await ensureSession(input.worktree);
+    let sessionId: string;
+    try {
+      sessionId = await ensureSession(input.worktree);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      return {
+        kind: "unreachable",
+        detail: describeUnreachable(detail),
+        raw: `«reviewer unreachable»: ${detail}`,
+      };
+    }
     // Surface the bound session BEFORE the turn so the caller (converge-run) can
     // record it in run meta — `lathe tail` then routes super-daddy's live tool
     // calls to its pane during the review, not after.
@@ -157,7 +130,17 @@ export const createReviewer = (
     onSessionBound?: (sessionId: string) => void,
     signal?: AbortSignal,
   ): Promise<AuthorFollowupOutcome> => {
-    const sessionId = await ensureSession(input.worktree);
+    let sessionId: string;
+    try {
+      sessionId = await ensureSession(input.worktree);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      return {
+        kind: "unreachable",
+        detail: describeUnreachable(detail),
+        raw: `«author unreachable»: ${detail}`,
+      };
+    }
     onSessionBound?.(sessionId);
     const turn = await runTurn(sessionId, renderFollowupAuthoring(input), signal);
     if (turn.kind === "unreachable") {

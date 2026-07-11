@@ -13,21 +13,18 @@ import { logger } from "hono/logger";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { registerRivetHonoRoutes, rivetHttpError } from "rivet-ts/hono";
-import type { AnswerRunRequest, EnqueueContentRequest, LatheContract, LatheEvent, RejectRunRequest, RunSummaryDto, TailEvent, TailSnapshotDto, ValidatePacketResponse, ErrorResponse, DecisionDto, OutcomeLedgerDto, ReportDto, RestartResponseDto, ConvergenceLogEntryDto, SettingsDto } from "@lathe/contract";
-import type { ValidatePacketResult } from "@lathe/core";
+import type { AnswerRunRequest, EnqueueContentRequest, LatheContract, LatheEvent, RejectRunRequest, RunSummaryDto, SettingsDto, SettingsResponseDto, TailEvent, TailSnapshotDto, ValidatePacketResponse, ErrorResponse, DecisionDto, OutcomeLedgerDto, ReportDto, RestartResponseDto, ConvergenceLogEntryDto } from "@lathe/contract";
+import type { Config, ValidatePacketResult } from "@lathe/core";
 export type { LatheEvent, TailEvent };
 import contract from "@lathe/contract/generated/api.contract.json" with { type: "json" };
 
 import type { RunMeta } from "@lathe/core";
 import type { RunDtoCtx } from "./run-to-dto.js";
-import { RunNotAnswerableError, RunNotFoundError, NonChainTipError, TerminalRunError, PlanNotFoundError } from "./supervisor.js";
+import { RunCancellationConflictError, RunLifecycleConflictError, RunNotAnswerableError, RunNotFoundError, NonChainTipError, TerminalRunError, PlanNotFoundError } from "./supervisor.js";
 import type { Supervisor } from "./supervisor.js";
 import { configToDto } from "./config-to-dto.js";
 import { runToSummary, runToDetail } from "./run-to-dto.js";
 import type { AppDeps, PreparedTailSnapshot } from "./server-host.js";
-export { createEventBus, createTailEventBus } from "./server-host.js";
-export type { AppDeps, EventBus, PreparedTailSnapshot, TailEventBus } from "./server-host.js";
-
 /**
  * In-process fan-out for live events. The supervisor calls publish() with the
  * projected wire event; every open /events stream gets it. Trivial pub/sub —
@@ -39,6 +36,59 @@ export interface CreateAppOptions {
   readonly onRestart?: () => void;
 }
 
+const redactSettings = (config: Config): SettingsDto => ({
+  ...config,
+  baby: {
+    ...config.baby,
+    apiKey: "",
+    models: Object.fromEntries(Object.entries(config.baby.models ?? {}).map(([name, model]) => [name, { ...model, apiKey: "" }])),
+  },
+  superdaddy: { ...config.superdaddy, apiKey: undefined },
+});
+
+const restoreSettingsSecrets = (settings: SettingsDto, current: Config): SettingsDto => {
+  const input = settings as Partial<SettingsDto> & {
+    baby?: Partial<SettingsDto["baby"]>;
+    superdaddy?: Partial<SettingsDto["superdaddy"]>;
+  };
+  const models = input.baby?.models ?? current.baby.models;
+  return ({
+    ...current,
+    ...input,
+    baby: {
+      ...current.baby,
+      ...input.baby,
+      apiKey: input.baby?.apiKey || current.baby.apiKey,
+      models: Object.fromEntries(Object.entries(models).map(([name, model]) => [name, {
+        ...model,
+        apiKey: model.apiKey || current.baby.models[name]?.apiKey || "api-key",
+      }])),
+    },
+    superdaddy: {
+      ...current.superdaddy,
+      ...input.superdaddy,
+      ...(input.superdaddy?.apiKey ? { apiKey: input.superdaddy.apiKey } : current.superdaddy.apiKey ? { apiKey: current.superdaddy.apiKey } : {}),
+    },
+  }) as SettingsDto;
+};
+
+const isDriverMutation = (method: string, path: string): boolean => {
+  if (method !== "POST") return false;
+  return path === "/runs" ||
+    path === "/runs/content" ||
+    path === "/chains" ||
+    /^\/runs\/[^/]+\/(stop|answer|accept|reject|requeue)$/.test(path) ||
+    /^\/plans\/[^/]+\/queue$/.test(path);
+};
+
+const queuedStopRunId = (method: string, path: string, supervisor: Supervisor): string | null => {
+  if (method !== "POST") return null;
+  const match = path.match(/^\/runs\/([^/]+)\/stop$/);
+  if (!match) return null;
+  const runId = decodeURIComponent(match[1]!);
+  return supervisor.getRun(runId)?.status === "queued" ? runId : null;
+};
+
 export const createApp = (
   deps: AppDeps,
   supervisor: Supervisor,
@@ -48,6 +98,20 @@ export const createApp = (
 
   if (options.logger) app.use(logger());
   if (options.cors) app.use(cors());
+  app.use(async (context, next) => {
+    const health = supervisor?.health?.() ?? { healthy: true };
+    if (
+      !health.healthy &&
+      isDriverMutation(context.req.method, context.req.path) &&
+      queuedStopRunId(context.req.method, context.req.path, supervisor) === null
+    ) {
+      return context.json({
+        code: "supervisor_unhealthy",
+        message: `run driver unavailable${health.detail ? `: ${health.detail}` : ""}`,
+      }, 503);
+    }
+    await next();
+  });
 
   // --- contract routes (real handlers — supervisor delegation) --------------
   registerRivetHonoRoutes<LatheContract>(app, contract, {
@@ -106,6 +170,7 @@ export const createApp = (
               pass: result.shape.packet.frontmatter.pass,
               regression_outcomes: result.shape.packet.frontmatter.regression_outcomes,
               promoted: result.shape.packet.frontmatter.promoted,
+              baby_model: result.shape.packet.frontmatter.baby_model,
             },
             body: result.shape.packet.body,
             problems: [],
@@ -174,8 +239,9 @@ export const createApp = (
       },
 
       stopRun: async ({ params }) => {
+        let status: "stopped" | "cancellation_requested";
         try {
-          supervisor.stopRun(params.runId);
+          status = supervisor.stopRun(params.runId);
         } catch (err) {
           if (err instanceof RunNotFoundError) {
             throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
@@ -183,14 +249,12 @@ export const createApp = (
           if (err instanceof TerminalRunError) {
             throw rivetHttpError(409, { code: "terminal", message: err.message });
           }
+          if (err instanceof RunCancellationConflictError) {
+            throw rivetHttpError(409, { code: "cancellation_conflict", message: err.message });
+          }
           throw err;
         }
-        const meta = supervisor.getRun(params.runId);
-        if (!meta) {
-          return mutationSummary(params.runId, "stopped");
-        }
-        const ctx = buildDtoCtx(supervisor, meta);
-        return runToSummary(meta, ctx);
+        return { runId: params.runId, status, cancellationRequested: status === "cancellation_requested" };
       },
 
       answerRun: async ({ params, body }) => {
@@ -206,6 +270,9 @@ export const createApp = (
           }
           if (err instanceof RunNotAnswerableError) {
             throw rivetHttpError(409, { code: "not_answerable", message: err.message });
+          }
+          if (err instanceof RunLifecycleConflictError) {
+            throw rivetHttpError(409, { code: "lifecycle_conflict", message: err.message });
           }
           throw err;
         }
@@ -258,6 +325,9 @@ export const createApp = (
           if (err instanceof TerminalRunError) {
             throw rivetHttpError(409, { code: "not_reviewable", message: err.message });
           }
+          if (err instanceof RunLifecycleConflictError) {
+            throw rivetHttpError(409, { code: "lifecycle_conflict", message: err.message });
+          }
           throw err;
         }
         const meta = supervisor.getRun(params.runId);
@@ -278,6 +348,9 @@ export const createApp = (
           }
           if (err instanceof RunNotAnswerableError) {
             throw rivetHttpError(409, { code: "not_answerable", message: err.message });
+          }
+          if (err instanceof RunLifecycleConflictError) {
+            throw rivetHttpError(409, { code: "lifecycle_conflict", message: err.message });
           }
           throw err;
         }
@@ -302,17 +375,19 @@ export const createApp = (
       },
 
       getSettings: async () => {
-        // rivet-ts reflector can't express `number | false` — the two fields
-        // (idleTimeoutMs, superdaddy.headerTimeoutMs) are `number` in the contract
-        // but `number | false` in the Zod Config. Narrowing cast is sound: `false`
-        // is a diagnostic-only sentinel; all other fields are structurally identical.
-        return supervisor.config as SettingsDto;
+        return {
+          settings: redactSettings(supervisor.settings),
+          restartRequired: supervisor.restartRequired,
+        } satisfies SettingsResponseDto;
       },
 
       updateSettings: async ({ body }) => {
         try {
-          const written = supervisor.writeConfig(body);
-          return written as SettingsDto;
+          const written = supervisor.writeConfig(restoreSettingsSecrets(body, supervisor.settings));
+          return {
+            settings: redactSettings(written),
+            restartRequired: supervisor.restartRequired,
+          } satisfies SettingsResponseDto;
         } catch (err) {
           throw rivetHttpError(400, { code: "invalid_config", message: err instanceof Error ? err.message : String(err) });
         }

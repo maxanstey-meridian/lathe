@@ -409,7 +409,23 @@ export interface components {
             };
         };
         ConvergeDecisionDto: components["schemas"]["ConvergeDecisionDto_Author"] | components["schemas"]["ConvergeDecisionDto_Stop"] | components["schemas"]["ConvergeDecisionDto_Escalate"];
-        ConvergenceLogEntryDto: components["schemas"]["ConvergenceLogEntryDto_Reviewed"] | components["schemas"]["ConvergenceLogEntryDto_Unreachable"];
+        ConvergenceLogEntryDto: {
+            /** @enum {string} */
+            kind: "reviewed";
+            at: string;
+            runId: string;
+            campaignId: string;
+            pass: number;
+            maxPasses: number;
+            verification: {
+                green: boolean;
+                commands: components["schemas"]["VerificationResultDto"][];
+            };
+            decision: components["schemas"]["ConvergeDecisionDto"];
+            amendedCommitSha: string | null;
+            primary: components["schemas"]["SuperReviewDto"];
+            primaryRaw: string;
+        };
         ConvergenceSignalDto: {
             recommend_stop: boolean;
             profile: {
@@ -593,6 +609,18 @@ export interface components {
             thinkingMode: "budget" | "disabled";
             thinkingBudget: number | null;
             promoteTo?: components["schemas"]["SettingsBabyPromoteToDto"];
+            models: {
+                [key: string]: components["schemas"]["SettingsBabyModelDto"];
+            };
+        };
+        SettingsBabyModelDto: {
+            providerId: string;
+            modelId: string;
+            baseUrl: string;
+            contextWindow: number;
+            apiKey: string;
+            timeoutMs: number;
+            thinkingBudget: number | null;
         };
         SettingsBabyPromoteToDto: {
             providerId: string;
@@ -618,7 +646,7 @@ export interface components {
             baby: components["schemas"]["SettingsBabyDto"];
             superdaddy: components["schemas"]["SettingsSuperdaddyDto"];
             thresholds: components["schemas"]["SettingsThresholdsDto"];
-            idleTimeoutMs: number;
+            idleTimeoutMs: number | false;
             concurrency: components["schemas"]["SettingsConcurrencyDto"];
             daemon: components["schemas"]["SettingsDaemonDto"];
             mutationCommandPatterns: string[];
@@ -634,6 +662,12 @@ export interface components {
         };
         SettingsRepoDto: {
             seed: components["schemas"]["SettingsRepoSeedDto"];
+            setup: {
+                commands: {
+                    command: string;
+                    dir: string;
+                }[];
+            };
         };
         SettingsRepoSeedDto: {
             copies: string[];
@@ -641,19 +675,22 @@ export interface components {
                 [key: string]: string;
             };
         };
+        SettingsResponseDto: {
+            settings: components["schemas"]["SettingsDto"];
+            restartRequired: boolean;
+        };
         SettingsSuperdaddyDto: {
             providerId: string;
             modelId: string;
             agent: string;
             timeoutMs: number;
-            baseUrl: string;
-            headerTimeoutMs: number;
+            baseUrl: string | null;
+            headerTimeoutMs: number | false;
             apiKey?: string;
             turnSteps: number;
             skillPath: string;
             packetSkillPath: string;
             diffCapBytes: number;
-            transportRetries: number;
         };
         SettingsThresholdsDto: {
             rotationFraction: number;
@@ -667,10 +704,7 @@ export interface components {
             checkpointBounceLimit: number;
             verificationTimeoutMs: number;
             maxPasses: number;
-            maxReviewerUnreachable: number;
             promoteAtCap: boolean;
-            maxStallRetries: number;
-            maxCrashRetries: number;
             maxReorientRetries: number;
             maxRunMs: number;
             contextTokensFloor: number;
@@ -720,6 +754,12 @@ export interface components {
         StatusStoppedRunDto: {
             runId: string;
             status: string;
+        };
+        StopRunResponseDto: {
+            runId: string;
+            /** @enum {string} */
+            status: "stopped" | "cancellation_requested";
+            cancellationRequested: boolean;
         };
         SuperReviewDto: {
             /** @enum {string} */
@@ -789,6 +829,7 @@ export interface components {
             turn: number;
             rotations: number;
             panes: components["schemas"]["TailAgentPanesDto"];
+            acceptanceReviewLines: string[];
             driverCommands: components["schemas"]["TailDriverCommandDto"][];
             journal: components["schemas"]["TailJournalLineDto"][];
             lastSeq: number;
@@ -823,6 +864,7 @@ export interface components {
                 description: string;
             }[];
             promoted: boolean;
+            baby_model?: string;
         };
         ValidatePacketRequest: {
             content: string;
@@ -845,9 +887,9 @@ export interface components {
         /** @enum {string} */
         FindingSeverityDto: "P0" | "P1" | "P2" | "P3";
         /** @enum {string} */
-        RunStatus: "queued" | "running" | "interrupted" | "ready_for_review" | "blocked" | "accepted" | "stopped" | "failed";
+        RunStatus: "queued" | "running" | "ready_for_review" | "blocked" | "accepted" | "stopped" | "failed";
         /** @enum {string} */
-        TailRunStatus: "queued" | "running" | "interrupted" | "ready_for_review" | "blocked" | "failed" | "accepted" | "stopped";
+        TailRunStatus: "queued" | "running" | "ready_for_review" | "blocked" | "failed" | "accepted" | "stopped";
         /** @enum {string} */
         VerificationPhaseDto: "report" | "convergence" | "autofix";
         ConvergeDecisionDto_Author: {
@@ -873,45 +915,6 @@ export interface components {
              */
             action: "escalate";
             reason: string;
-        };
-        ConvergenceLogEntryDto_Reviewed: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "reviewed";
-            at: string;
-            runId: string;
-            campaignId: string;
-            pass: number;
-            maxPasses: number;
-            verification: {
-                green: boolean;
-                commands: components["schemas"]["VerificationResultDto"][];
-            };
-            decision: components["schemas"]["ConvergeDecisionDto"];
-            amendedCommitSha?: string | null;
-            primary: components["schemas"]["SuperReviewDto"];
-            primaryRaw: string;
-        };
-        ConvergenceLogEntryDto_Unreachable: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "unreachable";
-            at: string;
-            runId: string;
-            campaignId: string;
-            pass: number;
-            maxPasses: number;
-            verification: {
-                green: boolean;
-                commands: components["schemas"]["VerificationResultDto"][];
-            };
-            detail: string;
-            attempt: number;
-            budget: number;
         };
     };
     responses: never;
@@ -982,6 +985,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description run driver unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     lathe_enqueueContent: {
@@ -1024,6 +1036,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description run driver unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     lathe_enqueueChain: {
@@ -1046,6 +1067,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunSummaryDto"][];
+                };
+            };
+            /** @description run driver unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -1156,13 +1186,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Created */
-            201: {
+            /** @description Status 202 */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RunSummaryDto"];
+                    "application/json": components["schemas"]["StopRunResponseDto"];
                 };
             };
             /** @description run not found */
@@ -1174,8 +1204,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description run is terminal */
+            /** @description run is terminal or has no active cancellation owner */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description run driver unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1209,6 +1248,15 @@ export interface operations {
                     "application/json": components["schemas"]["RunSummaryDto"];
                 };
             };
+            /** @description invalid answer */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description run not found */
             404: {
                 headers: {
@@ -1220,6 +1268,15 @@ export interface operations {
             };
             /** @description run is not answerable */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description run driver unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1260,6 +1317,15 @@ export interface operations {
             };
             /** @description not a chain tip or accept refused */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description run driver unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1311,6 +1377,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description run driver unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     lathe_requeueRun: {
@@ -1344,6 +1419,15 @@ export interface operations {
             };
             /** @description run is terminal */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description run driver unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1439,7 +1523,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SettingsDto"];
+                    "application/json": components["schemas"]["SettingsResponseDto"];
                 };
             };
         };
@@ -1463,7 +1547,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SettingsDto"];
+                    "application/json": components["schemas"]["SettingsResponseDto"];
                 };
             };
             /** @description invalid config body */
@@ -1802,6 +1886,15 @@ export interface operations {
             };
             /** @description plan not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description run driver unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

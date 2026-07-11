@@ -14,14 +14,14 @@
     "gen:reflect": "rivet-ts --entry src/lathe.contract.ts --out generated/api.contract.json",
     "gen:openapi": "rivet-ts rivet -- --from generated/api.contract.json --output ./generated",
     "gen:client": "rivet-ts generate --generated-root ./generated",
-    "gen": "pnpm gen:reflect && pnpm gen:openapi && pnpm gen:client",
+    "gen": "pnpm run gen:reflect && pnpm run gen:openapi && pnpm run gen:client",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "openapi-fetch": "^0.17.0"
   },
   "devDependencies": {
-    "rivet-ts": "github:maxanstey-meridian/rivet-ts#v0.11.1",
+    "rivet-ts": "github:maxanstey-meridian/rivet-ts#v0.12.0",
     "typescript": "^5.7.0",
     "@types/node": "^22.10.0"
   }

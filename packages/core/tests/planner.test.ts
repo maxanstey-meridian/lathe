@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Executor, ModelConfig } from "../src/application/ports/executor.js";
-import type { Packet, OutcomeLedger, SubmitReport } from "../src/domain/index.js";
+import type { Packet } from "../src/domain/packet.js";
+import type { OutcomeLedger } from "../src/domain/outcomes.js";
+import type { SubmitReport } from "../src/domain/report.js";
 import { createPlanner } from "../src/infrastructure/opencode/planner.js";
 
 const mockResponse = (text: string) => ({
@@ -304,6 +306,98 @@ describe("createPlanner.syncMaxDecisions", () => {
     await planner.syncMaxDecisions?.([
       { timestamp: "2026-06-29T19:30:53.925Z", question: "Continue?", answer: "Yes." },
     ]);
+  });
+});
+
+describe("createPlanner cancellation", () => {
+  it("propagates AbortSignal through handshake", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const executor = {
+      createSession: async () => "test-session",
+      sendMessage: async (...args: Parameters<Executor["sendMessage"]>) => {
+        observedSignal = args[4];
+        return mockResponse("PLANNER_OK");
+      },
+      listMessages: async () => [],
+      deleteSession: async () => {},
+    } as unknown as Executor;
+    const controller = new AbortController();
+
+    await createPlanner(executor, modelConfig, 30000).handshake(
+      "seed",
+      "test-dir",
+      controller.signal,
+    );
+
+    assert.equal(observedSignal, controller.signal);
+  });
+
+  it("propagates AbortSignal through sync, consult, and final review sends", async () => {
+    const signals: Array<AbortSignal | undefined> = [];
+    let sends = 0;
+    const validConsult = JSON.stringify({
+      status: "proceed",
+      answer: "go",
+      constraints: [],
+      evidence_used: [],
+      safe_next_action: "continue",
+      human_decision_needed: null,
+    });
+    const executor = {
+      createSession: async () => "test-session",
+      sendMessage: async (...args: Parameters<Executor["sendMessage"]>) => {
+        sends++;
+        signals.push(args[4]);
+        if (sends === 1) {
+          return mockResponse("PLANNER_OK");
+        }
+        if (sends === 2) {
+          return mockResponse("DADDY_SYNC_OK");
+        }
+        if (sends === 3) {
+          return mockResponse(validConsult);
+        }
+        return mockResponse(JSON.stringify({ verdict: "accept", findings: [], notes: "ok" }));
+      },
+      listMessages: async () => [],
+      deleteSession: async () => {},
+    } as unknown as Executor;
+    const planner = createPlanner(executor, modelConfig, 30000);
+    const controller = new AbortController();
+    await planner.handshake("seed", "test-dir");
+    await planner.syncMaxDecisions?.(
+      [{ timestamp: "2026-01-01T00:00:00Z", question: "retry?", answer: "yes" }],
+      controller.signal,
+    );
+    await planner.consult(minConsult(), undefined, controller.signal);
+    await planner.finalReview(minPacket(), minLedger(), minReport(), controller.signal);
+
+    assert.deepEqual(signals, [undefined, controller.signal, controller.signal, controller.signal]);
+  });
+
+  it("does not convert an aborted final review into a human escalation", async () => {
+    let sends = 0;
+    const controller = new AbortController();
+    const executor = {
+      createSession: async () => "test-session",
+      sendMessage: async () => {
+        sends++;
+        if (sends === 1) {
+          return mockResponse("PLANNER_OK");
+        }
+        controller.abort();
+        throw new DOMException("cancelled", "AbortError");
+      },
+      listMessages: async () => [],
+      deleteSession: async () => {},
+    } as unknown as Executor;
+    const planner = createPlanner(executor, modelConfig, 30000);
+    await planner.handshake("seed", "test-dir");
+
+    await assert.rejects(
+      planner.finalReview(minPacket(), minLedger(), minReport(), controller.signal),
+      (error: Error) => error.name === "AbortError",
+    );
   });
 });
 

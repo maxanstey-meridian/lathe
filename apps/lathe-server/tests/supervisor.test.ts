@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import type { Config, Clock, Repo, Paths, RunMeta } from "@lathe/core";
+import type { Config, Clock, Repo, Paths, RunAbort, RunMeta } from "@lathe/core";
 import { makePaths, SqliteStoreAdapter, systemClock, buildRepo, Config as ConfigSchema } from "@lathe/core";
+import { TAIL_PROTOCOL_LIMITS } from "@lathe/contract";
 import type { Supervisor } from "../src/supervisor.js";
-import { createSupervisor, NonChainTipError, TerminalRunError, RunNotFoundError, resolveSpeaker, createOpenCodeTailProjector, _testMergePolledTailStats, _testSelectActiveTailRunId, _testSyncSubscriptions } from "../src/supervisor.js";
-import { createEventBus } from "../src/app.js";
+import { createSupervisor, NonChainTipError, RunCancellationConflictError, TerminalRunError, RunNotFoundError, resolveSpeaker, createOpenCodeTailProjector, _testMergePolledTailStats, _testSelectActiveTailRunId, _testSyncSubscriptions } from "../src/supervisor.js";
+import { createEventBus } from "../src/server-host.js";
+import { applyTailEvent, tailStateFromSnapshot, visiblePaneLines } from "../../../packages/tail-state/src/index.js";
 
 test("OpenCode tail projector suppresses accumulated tool output", () => {
   const events: import("@lathe/contract").TailEvent[] = [];
@@ -189,6 +191,23 @@ test("createSupervisor constructs with a temp paths dir", async () => {
   });
 });
 
+test("writeConfig persists settings without changing the runtime snapshot", async () => {
+  await withSupervisor(async (supervisor) => {
+    const written = supervisor.writeConfig({
+      ...supervisor.config,
+      baby: { ...supervisor.config.baby, modelId: "live-model", contextWindow: 42_000 },
+    });
+
+    equal(written.baby.modelId, "live-model");
+    equal(supervisor.settings.baby.modelId, "live-model");
+    equal(supervisor.config.baby.modelId === "live-model", false);
+    equal(supervisor.restartRequired, true);
+
+    supervisor.writeConfig(supervisor.config);
+    equal(supervisor.restartRequired, false);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // stopRun — not found
 
@@ -251,7 +270,7 @@ test("stopRun archives a queued run (meta status queued)", async () => {
 // ---------------------------------------------------------------------------
 // stopRun — running run (no abortMap entry — fires silently)
 
-test("stopRun for a running run does not throw when no abortMap entry", async () => {
+test("stopRun rejects a running run with no cancellation owner", async () => {
   await withSupervisor(async (supervisor, paths) => {
     const repo = fakeRepo();
     const store = SqliteStoreAdapter.create(paths, repo, systemClock);
@@ -265,12 +284,169 @@ test("stopRun for a running run does not throw when no abortMap entry", async ()
       updatedAt: systemClock.nowIso(),
     }));
 
-    // No exception: stopRun fires abortMap.get(runId) which is undefined
-    // in this test — the supervisor's private abortMap has no entry.
-    // The run status should remain "running" (no state change for running stop).
-    supervisor.stopRun(runId);
+    throws(
+      () => supervisor.stopRun(runId),
+      (error: Error) => error instanceof RunCancellationConflictError,
+    );
     const after = supervisor.getRun(runId);
     equal(after!.status, "running");
+  });
+});
+
+test("runDriver rejection marks the supervisor unhealthy and stop consumes the same rejection", async () => {
+  const paths = await makeTestPaths();
+  const failure = new Error("driver exploded");
+  const originalError = console.error;
+  console.error = () => {};
+  const supervisor = createSupervisor(ConfigSchema.parse({}), paths, {
+    runDriver: async () => { throw failure; },
+  });
+  try {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    deepStrictEqual(supervisor.health?.(), { healthy: false, detail: "driver exploded" });
+    await supervisor.stop();
+  } finally {
+    console.error = originalError;
+    await paths.teardown();
+  }
+});
+
+test("supervisor remains unhealthy until driver ownership and recovery are ready", async () => {
+  const paths = await makeTestPaths();
+  let markReady: (() => void) | undefined;
+  let resolveDriver: (() => void) | undefined;
+  const supervisor = createSupervisor(ConfigSchema.parse({}), paths, {
+    runDriver: async (_config, _paths, _store, seams) => {
+      markReady = seams?.onReady;
+      return new Promise<void>((resolve) => { resolveDriver = resolve; });
+    },
+  });
+  try {
+    deepStrictEqual(supervisor.health?.(), {
+      healthy: false,
+      detail: "run driver is starting",
+    });
+    markReady?.();
+    deepStrictEqual(supervisor.health?.(), { healthy: true });
+    const stopping = supervisor.stop();
+    resolveDriver?.();
+    await stopping;
+  } finally {
+    await paths.teardown();
+  }
+});
+
+test("stopRun does not fire a stale cancellation owner for a terminal run", async () => {
+  const paths = await makeTestPaths();
+  let controller: AbortController | undefined;
+  let resolveDriver: (() => void) | undefined;
+  const runId = "terminal-with-owner";
+  const supervisor = createSupervisor(ConfigSchema.parse({}), paths, {
+    runDriver: async (_config, _paths, _store, seams) => {
+      controller = new AbortController();
+      seams?.abortMap?.set(runId, { controller });
+      seams?.onReady?.();
+      return new Promise<void>((resolve) => { resolveDriver = resolve; });
+    },
+  });
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), systemClock);
+  store.writeMeta(makeTestMeta({ runId, status: "accepted" }));
+  try {
+    throws(() => supervisor.stopRun(runId), (error: Error) => error instanceof TerminalRunError);
+    equal(controller?.signal.aborted, false);
+    const stopping = supervisor.stop();
+    resolveDriver?.();
+    await stopping;
+  } finally {
+    await paths.teardown();
+  }
+});
+
+test("stopRun cancels a live acceptance review", async () => {
+  const paths = await makeTestPaths();
+  let controller: AbortController | undefined;
+  let abortCause: RunAbort | undefined;
+  let resolveDriver: (() => void) | undefined;
+  const runId = "review-with-owner";
+  const supervisor = createSupervisor(ConfigSchema.parse({}), paths, {
+    runDriver: async (_config, _paths, _store, seams) => {
+      controller = new AbortController();
+      abortCause = { controller };
+      seams?.abortMap?.set(runId, abortCause);
+      seams?.onReady?.();
+      return new Promise<void>((resolve) => { resolveDriver = resolve; });
+    },
+  });
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), systemClock);
+  store.writeMeta(makeTestMeta({ runId, status: "ready_for_review" }));
+  try {
+    supervisor.stopRun(runId);
+    equal(controller?.signal.aborted, true);
+    equal(abortCause?.cause, "operator_cancel");
+    const stopping = supervisor.stop();
+    resolveDriver?.();
+    await stopping;
+  } finally {
+    await paths.teardown();
+  }
+});
+
+test("normal runDriver resolution is unhealthy unless shutdown requested it", async () => {
+  const paths = await makeTestPaths();
+  const originalError = console.error;
+  console.error = () => {};
+  const supervisor = createSupervisor(ConfigSchema.parse({}), paths, {
+    runDriver: async () => {},
+  });
+  try {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    deepStrictEqual(supervisor.health?.(), {
+      healthy: false,
+      detail: "run driver exited unexpectedly",
+    });
+    await supervisor.stop();
+  } finally {
+    console.error = originalError;
+    await paths.teardown();
+  }
+});
+
+test("normal runDriver resolution during intentional shutdown remains healthy", async () => {
+  const paths = await makeTestPaths();
+  let resolveDriver: (() => void) | undefined;
+  const supervisor = createSupervisor(ConfigSchema.parse({}), paths, {
+    runDriver: async () => new Promise<void>((resolve) => { resolveDriver = resolve; }),
+  });
+  try {
+    const stopping = supervisor.stop();
+    resolveDriver?.();
+    await stopping;
+    deepStrictEqual(supervisor.health?.(), { healthy: true });
+  } finally {
+    await paths.teardown();
+  }
+});
+
+test("requeueRun explicitly resumes a crashed park without discarding session evidence", async () => {
+  await withSupervisor(async (supervisor, paths) => {
+    const store = SqliteStoreAdapter.create(paths, fakeRepo(), systemClock);
+    const runId = "crashed-requeue";
+    store.writeMeta(makeTestMeta({
+      runId,
+      status: "blocked",
+      blockedReason: "crashed",
+      blockedQuestion: "inspect me",
+      babySessionId: "baby-existing",
+      daddySessionId: "daddy-existing",
+      updatedAt: systemClock.nowIso(),
+    }));
+
+    const requeued = supervisor.requeueRun(runId);
+
+    equal(requeued.status, "queued");
+    equal(requeued.blockedReason, undefined);
+    equal(requeued.babySessionId, "baby-existing");
+    equal(requeued.daddySessionId, "daddy-existing");
   });
 });
 
@@ -340,6 +516,8 @@ test("acceptRun throws NonChainTipError for a non-chain-tip run", async () => {
   const fakeSup: Supervisor = {
     stop: async () => {},
     config: testConfig,
+    settings: testConfig,
+    restartRequired: false,
     appDeps: { bus: createEventBus(), readEventsSince: () => [] },
     enqueueRun: (_p: string) => "enqueued",
     enqueueChain: () => {},
@@ -419,6 +597,7 @@ test("readTailEventsSince replays cheap journal rows and one final stats event",
       event: "super_review",
       at: systemClock.nowIso(),
       verdict: "accept",
+      proposedVerdict: "accept",
       pass: 2,
       findings: ["looks good"],
     });
@@ -434,6 +613,166 @@ test("readTailEventsSince replays cheap journal rows and one final stats event",
       equal(events[3].status, "running");
       equal(events[3].seq, 2);
     }
+  });
+});
+
+test("durable acceptance-review state reaches the tail reducer and survives snapshot hydration", async () => {
+  await withSupervisor(async (supervisor, paths) => {
+    const store = SqliteStoreAdapter.create(paths, fakeRepo(), systemClock);
+    const runId = "test-super-review-tail";
+    store.writeMeta(makeTestMeta({
+      runId,
+      status: "ready_for_review",
+      queuedAt: systemClock.nowIso(),
+      startedAt: systemClock.nowIso(),
+      updatedAt: systemClock.nowIso(),
+    }));
+    store.appendJournal(runId, {
+      event: "final_review",
+      at: systemClock.nowIso(),
+      verdict: "accept",
+      findings: [],
+    });
+    store.appendJournal(runId, {
+      event: "super_review_status",
+      at: systemClock.nowIso(),
+      pass: 1,
+      status: "started",
+    });
+    store.appendJournal(runId, {
+      event: "super_review_status",
+      at: systemClock.nowIso(),
+      pass: 1,
+      status: "failed",
+      detail: "connection dropped",
+    });
+
+    const snapshot = await supervisor.prepareTailSnapshot(runId);
+    ok(snapshot);
+    deepStrictEqual(snapshot.journal.map((event) => [event.event, event.driver]), [
+      ["final_review", false],
+      ["super_review_status", false],
+      ["super_review_status", false],
+    ]);
+    deepStrictEqual(snapshot.panes.super, []);
+    deepStrictEqual(snapshot.acceptanceReviewLines, [
+      "acceptance review: pass 1 failed: connection dropped",
+    ]);
+
+    let state = tailStateFromSnapshot({ ...snapshot, panes: { ...snapshot.panes, super: [] } });
+    for (const event of supervisor.appDeps.readTailEventsSince?.(-1, runId) ?? []) {
+      state = applyTailEvent(state, event, 1);
+    }
+    deepStrictEqual(visiblePaneLines(state.panes.super), [{
+      text: "acceptance review: pass 1 failed: connection dropped",
+      style: "tool",
+    }]);
+    deepStrictEqual(state.driverEvents, []);
+  });
+});
+
+test("live acceptance-review lines emit once while snapshots retain the verdict", async () => {
+  await withSupervisor(async (supervisor, paths) => {
+    const store = SqliteStoreAdapter.create(paths, fakeRepo(), systemClock);
+    const runId = "test-live-super-review-tail";
+    store.writeMeta(makeTestMeta({
+      runId,
+      status: "ready_for_review",
+      queuedAt: systemClock.nowIso(),
+      startedAt: systemClock.nowIso(),
+      updatedAt: systemClock.nowIso(),
+    }));
+    const events: import("@lathe/contract").TailEvent[] = [];
+    const verdictSeen = new Promise<void>((resolve) => {
+      supervisor.appDeps.tailBus?.subscribe((_revision, event) => {
+        if (event.runId !== runId) return;
+        events.push(event);
+        if (event.kind === "tail.super.verdict") resolve();
+      });
+    });
+
+    store.appendJournal(runId, {
+      event: "super_review",
+      at: systemClock.nowIso(),
+      verdict: "accept",
+      proposedVerdict: "accept",
+      pass: 1,
+      findings: [],
+    });
+    await verdictSeen;
+
+    equal(events.filter((event) => event.kind === "tail.agent.panes.replaced").length, 0);
+    equal(events.filter((event) => event.kind === "tail.super.verdict").length, 1);
+    let state = tailStateFromSnapshot(null);
+    for (const event of events) state = applyTailEvent(state, event, 1);
+    deepStrictEqual(visiblePaneLines(state.panes.super), [{
+      text: "acceptance review: verdict accept (pass 1)",
+      style: "tool",
+    }]);
+
+    const snapshot = await supervisor.prepareTailSnapshot(runId);
+    ok(snapshot);
+    deepStrictEqual(snapshot.acceptanceReviewLines, ["acceptance review: verdict accept (pass 1)"]);
+    deepStrictEqual(snapshot.panes.super, []);
+  });
+});
+
+test("tail snapshots bound oversized acceptance-review lines through the projection", async () => {
+  await withSupervisor(async (supervisor, paths) => {
+    const store = SqliteStoreAdapter.create(paths, fakeRepo(), systemClock);
+    const runId = "test-oversized-super-review-tail";
+    store.writeMeta(makeTestMeta({
+      runId,
+      status: "ready_for_review",
+      queuedAt: systemClock.nowIso(),
+      startedAt: systemClock.nowIso(),
+      updatedAt: systemClock.nowIso(),
+    }));
+    store.appendJournal(runId, {
+      event: "super_review",
+      at: systemClock.nowIso(),
+      verdict: "request_changes",
+      proposedVerdict: "request_changes",
+      pass: 1,
+      findings: ["x".repeat(TAIL_PROTOCOL_LIMITS.lineChars + 1_000)],
+    });
+
+    const snapshot = await supervisor.prepareTailSnapshot(runId);
+    ok(snapshot);
+    equal(snapshot.acceptanceReviewLines.length, 2);
+    equal(snapshot.acceptanceReviewLines[1]?.length, TAIL_PROTOCOL_LIMITS.lineChars);
+    equal(snapshot.acceptanceReviewLines[1], "x".repeat(TAIL_PROTOCOL_LIMITS.lineChars));
+  });
+});
+
+test("tail snapshots retain only the newest 300 acceptance-review lines", async () => {
+  await withSupervisor(async (supervisor, paths) => {
+    const store = SqliteStoreAdapter.create(paths, fakeRepo(), systemClock);
+    const runId = "test-many-super-review-findings-tail";
+    store.writeMeta(makeTestMeta({
+      runId,
+      status: "ready_for_review",
+      queuedAt: systemClock.nowIso(),
+      startedAt: systemClock.nowIso(),
+      updatedAt: systemClock.nowIso(),
+    }));
+    store.appendJournal(runId, {
+      event: "super_review",
+      at: systemClock.nowIso(),
+      verdict: "request_changes",
+      proposedVerdict: "request_changes",
+      pass: 1,
+      findings: Array.from(
+        { length: TAIL_PROTOCOL_LIMITS.paneLines + 5 },
+        (_, index) => `finding-${index}`,
+      ),
+    });
+
+    const snapshot = await supervisor.prepareTailSnapshot(runId);
+    ok(snapshot);
+    equal(snapshot.acceptanceReviewLines.length, TAIL_PROTOCOL_LIMITS.paneLines);
+    equal(snapshot.acceptanceReviewLines[0], "  finding-5");
+    equal(snapshot.acceptanceReviewLines.at(-1), "  finding-304");
   });
 });
 
@@ -553,6 +892,8 @@ test("acceptRun throws NonChainTipError with chainTip for a non-chain-tip run", 
   const supervisor: Supervisor = {
     stop: async () => {},
     config: testConfig,
+    settings: testConfig,
+    restartRequired: false,
     appDeps: { bus: createEventBus(), readEventsSince: () => [] },
     enqueueRun: (_p: string) => "enqueued",
     enqueueChain: () => {},
@@ -598,6 +939,8 @@ test("acceptRun throws NonChainTipError with correct chainTip when multiple chai
   const supervisor: Supervisor = {
     stop: async () => {},
     config: testConfig,
+    settings: testConfig,
+    restartRequired: false,
     appDeps: { bus: createEventBus(), readEventsSince: () => [] },
     enqueueRun: (_p: string) => "enqueued",
     enqueueChain: () => {},
@@ -736,11 +1079,15 @@ test("resolveSpeaker matches a non-first active run baby session", async () => {
   });
 });
 
-test("active tail selection is deterministic and prefers active runs over convergences", () => {
+test("active tail selection chooses the newest run or convergence with a deterministic runId tie-break", () => {
   equal(_testSelectActiveTailRunId([
     { runId: "alpha", startedAt: "2026-01-01T00:00:00Z" },
     { runId: "beta", startedAt: "2026-01-01T00:00:00Z" },
-  ], [{ runId: "newer-convergence", startedAt: "2026-01-02T00:00:00Z" }]), "beta");
+  ], [{ runId: "newer-convergence", startedAt: "2026-01-02T00:00:00Z" }]), "newer-convergence");
+  equal(_testSelectActiveTailRunId(
+    [{ runId: "alpha", startedAt: "2026-01-02T00:00:00Z" }],
+    [{ runId: "beta", startedAt: "2026-01-02T00:00:00Z" }],
+  ), "beta");
   equal(_testSelectActiveTailRunId([], [
     { runId: "old", startedAt: "2026-01-01T00:00:00Z" },
     { runId: "new", startedAt: "2026-01-02T00:00:00Z" },

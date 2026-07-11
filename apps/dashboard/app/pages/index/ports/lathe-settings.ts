@@ -12,6 +12,7 @@ export interface LatheSettingsPort {
   readonly restarting: Ref<boolean>;
   readonly error: Ref<string | null>;
   readonly success: Ref<string | null>;
+  readonly restartRequired: Ref<boolean>;
   readonly reposParseError: Ref<string | null>;
   readonly dirty: ComputedRef<boolean>;
   load(): Promise<void>;

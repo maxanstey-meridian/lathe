@@ -10,6 +10,8 @@ type FileClassification = ReturnType<typeof classifyChangedFiles>[number];
 
 export type ReconciliationGitState = {
   head: string;
+  tree?: string;
+  commitMessage?: string;
   status: string[];
   diffHash: string;
   untracked: Array<{ path: string; hash: string }>;

@@ -21,28 +21,19 @@ import type { Store } from "../ports/store.js";
 import type { Verify } from "../ports/verify.js";
 
 // ---------------------------------------------------------------------------
-// ConfigSource — supervisor-owned live config (ARCHITECTURE §14)
+// ConfigSource — supervisor-owned startup config (ARCHITECTURE §14)
 //
-// The daemon loads config once at startup, but PUT /settings must update the
-// in-memory config for subsequent runs to see new repos[*].seed values without
-// restarting. The ConfigSource is a tiny mutable cell owned by the supervisor;
-// writeConfig updates it after successful validation/write, and run start reads
-// it via get() when seeding a fresh sandbox.
+// Runtime adapters and concurrency are constructed from one startup snapshot.
+// PUT /settings persists a replacement for the next daemon start rather than
+// partially refreshing this graph in place.
 // ---------------------------------------------------------------------------
 export type ConfigSource = {
   get: () => Config;
-  set: (config: Config) => void;
 };
 
-export const createConfigSource = (initial: Config): ConfigSource => {
-  let current = initial;
-  return {
-    get: () => current,
-    set: (config) => {
-      current = config;
-    },
-  };
-};
+export const createConfigSource = (initial: Config): ConfigSource => ({
+  get: () => initial,
+});
 
 // The ports the run-level use cases depend on. One bag, injected at the
 // composition root; every side effect in the loop flows through it.

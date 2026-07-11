@@ -30,7 +30,7 @@ import { provideReviewData } from "./index/ports/review-data";
 
 const latheStatus = provideLatheStatus(useLatheStatus());
 const latheActions = provideLatheActions(useLatheActions(latheStatus.refresh));
-const latheTail = provideLatheTail(useLatheTail());
+const latheTail = provideLatheTail(useLatheTail(Date.now));
 provideLatheSettings(useLatheSettings());
 const lathePlans = provideLathePlans(useLathePlans());
 providePacketValidation(usePacketValidation());

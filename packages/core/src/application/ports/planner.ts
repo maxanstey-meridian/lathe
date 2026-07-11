@@ -5,12 +5,12 @@ import type {
   AskPlannerInput,
   PlannerResponse,
   FinalReview,
-  Packet,
-  OutcomeLedger,
-  SubmitReport,
-  ReviewState,
-  DriverFacts,
-} from "../../domain/index.js";
+} from "../../domain/review.js";
+import type { ReviewState } from "../../domain/run.js";
+import type { Packet } from "../../domain/packet.js";
+import type { OutcomeLedger } from "../../domain/outcomes.js";
+import type { SubmitReport } from "../../domain/report.js";
+import type { DriverFacts } from "../../domain/prompts.js";
 
 export type PlannerConsultContext = {
   reviewState: ReviewState;
@@ -18,11 +18,21 @@ export type PlannerConsultContext = {
 };
 
 export type Planner = {
-  handshake(seedPrompt: string, directory: string): Promise<string>;
+  handshake(seedPrompt: string, directory: string, signal?: AbortSignal): Promise<string>;
   resumeSession(sessionId: string): Promise<string>;
   syncMaxDecisions?(
     decisions: { timestamp: string; question: string; answer: string }[],
+    signal?: AbortSignal,
   ): Promise<void>;
-  consult(input: AskPlannerInput, context?: PlannerConsultContext): Promise<PlannerResponse>;
-  finalReview(packet: Packet, ledger: OutcomeLedger, report: SubmitReport): Promise<FinalReview>;
+  consult(
+    input: AskPlannerInput,
+    context?: PlannerConsultContext,
+    signal?: AbortSignal,
+  ): Promise<PlannerResponse>;
+  finalReview(
+    packet: Packet,
+    ledger: OutcomeLedger,
+    report: SubmitReport,
+    signal?: AbortSignal,
+  ): Promise<FinalReview>;
 };

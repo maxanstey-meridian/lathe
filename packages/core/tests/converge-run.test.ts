@@ -1,4 +1,4 @@
-import { equal, ok, deepEqual } from "node:assert";
+import { equal, ok, deepEqual, rejects } from "node:assert";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,14 +11,19 @@ import type {
   SuperReviewResult,
   SuperReviewOutcome,
 } from "../src/application/ports/reviewer.js";
-import type { Store } from "../src/application/ports/store.js";
+import type {
+  ConvergencePublication,
+  RepositoryLease,
+  RunTransition,
+  Store,
+} from "../src/application/ports/store.js";
 import type { Verify, VerificationResult } from "../src/application/ports/verify.js";
 import { convergeRun } from "../src/application/use-cases/converge-run.js";
-import type { Paths } from "../src/config/paths.js";
-import { makePaths } from "../src/config/paths.js";
 import type { Config } from "../src/config/schemas.js";
 import type { TurnResponse } from "../src/domain/agent-response.js";
 import type { Campaign } from "../src/domain/campaign.js";
+import type { ConvergenceOperation } from "../src/domain/convergence.js";
+import type { JournalEvent } from "../src/domain/journal.js";
 import type { VerificationCommand } from "../src/domain/packet.js";
 import { parsePacketShape } from "../src/domain/packet.js";
 import type { ActiveConvergence, RunMeta } from "../src/domain/run.js";
@@ -85,10 +90,10 @@ const makeMeta = (overrides: Record<string, unknown> = {}) =>
     branch: "meridian/20260101-000000-converge",
     worktree: "/tmp/test-worktree",
     summary: "converge-run fixture",
+    pass: 1,
     stallRetries: 0,
     crashRetries: 0,
     reorientRetries: 0,
-    reviewerUnreachable: 0,
     promoted: false,
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
@@ -119,11 +124,9 @@ const defaultConfig = (skillPath: string): Config =>
       packetSkillPath: skillPath,
       diffCapBytes: 131_072,
     },
-    thresholds: { maxPasses: 3, maxReviewerUnreachable: 3, verificationTimeoutMs: 600_000 },
+    thresholds: { maxPasses: 3, verificationTimeoutMs: 600_000 },
     mutationCommandPatterns: [],
   }) as unknown as Config;
-
-const defaultPaths = (root: string): Paths => makePaths(root);
 
 // ---------------------------------------------------------------------------
 // Fake ports factory
@@ -145,13 +148,12 @@ const makeFakePorts = (
   const convergenceStore = new Array<unknown>();
   let activeConvergence: ActiveConvergence | undefined;
   let campaign: Campaign | undefined = campaignOverride;
+  let operation: ConvergenceOperation | undefined;
 
   const clock = fixedClock();
-  const paths = defaultPaths(tmpdir());
 
   return {
     clock,
-    paths,
     config: defaultConfig(skillPath),
     store: {
       readMeta: (runId: string) => {
@@ -163,14 +165,64 @@ const makeFakePorts = (
       writeMeta: (m: RunMeta) => {
         metaStore = m;
       },
+      transitionRun: (transition: RunTransition) => {
+        if ((metaStore.revision ?? 0) !== transition.expectedRevision) {
+          throw new Error("revision conflict");
+        }
+        if (!transition.expectedStatuses.includes(metaStore.status)) {
+          throw new Error("status conflict");
+        }
+        metaStore = { ...transition.meta, revision: (metaStore.revision ?? 0) + 1 };
+        return metaStore;
+      },
       readQueuePacket: (_runId: string) => PACKET_RAW,
       readCampaign: (_campaignId: string) => campaign,
+      readConvergenceOperation: () => operation,
+      persistConvergenceOperation: (next: ConvergenceOperation) => {
+        operation = next;
+      },
+      publishConvergence: (publication: ConvergencePublication) => {
+        onWriteCampaign?.(publication.campaign);
+        onAppendJournal?.(RUN_ID, publication.event);
+        onAppendConvergence?.(RUN_ID, publication.entry);
+        if (publication.nits !== undefined) {
+          onWriteNits?.(RUN_ID, publication.nits);
+        }
+        if (publication.followup) {
+          onAdmitQueue?.(publication.followup.runId, publication.followup.raw);
+        }
+        operation = publication.operation;
+        campaign = publication.campaign;
+        convergenceStore.push(publication.entry);
+        if (publication.nits !== undefined) {
+          nitsStore.set(RUN_ID, publication.nits);
+        }
+        return publication.runTransition
+          ? (metaStore = {
+              ...publication.runTransition.meta,
+              revision: (metaStore.revision ?? 0) + 1,
+            })
+          : undefined;
+      },
       writeCampaign: (c: Campaign) => {
         campaign = c;
         onWriteCampaign?.(c);
       },
       admitQueue: (runId: string, content: string) => {
         onAdmitQueue?.(runId, content);
+      },
+      admitQueueWithCampaign: (
+        runId: string,
+        content: string,
+        updated: Campaign,
+        decision?: { runId: string; event: JournalEvent },
+      ) => {
+        campaign = updated;
+        onAdmitQueue?.(runId, content);
+        onWriteCampaign?.(updated);
+        if (decision) {
+          onAppendJournal?.(decision.runId, decision.event);
+        }
       },
       appendConvergence: (runId: string, entry: unknown) => {
         convergenceStore.push(entry);
@@ -191,11 +243,33 @@ const makeFakePorts = (
         activeConvergence = undefined;
       },
       readReport: () => "",
+      acquireRepositoryLease: (repo: string, ownerId: string, runId: string) => ({
+        repo,
+        ownerId,
+        runId,
+        purpose: "execute" as const,
+        epoch: 1,
+        acquiredAt: clock.nowIso(),
+        heartbeatAt: clock.nowIso(),
+        expiresAt: "2099-01-01T00:00:00.000Z",
+      }),
+      heartbeatRepositoryLease: (lease: RepositoryLease) => lease,
+      releaseRepositoryLease: () => true,
     } as unknown as Store,
     repo: {
       reviewableDiffAgainst: () => "diff",
+      reconciliationGitState: () => ({
+        head: "head-before-amend",
+        tree: "tree",
+        commitMessage: "WIP",
+        status: [],
+        diffHash: "",
+        untracked: [],
+        changedFiles: [],
+      }),
       amendCommit: () => "amended-sha",
       fetchBranchFromClone: () => {},
+      resolveRevision: () => "head-before-amend",
     } as unknown as Repo,
     reviewer: {
       superReview: async (): Promise<SuperReviewOutcome> => {
@@ -231,6 +305,7 @@ const makeFakePorts = (
     getActiveConvergence: () => activeConvergence,
     getMeta: () => metaStore,
     getCampaign: () => campaign,
+    getOperation: () => operation,
   };
 };
 
@@ -294,7 +369,6 @@ test("convergeRun: stop — amend commit, campaign converged, meta un-parked", a
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   });
 
   await runner(RUN_ID);
@@ -348,7 +422,6 @@ test("convergeRun: stop without commit_message — amend skipped, still converge
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   });
 
   await runner(RUN_ID);
@@ -419,7 +492,6 @@ test("convergeRun: author — admit follow-up, campaign open, priorOutcomes dedu
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   });
 
   await runner(RUN_ID);
@@ -525,7 +597,6 @@ test("convergeRun: author but the authored packet never admits → one retry, th
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   })(RUN_ID);
 
   // One retry feeding back the admission problems, then give up.
@@ -539,6 +610,12 @@ test("convergeRun: author but the authored packet never admits → one retry, th
   ok(meta.blockedQuestion?.includes("could not author an admittable"));
   ok(campaignWritten, "campaign should be written");
   equal(campaignWritten?.status, "needs_max");
+  equal(campaignWritten?.passes[0]?.verdict, "escalate");
+  equal(campaignWritten?.passes[0]?.proposedVerdict, "request_changes");
+  equal(
+    (ports.convergenceStore[0] as { decision?: { action?: string } }).decision?.action,
+    "escalate",
+  );
 });
 
 test("convergeRun: emits a super_review journal event with verdict + rendered findings (tail visibility)", async () => {
@@ -596,15 +673,33 @@ test("convergeRun: emits a super_review journal event with verdict + rendered fi
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   })(RUN_ID);
 
   const superReview = journalEvents.find(
-    (e): e is { event: string; verdict: string; pass: number; findings: string[] } =>
-      typeof e === "object" && e !== null && (e as { event?: string }).event === "super_review",
+    (
+      e,
+    ): e is {
+      event: string;
+      verdict: string;
+      proposedVerdict: string;
+      pass: number;
+      findings: string[];
+    } => typeof e === "object" && e !== null && (e as { event?: string }).event === "super_review",
   );
   ok(superReview, "a super_review journal event should be emitted");
+  equal(
+    journalEvents.some(
+      (event) =>
+        typeof event === "object" &&
+        event !== null &&
+        (event as { event?: string; status?: string }).event === "super_review_status" &&
+        (event as { status?: string }).status === "started",
+    ),
+    true,
+    "reviewer start should be durable before the verdict",
+  );
   equal(superReview.verdict, "request_changes");
+  equal(superReview.proposedVerdict, "request_changes");
   equal(superReview.pass, 1);
   // ungrounded findings carry no marker; grounded ones append ⟨kind⟩
   deepEqual(superReview.findings, ["[P0] fix a ⟨command_fail⟩", "[P1] fix b"]);
@@ -650,7 +745,6 @@ test("convergeRun: escalate — meta blocked, campaign needs_max", async () => {
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   });
 
   await runner(RUN_ID);
@@ -662,6 +756,115 @@ test("convergeRun: escalate — meta blocked, campaign needs_max", async () => {
 
   ok(campaignWritten, "campaign should be written");
   equal(campaignWritten?.status, "needs_max");
+});
+
+test("convergeRun: a publication failure leaves run and campaign unpublished", async () => {
+  const skillPath = createSkillFile();
+  const ports = makeFakePorts(
+    skillPath,
+    undefined,
+    undefined,
+    {
+      review: {
+        verdict: "escalate",
+        findings: [],
+        convergence: {
+          recommend_stop: false,
+          profile: { p0: 0, p1: 0, p2: 0, p3: 0 },
+          rationale: "operator decision required",
+        },
+        commit_message: null,
+        notes: "",
+        human_decision_needed: "choose the recovery policy",
+      },
+      raw: "escalate",
+    },
+    undefined,
+    undefined,
+    () => {
+      throw new Error("campaign unavailable");
+    },
+  );
+
+  await rejects(
+    () =>
+      convergeRun({
+        store: ports.store,
+        repo: ports.repo,
+        reviewer: ports.reviewer,
+        verify: ports.verify,
+        clock: ports.clock,
+        config: ports.config,
+      })(RUN_ID),
+    /campaign unavailable/,
+  );
+
+  equal(ports.getMeta().status, "ready_for_review");
+  equal(ports.getCampaign(), undefined);
+});
+
+test("convergeRun: convergence log failure rejects the atomic publication", async () => {
+  const skillPath = createSkillFile();
+  const ports = makeFakePorts(
+    skillPath,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    () => {
+      throw new Error("convergence log unavailable");
+    },
+  );
+
+  await rejects(
+    () =>
+      convergeRun({
+        store: ports.store,
+        repo: ports.repo,
+        reviewer: ports.reviewer,
+        verify: ports.verify,
+        clock: ports.clock,
+        config: ports.config,
+      })(RUN_ID),
+    /convergence log unavailable/,
+  );
+
+  equal(ports.getCampaign(), undefined);
+  equal(ports.getMeta().status, "ready_for_review");
+});
+
+test("convergeRun: journal publishes the admitted verdict when an accept proposal is rejected", async () => {
+  const journalEvents: Array<Record<string, unknown>> = [];
+  const skillPath = createSkillFile();
+  const ports = makeFakePorts(
+    skillPath,
+    undefined,
+    undefined,
+    undefined,
+    [{ command: "echo bad", exitCode: 1, outputTail: "bad" }],
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    (_runId, event) => journalEvents.push(event as Record<string, unknown>),
+  );
+
+  await convergeRun({
+    store: ports.store,
+    repo: ports.repo,
+    reviewer: ports.reviewer,
+    verify: ports.verify,
+    clock: ports.clock,
+    config: ports.config,
+  })(RUN_ID);
+
+  const event = journalEvents.find((candidate) => candidate.event === "super_review");
+  equal(event?.verdict, "escalate");
+  equal(event?.proposedVerdict, "accept");
+  equal(ports.getCampaign()?.passes[0]?.verdict, "escalate");
+  equal(ports.getCampaign()?.passes[0]?.proposedVerdict, "accept");
 });
 
 // ---------------------------------------------------------------------------
@@ -727,7 +930,6 @@ test("convergeRun: alreadyReviewed — pure early return", async () => {
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   });
 
   await runner(RUN_ID);
@@ -781,7 +983,6 @@ test("convergeRun: same runId new attempt is reviewed again", async () => {
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   });
 
   await runner(RUN_ID);
@@ -793,6 +994,135 @@ test("convergeRun: same runId new attempt is reviewed again", async () => {
   equal(campaign?.passes.length, 1, "new attempt supersedes the stale pass for this run id");
   equal(campaign?.passes[0]!.attempt, 2);
   equal(campaign?.passes[0]!.verdict, "accept");
+});
+
+test("convergeRun: resumes a decided operation without repeating verification or review", async () => {
+  const skillPath = createSkillFile();
+  const ports = makeFakePorts(skillPath);
+  let verificationCalls = 0;
+  let reviewerCalls = 0;
+  ports.verify.run = async () => {
+    verificationCalls++;
+    return [{ command: "echo ok", exitCode: 0, outputTail: "" }];
+  };
+  const baseReview = ports.reviewer.superReview;
+  ports.reviewer.superReview = async (...args) => {
+    reviewerCalls++;
+    return baseReview(...args);
+  };
+  const publish = ports.store.publishConvergence.bind(ports.store);
+  let failOnce = true;
+  ports.store.publishConvergence = (publication) => {
+    if (failOnce) {
+      failOnce = false;
+      throw new Error("forced publication failure");
+    }
+    return publish(publication);
+  };
+  const runner = convergeRun(ports);
+
+  await rejects(() => runner(RUN_ID), /forced publication failure/);
+  await runner(RUN_ID);
+
+  equal(verificationCalls, 1);
+  equal(reviewerCalls, 1);
+  equal(ports.getCampaign()?.status, "converged");
+});
+
+test("convergeRun: recovery observes a completed amend instead of replaying it", async () => {
+  const ports = makeFakePorts(createSkillFile());
+  let head = "head-before-amend";
+  let amendCalls = 0;
+  ports.repo.reconciliationGitState = () => ({
+    head,
+    tree: "tree",
+    commitMessage: head === "head-after-amend" ? "feat: converged\n\nall good" : "WIP",
+    status: [],
+    diffHash: "",
+    untracked: [],
+    changedFiles: [],
+  });
+  ports.repo.amendCommit = () => {
+    amendCalls++;
+    head = "head-after-amend";
+    throw new Error("simulated crash after git committed the amendment");
+  };
+
+  const runner = convergeRun(ports);
+  await rejects(() => runner(RUN_ID), /simulated crash/);
+  equal(ports.getOperation()?.phase, "amend_started");
+
+  await runner(RUN_ID);
+  equal(amendCalls, 1);
+  equal(ports.getOperation()?.phase, "published");
+  equal(ports.getCampaign()?.status, "converged");
+});
+
+test("convergeRun: replays a decided stored follow-up without loading the packet skill or reauthoring", async () => {
+  const skillPath = createSkillFile();
+  let admittedContent: string | undefined;
+  const ports = makeFakePorts(
+    skillPath,
+    undefined,
+    undefined,
+    {
+      review: {
+        verdict: "request_changes",
+        findings: [
+          {
+            id: "fix-a",
+            severity: "P0",
+            title: "fix a",
+            evidence: ["a.ts:1"],
+            grounding: { kind: "command_fail", ref: "pnpm test" },
+          },
+        ],
+        convergence: {
+          recommend_stop: false,
+          profile: { p0: 1, p1: 0, p2: 0, p3: 0 },
+          rationale: "",
+        },
+        commit_message: null,
+        notes: "",
+        human_decision_needed: null,
+      },
+      raw: "request_changes",
+    },
+    undefined,
+    (_runId, content) => {
+      admittedContent = content;
+    },
+  );
+  const controller = new AbortController();
+  const persist = ports.store.persistConvergenceOperation.bind(ports.store);
+  ports.store.persistConvergenceOperation = (operation, lease) => {
+    persist(operation, lease);
+    if (operation.phase === "decided" && operation.followup) {
+      controller.abort();
+    }
+  };
+  let authorCalls = 0;
+  const authorFollowup = ports.reviewer.authorFollowup;
+  ports.reviewer.authorFollowup = async (...args) => {
+    authorCalls++;
+    return authorFollowup(...args);
+  };
+
+  await convergeRun(ports)(RUN_ID, controller.signal);
+  const stored = ports.getOperation();
+  const storedPacket = stored && "followup" in stored ? stored.followup?.packet : undefined;
+  ok(storedPacket);
+  equal(admittedContent, undefined);
+
+  ports.config.superdaddy.packetSkillPath = "/does/not/exist/packet-skill.md";
+  ports.reviewer.authorFollowup = async () => {
+    throw new Error("stored follow-up must not be reauthored");
+  };
+  await convergeRun(ports)(RUN_ID);
+
+  equal(authorCalls, 1);
+  equal(admittedContent, storedPacket);
+  equal(ports.getOperation()?.phase, "published");
 });
 
 // ---------------------------------------------------------------------------
@@ -832,7 +1162,6 @@ test("convergeRun: accept + red verification → escalate", async () => {
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   });
 
   await runner(RUN_ID);
@@ -851,17 +1180,33 @@ test("convergeRun: accept + red verification → escalate", async () => {
 
 test("convergeRun: failure → meta reset to ready_for_review", async () => {
   const skillPath = createSkillFile();
-  const ports = makeFakePorts(skillPath, { status: "running" as const }, undefined, {
-    review: {
-      verdict: "accept",
-      findings: [],
-      convergence: { recommend_stop: true, profile: { p0: 0, p1: 0, p2: 0, p3: 0 }, rationale: "" },
-      commit_message: { subject: "ok", body: "" },
-      notes: "",
-      human_decision_needed: null,
+  const journalEvents: Array<Record<string, unknown>> = [];
+  const ports = makeFakePorts(
+    skillPath,
+    { status: "running" as const },
+    undefined,
+    {
+      review: {
+        verdict: "accept",
+        findings: [],
+        convergence: {
+          recommend_stop: true,
+          profile: { p0: 0, p1: 0, p2: 0, p3: 0 },
+          rationale: "",
+        },
+        commit_message: { subject: "ok", body: "" },
+        notes: "",
+        human_decision_needed: null,
+      },
+      raw: "ok",
     },
-    raw: "ok",
-  });
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    (_runId, event) => journalEvents.push(event as Record<string, unknown>),
+  );
 
   // Make the reviewer throw to trigger fail-safe
   const failingReviewer = {
@@ -877,22 +1222,37 @@ test("convergeRun: failure → meta reset to ready_for_review", async () => {
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   });
 
-  await runner(RUN_ID);
+  await rejects(() => runner(RUN_ID), /reviewer crashed/);
 
-  // Fail-safe: meta reset to ready_for_review
+  // Recovery preserves the completed work for an explicit convergence retry.
   const meta = ports.getMeta();
   equal(meta.status, "ready_for_review");
+  const failed = journalEvents.find(
+    (event) => event.event === "super_review_status" && event.status === "failed",
+  );
+  equal(failed?.detail, "reviewer crashed");
 });
 
 // ---------------------------------------------------------------------------
-// Test: super-daddy unreachable BELOW budget → retryable, no pass recorded
+// Test: one unreachable review parks explicitly without creating a pass
 
-test("convergeRun: unreachable below budget → counter bumped, no pass, stays retryable", async () => {
+test("convergeRun: one unreachable review parks explicitly without a retry state", async () => {
   const skillPath = createSkillFile();
-  const ports = makeFakePorts(skillPath, { status: "ready_for_review" as const });
+  const journalEvents: Array<Record<string, unknown>> = [];
+  const ports = makeFakePorts(
+    skillPath,
+    { status: "ready_for_review" as const },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    (_runId, event) => journalEvents.push(event as Record<string, unknown>),
+  );
 
   const unreachableReviewer = {
     superReview: async (): Promise<SuperReviewOutcome> => ({
@@ -909,61 +1269,269 @@ test("convergeRun: unreachable below budget → counter bumped, no pass, stays r
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   })(RUN_ID);
 
   const meta = ports.getMeta();
-  // Run stays where it was (retryable) — a non-result must not park or converge.
-  equal(meta.status, "ready_for_review", "stays ready_for_review for the next retry");
-  equal(meta.reviewerUnreachable, 1, "consecutive-unreachable counter bumped");
-  // NEVER record a campaign pass — that is what makes a retry a no-op.
+  equal(meta.status, "blocked");
+  equal(meta.blockedReason, "human_decision");
+  ok(meta.blockedQuestion?.includes("unreachable"));
   equal(ports.getCampaign(), undefined, "no campaign pass recorded");
-  // Logged honestly as unreachable, not a forged verdict.
-  equal(ports.convergenceStore.length, 1);
-  const entry = ports.convergenceStore[0] as { kind: string; attempt: number; detail: string };
-  equal(entry.kind, "unreachable");
-  equal(entry.attempt, 1);
+  equal(ports.convergenceStore.length, 0, "a transport failure is not a convergence result");
+  const statuses = journalEvents.filter((event) => event.event === "super_review_status");
+  deepEqual(
+    statuses.map((event) => event.status),
+    ["started", "failed"],
+  );
 });
 
-// ---------------------------------------------------------------------------
-// Test: super-daddy unreachable AT budget → park for Max, counter reset, no pass
-
-test("convergeRun: unreachable at budget → parks blocked, resets counter, no pass", async () => {
+test("convergeRun: cancellation during acceptance review is durable", async () => {
   const skillPath = createSkillFile();
-  // budget = 3 (defaultConfig); start at 2 so this attempt is the 3rd.
-  const ports = makeFakePorts(skillPath, {
-    status: "ready_for_review" as const,
-    reviewerUnreachable: 2,
-  });
-
-  const unreachableReviewer = {
-    superReview: async (): Promise<SuperReviewOutcome> => ({
-      kind: "unreachable",
-      detail: "Connection dropped: socket hang up",
-      raw: "x",
-    }),
+  const journalEvents: Array<Record<string, unknown>> = [];
+  const ports = makeFakePorts(
+    skillPath,
+    { status: "ready_for_review" as const },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    (_runId, event) => journalEvents.push(event as Record<string, unknown>),
+  );
+  const controller = new AbortController();
+  const reviewer: Reviewer = {
+    superReview: async (...args) => {
+      const outcome = await ports.reviewer.superReview(...args);
+      controller.abort();
+      return outcome;
+    },
+    authorFollowup: (...args) => ports.reviewer.authorFollowup(...args),
   };
 
   await convergeRun({
     store: ports.store,
     repo: ports.repo,
-    reviewer: unreachableReviewer as unknown as Reviewer,
+    reviewer,
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
-  })(RUN_ID);
+  })(RUN_ID, controller.signal);
 
-  const meta = ports.getMeta();
-  equal(meta.status, "blocked", "durable unreachable parks for Max");
-  equal(meta.blockedReason, "human_decision");
-  ok(meta.blockedQuestion?.includes("unreachable"), "park message names the cause");
-  equal(meta.reviewerUnreachable, 0, "counter reset so a manual re-run starts fresh");
-  // Still no campaign pass — a manual converge after fixing the connection works.
-  equal(ports.getCampaign(), undefined, "no campaign pass recorded even at budget");
-  const entry = ports.convergenceStore[0] as { kind: string; attempt: number };
-  equal(entry.kind, "unreachable");
-  equal(entry.attempt, 3);
+  const statuses = journalEvents.filter((event) => event.event === "super_review_status");
+  deepEqual(
+    statuses.map((event) => event.status),
+    ["started", "cancelled"],
+  );
+  equal(
+    journalEvents.some((event) => event.event === "super_review"),
+    false,
+  );
+});
+
+test("convergeRun: cancellation after decision prevents publication and is durable", async () => {
+  const skillPath = createSkillFile();
+  const journalEvents: Array<Record<string, unknown>> = [];
+  const ports = makeFakePorts(
+    skillPath,
+    undefined,
+    undefined,
+    {
+      review: {
+        verdict: "accept",
+        findings: [],
+        convergence: {
+          recommend_stop: true,
+          profile: { p0: 0, p1: 0, p2: 0, p3: 0 },
+          rationale: "",
+        },
+        commit_message: null,
+        notes: "",
+        human_decision_needed: null,
+      },
+      raw: "accept",
+    },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    (_runId, event) => journalEvents.push(event as Record<string, unknown>),
+  );
+  const controller = new AbortController();
+  const persist = ports.store.persistConvergenceOperation.bind(ports.store);
+  let publications = 0;
+  ports.store.persistConvergenceOperation = (operation, lease) => {
+    persist(operation, lease);
+    if (operation.phase === "decided") {
+      controller.abort();
+    }
+  };
+  ports.store.publishConvergence = () => {
+    publications++;
+    return undefined;
+  };
+
+  await convergeRun(ports)(RUN_ID, controller.signal);
+
+  equal(publications, 0);
+  equal(ports.getCampaign(), undefined);
+  equal(ports.getMeta().status, "ready_for_review");
+  equal(ports.getOperation()?.phase, "decided");
+  equal(
+    journalEvents.some((event) => event.event === "super_review"),
+    false,
+  );
+
+  const replayController = new AbortController();
+  replayController.abort();
+  await convergeRun(ports)(RUN_ID, replayController.signal);
+
+  equal(publications, 0);
+  equal(ports.getOperation()?.phase, "decided");
+  deepEqual(
+    journalEvents
+      .filter((event) => event.event === "super_review_status")
+      .map((event) => event.status),
+    ["started", "cancelled", "cancelled"],
+  );
+});
+
+test("convergeRun: lease loss stops before amend", async () => {
+  const skillPath = createSkillFile();
+  const ports = makeFakePorts(skillPath);
+  let amendCalls = 0;
+  let heartbeats = 0;
+  ports.store.heartbeatRepositoryLease = (lease) => (++heartbeats < 5 ? lease : undefined);
+  ports.repo.amendCommit = () => {
+    amendCalls++;
+    return "sha";
+  };
+
+  await rejects(() => convergeRun(ports)(RUN_ID), /repository lease lost/);
+  equal(amendCalls, 0);
+});
+
+test("convergeRun: fences convergence metadata transitions with the current lease", async () => {
+  const skillPath = createSkillFile();
+  const ports = makeFakePorts(skillPath);
+  const lease = ports.store.acquireRepositoryLease("/repo", "worker", RUN_ID, "execute")!;
+  const transitionRun = ports.store.transitionRun.bind(ports.store);
+  const observed: Array<RepositoryLease | undefined> = [];
+  ports.store.transitionRun = (transition) => {
+    observed.push(transition.lease);
+    return transitionRun(transition);
+  };
+  ports.reviewer.superReview = async () => ({ kind: "unreachable", detail: "offline", raw: "" });
+
+  await convergeRun(ports)(RUN_ID, undefined, lease);
+
+  deepEqual(observed, [lease]);
+  equal(ports.getMeta().status, "blocked");
+});
+
+test("convergeRun: cancellation after authorFollowup closes the durable review status", async () => {
+  const skillPath = createSkillFile();
+  const journalEvents: Array<Record<string, unknown>> = [];
+  const ports = makeFakePorts(
+    skillPath,
+    undefined,
+    undefined,
+    {
+      review: {
+        verdict: "request_changes",
+        findings: [
+          {
+            id: "fix-a",
+            severity: "P0",
+            title: "fix a",
+            evidence: ["a.ts:1"],
+            grounding: { kind: "command_fail", ref: "pnpm test" },
+          },
+        ],
+        convergence: {
+          recommend_stop: false,
+          profile: { p0: 1, p1: 0, p2: 0, p3: 0 },
+          rationale: "",
+        },
+        commit_message: null,
+        notes: "",
+        human_decision_needed: null,
+      },
+      raw: "request_changes",
+    },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    (_runId, event) => journalEvents.push(event as Record<string, unknown>),
+  );
+  const controller = new AbortController();
+  const baseReviewer = ports.reviewer;
+  ports.reviewer = {
+    superReview: (...args) => baseReviewer.superReview(...args),
+    authorFollowup: async (...args) => {
+      const authored = await baseReviewer.authorFollowup(...args);
+      controller.abort();
+      return authored;
+    },
+  } as Reviewer;
+
+  await convergeRun({
+    store: ports.store,
+    repo: ports.repo,
+    reviewer: ports.reviewer,
+    verify: ports.verify,
+    clock: ports.clock,
+    config: ports.config,
+  })(RUN_ID, controller.signal);
+
+  const statuses = journalEvents.filter((event) => event.event === "super_review_status");
+  deepEqual(
+    statuses.map((event) => event.status),
+    ["started", "cancelled"],
+  );
+});
+
+test("convergeRun: aborted reviewer rejection journals cancellation, not failure", async () => {
+  const skillPath = createSkillFile();
+  const journalEvents: Array<Record<string, unknown>> = [];
+  const ports = makeFakePorts(
+    skillPath,
+    { status: "ready_for_review" as const },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    (_runId, event) => journalEvents.push(event as Record<string, unknown>),
+  );
+  const controller = new AbortController();
+  const reviewer: Reviewer = {
+    superReview: async () => {
+      controller.abort();
+      throw new DOMException("cancelled", "AbortError");
+    },
+    authorFollowup: (...args) => ports.reviewer.authorFollowup(...args),
+  };
+
+  await convergeRun({
+    store: ports.store,
+    repo: ports.repo,
+    reviewer,
+    verify: ports.verify,
+    clock: ports.clock,
+    config: ports.config,
+  })(RUN_ID, controller.signal);
+
+  const statuses = journalEvents.filter((event) => event.event === "super_review_status");
+  deepEqual(
+    statuses.map((event) => event.status),
+    ["started", "cancelled"],
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -1014,7 +1582,6 @@ test("convergeRun: pass cap reached → escalate", async () => {
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   });
 
   await runner(RUN_ID);
@@ -1026,11 +1593,10 @@ test("convergeRun: pass cap reached → escalate", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test: the reported bug — ESCALATE at the pass cap promotes instead of parking.
-// Run 20260625-142532-lathe-http-surface-fix3 parked here; it must now author a
-// PROMOTED follow-up (Baby's harness on Daddy's model) for one last attempt.
+// A human-owned decision is an absolute stop, including at the pass cap. The
+// promotion escape hatch applies only when no human decision is required.
 
-test("convergeRun: escalate at the cap + promote enabled → authored follow-up is PROMOTED", async () => {
+test("convergeRun: human decision at the cap + promote enabled → parks for Max", async () => {
   let admittedRunId: string | undefined;
   let admittedContent: string | undefined;
   const journalEvents: { event: string; note?: string }[] = [];
@@ -1088,21 +1654,18 @@ test("convergeRun: escalate at the cap + promote enabled → authored follow-up 
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   });
 
   await runner(RUN_ID);
 
-  ok(admittedContent, "a promoted follow-up must be admitted, not parked");
-  const parsed = parsePacketShape(admittedContent ?? "", admittedRunId);
-  ok(parsed.ok, "admitted packet must parse: " + (parsed.ok ? "" : parsed.problems.join("; ")));
-  if (!parsed.ok) {
-    return;
-  }
-  equal(parsed.packet.frontmatter.promoted, true);
+  equal(admittedContent, undefined);
+  equal(admittedRunId, undefined);
+  equal(ports.getMeta().status, "blocked");
+  equal(ports.getMeta().blockedReason, "human_decision");
+  equal(ports.getCampaign()?.status, "needs_max");
   ok(
-    journalEvents.some((e) => e.event === "driver_note" && (e.note ?? "").includes("PROMOTED")),
-    "the promoted pass must be surfaced in the journal for the tail",
+    !journalEvents.some((e) => e.event === "driver_note" && (e.note ?? "").includes("PROMOTED")),
+    "a human-owned decision must not emit a promoted-pass note",
   );
 });
 
@@ -1157,7 +1720,6 @@ test("convergeRun: escalate at the cap when ALREADY promoted → parks (no secon
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   });
 
   await runner(RUN_ID);
@@ -1195,7 +1757,6 @@ test("convergeRun: request_changes but zero findings → escalate", async () => 
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   });
 
   await runner(RUN_ID);
@@ -1212,14 +1773,13 @@ test("convergeRun: stop with meta already ready_for_review — no unnecessary wr
   let metaWrites = 0;
   const originalMeta = makeMeta({ status: "ready_for_review" as const });
   const storedMeta = { ...originalMeta };
+  let storedOperation: ConvergenceOperation | undefined;
 
   const skillPath = createSkillFile();
   const clock = fixedClock();
-  const paths = defaultPaths(tmpdir());
 
   const ports = {
     clock,
-    paths,
     config: defaultConfig(skillPath),
     store: {
       readMeta: () => storedMeta,
@@ -1228,6 +1788,14 @@ test("convergeRun: stop with meta already ready_for_review — no unnecessary wr
       },
       readQueuePacket: () => PACKET_RAW,
       readCampaign: () => undefined,
+      readConvergenceOperation: () => storedOperation,
+      persistConvergenceOperation: (operation: ConvergenceOperation) => {
+        storedOperation = operation;
+      },
+      publishConvergence: (publication: ConvergencePublication) => {
+        storedOperation = publication.operation;
+        return undefined;
+      },
       writeCampaign: () => {},
       admitQueue: () => {},
       appendConvergence: () => {},
@@ -1237,6 +1805,18 @@ test("convergeRun: stop with meta already ready_for_review — no unnecessary wr
       listActiveConvergences: () => [],
       addActiveConvergence: () => {},
       removeActiveConvergence: () => {},
+      acquireRepositoryLease: (repo: string, ownerId: string, runId: string) => ({
+        repo,
+        ownerId,
+        runId,
+        purpose: "execute",
+        epoch: 1,
+        acquiredAt: clock.nowIso(),
+        heartbeatAt: clock.nowIso(),
+        expiresAt: "2099-01-01T00:00:00.000Z",
+      }),
+      heartbeatRepositoryLease: (lease: any) => lease,
+      releaseRepositoryLease: () => true,
     } as unknown as Store,
     repo: {
       reviewableDiffAgainst: () => "diff",
@@ -1307,7 +1887,6 @@ test("convergeRun: pass from packet.frontmatter.pass, not meta.attempt", async (
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   });
 
   await runner(RUN_ID);
@@ -1368,7 +1947,6 @@ test("convergeRun: stop on pass cap (maxPasses=1, pass=1) → should stop if acc
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   });
 
   await runner(RUN_ID);
@@ -1419,7 +1997,6 @@ test("convergeRun: autofix is called with expected_surface, not repo-wide", asyn
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   });
 
   await runner(RUN_ID);
@@ -1510,7 +2087,6 @@ body
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   });
 
   await runner(RUN_ID);
@@ -1567,13 +2143,130 @@ test("convergeRun: empty autofix_commands → runAutoFix called with empty comma
     verify: ports.verify,
     clock: ports.clock,
     config: ports.config,
-    paths: ports.paths,
   });
 
   await runner(RUN_ID);
 
   ok(autofixRunCalled, "runAutoFix should have been called");
   equal(capturedCommands.length, 0, "autofix_commands should be empty from packet");
+});
+
+test("convergeRun: ambiguous autofix recovery parks without replay or promotion", async () => {
+  const ports = makeFakePorts(createSkillFile());
+  let autofixCalls = 0;
+  ports.verify.runAutoFix = async () => {
+    autofixCalls++;
+    throw new Error("crash after autofix effect");
+  };
+
+  await rejects(() => convergeRun(ports)(RUN_ID), /crash after autofix effect/);
+  equal(ports.getOperation()?.phase, "autofix_started");
+
+  ports.verify.runAutoFix = async () => {
+    throw new Error("autofix must not replay");
+  };
+  await convergeRun(ports)(RUN_ID);
+
+  equal(autofixCalls, 1);
+  equal(ports.getOperation()?.phase, "autofix_started");
+  equal(ports.getMeta().status, "blocked");
+  equal(ports.getMeta().blockedReason, "human_decision");
+  ok(ports.getMeta().blockedQuestion?.includes("no durable completion evidence"));
+  equal(ports.getCampaign(), undefined);
+});
+
+test("convergeRun: follow-up CAS failure stays retryable with the durable ref snapshot", async () => {
+  const ports = makeFakePorts(createSkillFile(), undefined, undefined, {
+    review: {
+      verdict: "request_changes",
+      findings: [
+        {
+          id: "fix",
+          severity: "P0",
+          title: "fix",
+          evidence: ["a.ts:1"],
+          grounding: { kind: "command_fail", ref: "test" },
+        },
+      ],
+      convergence: {
+        recommend_stop: false,
+        profile: { p0: 1, p1: 0, p2: 0, p3: 0 },
+        rationale: "",
+      },
+      commit_message: null,
+      notes: "",
+      human_decision_needed: null,
+    },
+    raw: "request_changes",
+  });
+  let fetches = 0;
+  let sourceSha = "stale";
+  ports.repo.resolveRevision = (path) =>
+    path === "/tmp/test-worktree" ? "sandbox-tip" : sourceSha;
+  ports.repo.fetchBranchFromClone = (_repo, _clone, _branch, expectedOld, expectedNew) => {
+    fetches++;
+    equal(expectedOld, "stale");
+    equal(expectedNew, "sandbox-tip");
+    if (fetches === 1) {
+      throw new Error("fetch unavailable");
+    }
+    sourceSha = "sandbox-tip";
+  };
+
+  await rejects(() => convergeRun(ports)(RUN_ID), /fetch unavailable/);
+  equal(ports.getOperation()?.phase, "decided");
+  ok(ports.getOperation() && "followup" in ports.getOperation()!);
+
+  await convergeRun(ports)(RUN_ID);
+  equal(fetches, 2);
+  equal(ports.getOperation()?.phase, "published");
+});
+
+test("convergeRun: replay refuses a ref changed after durable follow-up publication intent", async () => {
+  const ports = makeFakePorts(createSkillFile(), undefined, undefined, {
+    review: {
+      verdict: "request_changes",
+      findings: [
+        {
+          id: "fix",
+          severity: "P0",
+          title: "fix",
+          evidence: ["a.ts:1"],
+          grounding: { kind: "command_fail", ref: "test" },
+        },
+      ],
+      convergence: {
+        recommend_stop: false,
+        profile: { p0: 1, p1: 0, p2: 0, p3: 0 },
+        rationale: "",
+      },
+      commit_message: null,
+      notes: "",
+      human_decision_needed: null,
+    },
+    raw: "request_changes",
+  });
+  let sourceSha = "stale";
+  let fetches = 0;
+  ports.repo.resolveRevision = (path) =>
+    path === "/tmp/test-worktree" ? "sandbox-tip" : sourceSha;
+  ports.repo.fetchBranchFromClone = (_repo, _clone, _branch, expectedOld, expectedNew) => {
+    fetches++;
+    equal(expectedOld, "stale");
+    equal(expectedNew, "sandbox-tip");
+    sourceSha = "external-race";
+    throw new Error("CAS lost");
+  };
+  const runner = convergeRun(ports);
+
+  await rejects(() => runner(RUN_ID), /CAS lost/);
+  equal(ports.getOperation()?.phase, "decided");
+  ok(ports.getOperation() && "followupPublication" in ports.getOperation()!);
+  await rejects(() => runner(RUN_ID), /changed from expected stale to external-race/);
+
+  equal(fetches, 1);
+  equal(ports.getCampaign(), undefined);
+  equal(ports.getOperation()?.phase, "decided");
 });
 
 // ---------------------------------------------------------------------------
@@ -1602,14 +2295,14 @@ test("convergeRun: records reviewerSessionId from the real adapter and preserves
     deleteSession: async () => {},
     abortSession: async () => {},
   };
-  const reviewer = createReviewer(fakeExecutor, sdModel, 5000, 1);
+  const reviewer = createReviewer(fakeExecutor, sdModel, 5000);
 
   let stored: RunMeta = makeMeta({ status: "ready_for_review" as const });
   let metaWrites = 0;
+  let storedOperation: ConvergenceOperation | undefined;
   const skillPath = createSkillFile();
   const ports = {
     clock: fixedClock(),
-    paths: defaultPaths(tmpdir()),
     config: defaultConfig(skillPath),
     store: {
       readMeta: () => stored,
@@ -1617,8 +2310,21 @@ test("convergeRun: records reviewerSessionId from the real adapter and preserves
         stored = m;
         metaWrites++;
       },
+      transitionRun: (transition: RunTransition) => {
+        stored = { ...transition.meta, revision: (stored.revision ?? 0) + 1 };
+        metaWrites++;
+        return stored;
+      },
       readQueuePacket: () => PACKET_RAW,
       readCampaign: () => undefined,
+      readConvergenceOperation: () => storedOperation,
+      persistConvergenceOperation: (operation: ConvergenceOperation) => {
+        storedOperation = operation;
+      },
+      publishConvergence: (publication: ConvergencePublication) => {
+        storedOperation = publication.operation;
+        return undefined;
+      },
       writeCampaign: () => {},
       admitQueue: () => {},
       appendConvergence: () => {},
@@ -1628,8 +2334,29 @@ test("convergeRun: records reviewerSessionId from the real adapter and preserves
       listActiveConvergences: () => [],
       addActiveConvergence: () => {},
       removeActiveConvergence: () => {},
+      acquireRepositoryLease: (repo: string, ownerId: string, runId: string) => ({
+        repo,
+        ownerId,
+        runId,
+        purpose: "execute",
+        epoch: 1,
+        acquiredAt: ports.clock.nowIso(),
+        heartbeatAt: ports.clock.nowIso(),
+        expiresAt: "2099-01-01T00:00:00.000Z",
+      }),
+      heartbeatRepositoryLease: (lease: RepositoryLease) => lease,
+      releaseRepositoryLease: () => true,
     } as unknown as Store,
     repo: {
+      reconciliationGitState: () => ({
+        head: "head-before-amend",
+        tree: "tree",
+        commitMessage: "WIP",
+        status: [],
+        diffHash: "",
+        untracked: [],
+        changedFiles: [],
+      }),
       amendCommit: () => "sha",
       fetchBranchFromClone: () => {},
     } as unknown as Repo,

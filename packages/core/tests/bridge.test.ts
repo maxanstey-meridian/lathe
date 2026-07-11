@@ -170,7 +170,6 @@ const makeRef = (overrides?: {
     stallRetries: 0,
     crashRetries: 0,
     reorientRetries: 0,
-    reviewerUnreachable: 0,
     promoted: false,
     pass: 1,
     updatedAt: clock.nowIso(),

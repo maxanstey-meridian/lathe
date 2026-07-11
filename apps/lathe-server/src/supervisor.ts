@@ -17,6 +17,7 @@ import type {
   Paths,
   RunMeta,
   JournalEvent,
+  RunAbort,
   RunLoopSeams,
   ValidatePacketResult,
   Plan,
@@ -26,9 +27,6 @@ import {
   systemClock,
   buildRepo,
   runDriver,
-  recoverOrphanedRuns,
-  recoverStaleActiveRuns,
-  recoverStalledRunsAtStartup,
   admitPacket,
   validatePacket as validatePacketUc,
   acceptRun as acceptRunUc,
@@ -38,9 +36,11 @@ import {
   isLatched,
   gateReason,
   renderJournalEvent,
+  isDriverEvent,
   createEvents,
   createContextTokenReader,
   createMessageHistoryReader,
+  RunTransitionConflictError,
   parsePacketShape,
   Config,
   createConfigSource,
@@ -122,6 +122,20 @@ export class RunNotAnswerableError extends Error {
   }
 }
 
+export class RunCancellationConflictError extends Error {
+  constructor(runId: string) {
+    super(`run ${runId} is running without an active cancellation owner`);
+    this.name = "RunCancellationConflictError";
+  }
+}
+
+export class RunLifecycleConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RunLifecycleConflictError";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Supervisor options
 // ---------------------------------------------------------------------------
@@ -131,6 +145,8 @@ export type SupervisorOptions = {
   pollIntervalMs?: number;
   /** Unit tests can exercise supervisor methods without starting the driver. */
   startDriver?: boolean;
+  /** Test seam for observing background driver failure handling. */
+  runDriver?: typeof runDriver;
 };
 
 // ---------------------------------------------------------------------------
@@ -140,6 +156,8 @@ export type SupervisorOptions = {
 export type Supervisor = {
   /** Graceful shutdown: signal runDriver, abort in-flight runs, await exit. */
   stop(): Promise<void>;
+  /** Explicit daemon health; false after an unexpected background driver failure. */
+  health?(): { healthy: boolean; detail?: string };
   /** Dependencies for createApp (bus + readEventsSince). */
   appDeps: AppDeps;
   /** Read-only config snapshot (for GetConfig handler and contextWindow). */
@@ -158,7 +176,7 @@ export type Supervisor = {
   /** Read a single run's metadata. */
   getRun(runId: string): RunMeta | undefined;
   /** Stop a queued (archiveQueue) or running (fire per-run abort) run. */
-  stopRun(runId: string): void;
+  stopRun(runId: string): "stopped" | "cancellation_requested";
   /** Answer a parked blocked run and requeue it. */
   answerRun(runId: string, answer: string): void;
   /** Accept a ready_for_review run (chain-tip guarded). */
@@ -189,6 +207,10 @@ export type Supervisor = {
   runReadModel(runId: string): RunReadModel;
   /** Validate and write a new config to disk. Returns parsed config. Throws on validation failure. */
   writeConfig(raw: unknown): Config;
+  /** Latest validated settings persisted for the next daemon start. */
+  readonly settings: Config;
+  /** Whether persisted settings differ from the active startup snapshot. */
+  readonly restartRequired: boolean;
   /** Full planner Q&A decision history for a run. */
   getDecisions(runId: string): ReturnType<Store["readDecisions"]>;
   /** Full outcome ledger for a run. */
@@ -278,7 +300,7 @@ const startJournalTail = (
   store: Store,
   bus: EventBus,
   tailBus: TailEventBus,
-  config: Config,
+  getConfig: () => Config,
   pollIntervalMs: number,
   projectTailEvents: (seq: number, runId: string, event: JournalEvent) => TailEvent[],
 ): JournalTailHandle => {
@@ -299,7 +321,7 @@ const startJournalTail = (
       // (seq-based global tail), the store always returns runId, so we can
       // look up the meta.
       const meta = store.readMetaIfExists(runId);
-      const ctx = buildProjectionContext(runId, meta, config);
+      const ctx = buildProjectionContext(runId, meta, getConfig());
       const wire = projectJournalEvent(event, ctx);
       if (wire) {
         bus.publish(seq, wire);
@@ -318,8 +340,25 @@ const startJournalTail = (
   };
 };
 
-const isTailDriverEvent = (event: JournalEvent): boolean =>
-  event.event !== "tool_call" && event.event !== "turn_ended" && event.event !== "prompt_sent";
+const superReviewLines = (event: JournalEvent): string[] | undefined => {
+  if (event.event === "super_review") {
+    return [
+      `acceptance review: verdict ${event.verdict} (pass ${event.pass})`,
+      ...event.findings.map((finding) => `  ${finding}`),
+    ];
+  }
+  if (event.event !== "super_review_status") return undefined;
+  if (event.status === "started") {
+    return [`acceptance review: reviewing pass ${event.pass}`];
+  }
+  if (event.status === "cancelled") {
+    return [`acceptance review: pass ${event.pass} cancelled`];
+  }
+  if (event.status === "failed") {
+    return [`acceptance review: pass ${event.pass} failed${event.detail ? `: ${event.detail}` : ""}`];
+  }
+  return undefined;
+};
 
 export const resolveSpeaker = (store: Store, runId: string, sessionId: string): "baby" | "daddy" | "super" | undefined => {
   const activeRuns = store.listActiveRuns();
@@ -343,9 +382,8 @@ export const _testSelectActiveTailRunId = (
   activeRuns: Array<{ runId: string; startedAt: string }>,
   activeConvergences: Array<{ runId: string; startedAt: string }>,
 ): string | null => {
-  const newest = <T extends { runId: string; startedAt: string }>(entries: T[]): T | undefined =>
-    entries.toSorted((a, b) => b.startedAt.localeCompare(a.startedAt) || b.runId.localeCompare(a.runId))[0];
-  return newest(activeRuns)?.runId ?? newest(activeConvergences)?.runId ?? null;
+  return [...activeRuns, ...activeConvergences]
+    .toSorted((a, b) => b.startedAt.localeCompare(a.startedAt) || b.runId.localeCompare(a.runId))[0]?.runId ?? null;
 };
 
 export const createOpenCodeTailProjector = (
@@ -417,7 +455,12 @@ const createTailHydrator = (
         await Promise.all(
           (["baby", "daddy", "super"] as const).map((speaker) => hydrateSpeaker(runId, speaker, forceThisPass)),
         );
-        publish({ kind: "tail.agent.panes.replaced", runId, panes: projection.panes(runId) });
+        publish({
+          kind: "tail.agent.panes.replaced",
+          runId,
+          panes: projection.panes(runId),
+          acceptanceReviewLines: projection.acceptanceReviewLines(runId),
+        });
       } while (state.forceRequested);
     })().finally(() => {
       inFlight.delete(runId);
@@ -544,10 +587,10 @@ export const createSupervisor = (
   const repo: Repo = buildRepo();
   const store: Store = SqliteStoreAdapter.create(paths, repo, clock);
 
-  // Supervisor-owned live config source. PUT /settings updates this via
-  // writeConfig below, and runDriver reads via configSource.get() when
-  // starting each run.
+  // Runtime configuration is a startup snapshot. Settings writes are persisted
+  // separately because adapters and concurrency are composed once per daemon.
   const configSource: ConfigSource = createConfigSource(config);
+  let persistedConfig = config;
 
   // Derive a single "compatibility" active run from multi-row state:
   // newest startedAt descending, or undefined if no active runs.
@@ -561,20 +604,17 @@ export const createSupervisor = (
 
   // Per-run AbortController map keyed by runId. runLoop creates and populates
   // it; supervisor reads and fires it for the stopRun path.
-  const abortMap = new Map<string, AbortController>();
+  const abortMap = new Map<string, RunAbort>();
+  let driverReady = options.startDriver === false;
 
   // Seams wired to runDriver.
   const seams: RunLoopSeams = {
     stopSignal: stopController.signal,
     abortMap,
+    onReady: () => {
+      driverReady = true;
+    },
   };
-
-  // --- Boot recovery ---
-
-  // Run existing recovery use-cases before the loop accepts new work.
-  recoverOrphanedRuns(store, repo, clock);
-  recoverStaleActiveRuns(store);
-  recoverStalledRunsAtStartup(store, config.thresholds.maxStallRetries, clock);
 
   // --- Event buses ---
 
@@ -585,7 +625,7 @@ export const createSupervisor = (
     (event) => tailBus.publish(event),
   );
   let enforceTailRetention = (): void => {};
-  const tailHydrator = createTailHydrator(config, store, tailProjection, (event) => tailBus.publish(event), () => enforceTailRetention());
+  let tailHydrator = createTailHydrator(config, store, tailProjection, (event) => tailBus.publish(event), () => enforceTailRetention());
   const driverOutput: DriverOutput = {
     verification: (
       runId: string,
@@ -630,9 +670,24 @@ export const createSupervisor = (
   // --- Start runDriver ---
 
   // runDriver is a background promise; the supervisor holds its handle.
+  let driverFailure: unknown;
+  const activeDriver = options.runDriver ?? runDriver;
   const driverPromise = options.startDriver === false
     ? Promise.resolve()
-    : runDriver(configSource, paths, store, seams, driverOutput);
+    : activeDriver(configSource, paths, store, seams, driverOutput).then(
+        () => {
+          if (!stopController.signal.aborted) {
+            driverFailure = new Error("run driver exited unexpectedly");
+            console.error("lathe run driver stopped unexpectedly", driverFailure);
+          }
+        },
+        (error: unknown) => {
+          if (!stopController.signal.aborted) {
+            driverFailure = error;
+            console.error("lathe run driver stopped unexpectedly", error);
+          }
+        },
+      );
 
   // --- Lifecycle method implementations ---
 
@@ -775,29 +830,30 @@ export const createSupervisor = (
     }
     tailRetention.touch(runId);
     const journalRows = store.readRecentJournalWithSeq(runId, TAIL_SNAPSHOT_JOURNAL_LIMIT);
-    const latestReview = store.readJournal(runId).findLast((event) => event.event === "super_review");
-    if (latestReview?.event === "super_review") {
-      tailProjection.mergeVerdict(runId, [
-        `verdict: ${latestReview.verdict} (pass ${latestReview.pass})`,
-        ...latestReview.findings.map((finding) => `  ${finding}`),
-      ]);
+    const latestReview = store.readJournal(runId).findLast(
+      (event) => event.event === "super_review_status" || event.event === "super_review",
+    );
+    const latestReviewLines = latestReview ? superReviewLines(latestReview) : undefined;
+    if (latestReviewLines) {
+      tailProjection.mergeVerdict(runId, latestReviewLines);
     }
     const journalStats = store.readJournalStats(runId);
     const counts = outcomeCounts(runId);
 
+    const liveConfig = configSource.get();
     const snapshot: TailSnapshotDto = {
       runId,
       summary: meta.summary ?? null,
       status: meta.status,
       startedAt: meta.startedAt ?? null,
       models: {
-        baby: config.baby.modelId,
-        promoted: config.baby.promoteTo?.modelId ?? config.daddy.modelId,
-        daddy: config.daddy.modelId,
-        super: config.superdaddy.modelId,
+        baby: liveConfig.baby.modelId,
+        promoted: liveConfig.baby.promoteTo?.modelId ?? liveConfig.daddy.modelId,
+        daddy: liveConfig.daddy.modelId,
+        super: liveConfig.superdaddy.modelId,
       },
       promoted: meta.promoted,
-      budget: Math.floor(config.baby.contextWindow * config.thresholds.rotationFraction),
+      budget: Math.floor(liveConfig.baby.contextWindow * liveConfig.thresholds.rotationFraction),
       worktree: meta.worktree,
       outcomesDone: counts.done,
       outcomesTotal: counts.total,
@@ -806,13 +862,14 @@ export const createSupervisor = (
       turn: journalStats.turn,
       rotations: journalStats.rotations,
       panes: tailProjection.panes(runId),
+      acceptanceReviewLines: tailProjection.acceptanceReviewLines(runId),
       driverCommands: tailProjection.driverCommands(runId),
       journal: journalRows.map(({ seq, event }) => ({
         seq,
         at: event.at,
         line: renderJournalEvent(event),
         event: event.event,
-        driver: isTailDriverEvent(event),
+        driver: isDriverEvent(event),
       })),
       lastSeq: journalRows.at(-1)?.seq ?? 0,
     };
@@ -890,7 +947,7 @@ export const createSupervisor = (
       at: event.at,
       line: renderJournalEvent(event),
       event: event.event,
-      driver: isTailDriverEvent(event),
+      driver: isDriverEvent(event),
     };
     const statsEvent: TailEvent = {
       kind: "tail.stats",
@@ -906,11 +963,30 @@ export const createSupervisor = (
       status: stats.status,
       promoted: stats.promoted,
     };
+    const lines = superReviewLines(event);
+    if (!lines) {
+      return [journalEvent, statsEvent];
+    }
+    tailProjection.mergeVerdict(runId, lines);
+    if (event.event === "super_review_status") {
+      return [
+        journalEvent,
+        statsEvent,
+        {
+          kind: "tail.super.status",
+          runId,
+          seq,
+          at: event.at,
+          status: event.status,
+          pass: event.pass,
+          ...(event.detail !== undefined ? { detail: event.detail } : {}),
+          lines,
+        },
+      ];
+    }
     if (event.event !== "super_review") {
       return [journalEvent, statsEvent];
     }
-    const verdictLines = [`verdict: ${event.verdict} (pass ${event.pass})`, ...event.findings.map((finding) => `  ${finding}`)];
-    tailProjection.projectVerdict(runId, verdictLines);
     return [
       journalEvent,
       statsEvent,
@@ -922,7 +998,7 @@ export const createSupervisor = (
         verdict: event.verdict,
         pass: event.pass,
         findings: event.findings,
-        lines: verdictLines,
+        lines,
       },
     ];
   };
@@ -941,8 +1017,27 @@ export const createSupervisor = (
         at: event.at,
         line: renderJournalEvent(event),
         event: event.event,
-        driver: isTailDriverEvent(event),
+        driver: isDriverEvent(event),
       };
+      const lines = superReviewLines(event);
+      if (!lines) {
+        return [journalEvent];
+      }
+      if (event.event === "super_review_status") {
+        return [
+          journalEvent,
+          {
+            kind: "tail.super.status",
+            runId,
+            seq,
+            at: event.at,
+            status: event.status,
+            pass: event.pass,
+            ...(event.detail !== undefined ? { detail: event.detail } : {}),
+            lines,
+          },
+        ];
+      }
       if (event.event !== "super_review") {
         return [journalEvent];
       }
@@ -956,7 +1051,7 @@ export const createSupervisor = (
           verdict: event.verdict,
           pass: event.pass,
           findings: event.findings,
-          lines: [`verdict: ${event.verdict} (pass ${event.pass})`, ...event.findings.map((finding) => `  ${finding}`)],
+          lines,
         } satisfies TailEvent,
       ];
     });
@@ -987,8 +1082,8 @@ export const createSupervisor = (
 
   // --- Journal tail ---
 
-  const journalTail = startJournalTail(store, bus, tailBus, config, pollIntervalMs, projectTailEvents);
-  const tailOpenCode = startTailOpenCode(
+  const journalTail = startJournalTail(store, bus, tailBus, () => configSource.get(), pollIntervalMs, projectTailEvents);
+  let tailOpenCode = startTailOpenCode(
     config,
     paths,
     store,
@@ -1000,10 +1095,34 @@ export const createSupervisor = (
     (runId) => tailRetention.pin(runId),
     (runId) => tailRetention.unpin(runId),
   );
-
   return {
+    health(): { healthy: boolean; detail?: string } {
+      if (stopController.signal.aborted && driverFailure === undefined) {
+        return { healthy: true };
+      }
+      return driverFailure === undefined && driverReady
+        ? { healthy: true }
+        : {
+            healthy: false,
+            detail:
+              driverFailure === undefined
+                ? "run driver is starting"
+                : driverFailure instanceof Error
+                  ? driverFailure.message
+                  : String(driverFailure),
+          };
+    },
+
     get config(): Config {
-      return config;
+      return configSource.get();
+    },
+
+    get settings(): Config {
+      return persistedConfig;
+    },
+
+    get restartRequired(): boolean {
+      return JSON.stringify(persistedConfig) !== JSON.stringify(configSource.get());
     },
 
     isChainTip(runId: string): boolean {
@@ -1134,8 +1253,9 @@ export const createSupervisor = (
 
       // Abort any in-flight per-run controllers (a run still executing when
       // stopSignal fires).
-      for (const [, ac] of abortMap) {
-        ac.abort();
+      for (const [, abort] of abortMap) {
+        abort.cause = "daemon_shutdown";
+        abort.controller.abort();
       }
       abortMap.clear();
 
@@ -1169,7 +1289,7 @@ export const createSupervisor = (
           return events
             .flatMap(({ seq, runId, event }) => {
               const meta = store.readMetaIfExists(runId);
-              const ctx = buildProjectionContext(runId, meta, config);
+              const ctx = buildProjectionContext(runId, meta, configSource.get());
               const wire = projectJournalEvent(event, ctx);
               return wire ? { seq, event: wire } : null;
             })
@@ -1247,36 +1367,36 @@ export const createSupervisor = (
       return store.readMetaIfExists(runId);
     },
 
-    stopRun(runId: string): void {
-      // Queued runs are represented by run meta with status = "queued".
-      if (store.listQueue().some((q) => q.runId === runId)) {
-        store.archiveQueue(runId);
-        return;
-      }
-
+    stopRun(runId: string): "stopped" | "cancellation_requested" {
       const meta = store.readMetaIfExists(runId);
       if (!meta) {
         throw new RunNotFoundError(runId);
       }
-
-      const activeAbort = abortMap.get(runId);
-      if (activeAbort) {
-        activeAbort.abort();
-        return;
+      if (meta.status === "queued") {
+        store.archiveQueue(runId);
+        return "stopped";
       }
 
-      // An already-terminal run -> throw (P03 maps to 404/409).
+      const activeAbort = abortMap.get(runId);
+      if (activeAbort && meta.status === "ready_for_review") {
+        activeAbort.cause = "operator_cancel";
+        activeAbort.controller.abort();
+        return "cancellation_requested";
+      }
+
       if (isTerminalStatus(meta.status)) {
         throw new TerminalRunError(runId, meta.status);
       }
 
-      // The active running run -> fire the per-run abort seam.
+      if (activeAbort) {
+        activeAbort.cause = "operator_cancel";
+        activeAbort.controller.abort();
+        return "cancellation_requested";
+      }
+
+      // A running row without an owner is inconsistent and cannot be cancelled safely.
       if (meta.status === "running") {
-        const ac = abortMap.get(runId);
-        if (ac) {
-          ac.abort();
-        }
-        return;
+        throw new RunCancellationConflictError(runId);
       }
 
       // Unexpected state.
@@ -1287,7 +1407,15 @@ export const createSupervisor = (
 
     answerRun(runId: string, answer: string): void {
       const meta = store.readMetaIfExists(runId);
-      const result = answerRunUc(store, repo, runId, answer, meta?.worktree ?? "", clock);
+      let result;
+      try {
+        result = answerRunUc(store, repo, runId, answer, meta?.worktree ?? "", clock);
+      } catch (error) {
+        if (error instanceof RunTransitionConflictError) {
+          throw new RunLifecycleConflictError(error.message);
+        }
+        throw error;
+      }
       if (result.ok) {
         return;
       }
@@ -1327,13 +1455,25 @@ export const createSupervisor = (
 
       // Review rejection is a resumable request for changes, not cancellation
       // and not a fabricated Human Operator decision.
-      store.writeMeta({
-        ...meta,
-        status: "blocked" as const,
-        blockedReason: "stop_condition" as const,
-        blockedQuestion: reason,
-        updatedAt: clock.nowIso(),
-      });
+      try {
+        store.transitionRun({
+          runId,
+          expectedRevision: meta.revision ?? 0,
+          expectedStatuses: ["ready_for_review"],
+          meta: {
+            ...meta,
+            status: "blocked",
+            blockedReason: "stop_condition",
+            blockedQuestion: reason,
+            updatedAt: clock.nowIso(),
+          },
+        });
+      } catch (error) {
+        if (error instanceof RunTransitionConflictError) {
+          throw new RunLifecycleConflictError(error.message);
+        }
+        throw error;
+      }
     },
 
     requeueRun(runId: string): RunMeta {
@@ -1341,19 +1481,32 @@ export const createSupervisor = (
       if (!meta) {
         throw new RunNotFoundError(runId);
       }
-      if (meta.status !== "stopped") {
+      const requeueable =
+        meta.status === "stopped" ||
+        (meta.status === "blocked" && meta.blockedReason === "crashed");
+      if (!requeueable) {
         throw new RunNotAnswerableError(`run ${runId} cannot be retried from ${meta.status}`);
       }
-      const updated: RunMeta = { ...meta, status: "queued" as const, updatedAt: clock.nowIso() };
-      store.writeMeta(updated);
-      return updated;
+      const { blockedReason: _reason, blockedQuestion: _question, ...rest } = meta;
+      try {
+        return store.transitionRun({
+          runId,
+          expectedRevision: meta.revision ?? 0,
+          expectedStatuses: [meta.status],
+          meta: { ...rest, status: "queued", updatedAt: clock.nowIso() },
+        });
+      } catch (error) {
+        if (error instanceof RunTransitionConflictError) {
+          throw new RunLifecycleConflictError(error.message);
+        }
+        throw error;
+      }
     },
 
     writeConfig(raw: unknown): Config {
       const parsed = Config.parse(raw);
       writeFileSync(paths.configFile, JSON.stringify(parsed, null, 2) + "\n", "utf-8");
-      // Update the live config so subsequent runs see the new settings.
-      configSource.set(parsed);
+      persistedConfig = parsed;
       return parsed;
     },
 

@@ -1,28 +1,35 @@
-import { deepEqual, equal, strictEqual, ok } from "node:assert";
+import { deepEqual, equal, strictEqual, ok, rejects } from "node:assert";
 import { mkdtemp as mkdtempP, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import type { BridgePort } from "../src/application/ports/bridge.js";
 import type { Clock } from "../src/application/ports/clock.js";
 import type { Repo } from "../src/application/ports/repo.js";
 import type { Store } from "../src/application/ports/store.js";
 import {
-  recoverOrphanedRuns,
+  parkOrphanedRuns,
   recoverStaleActiveRuns,
   recoverStaleActiveConvergences,
-  recoverStalledRun,
-  recoverStalledRunsAtStartup,
   runLoop,
   type ExecuteRunCallback,
+  type RunAbort,
   type ConvergeCallback,
   type WaitForWorkCallback,
 } from "../src/application/use-cases/run-loop.js";
 import { makePaths } from "../src/config/paths.js";
 import { Config } from "../src/config/schemas.js";
-import { decideCrashRecovery } from "../src/domain/liveness.js";
 import type { ActiveConvergence, ActiveRun, RunMeta } from "../src/domain/run.js";
 import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
+
+const forceStartupPhase = (dbFile: string, runId: string, operation: object): void => {
+  const db = new DatabaseSync(dbFile);
+  db.prepare(
+    "UPDATE run_startup_operations SET operation = ? WHERE run_id = ? AND attempt = 1",
+  ).run(JSON.stringify(operation), runId);
+  db.close();
+};
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -30,7 +37,7 @@ import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 const TS_COUNTER = { n: 0 };
 const fixedClock = (): Clock => ({
   now: () => 1700000000000 + TS_COUNTER.n++,
-  nowIso: () => `2026-01-01T00:00:${String(TS_COUNTER.n++).padStart(2, "0")}.000Z`,
+  nowIso: () => new Date(Date.UTC(2026, 0, 1) + TS_COUNTER.n++ * 1_000).toISOString(),
 });
 
 const fakeRepo = (): Repo => ({
@@ -44,6 +51,7 @@ const fakeRepo = (): Repo => ({
   readDiffStats: () => ({}),
   reviewableDiff: () => "",
   reviewableDiffAgainst: () => "",
+  resolveRevision: () => "abc",
   reconciliationGitState: () => ({
     head: "abc",
     status: [] as string[],
@@ -77,11 +85,35 @@ const makeMeta = (overrides: Partial<RunMeta>): RunMeta => ({
   stallRetries: 0,
   crashRetries: 0,
   reorientRetries: 0,
-  reviewerUnreachable: 0,
   promoted: false,
   updatedAt: "2026-01-01T00:00:00.000Z",
   ...overrides,
 });
+
+const packetRaw = (_runId: string): string => `---
+repo: /tmp/repo
+base: main
+compare_commit: main
+summary: startup recovery
+outcomes:
+  - id: recover
+    description: Recover startup
+expected_surface:
+  - src/index.ts
+verification:
+  - command: echo ok
+---
+`;
+
+const replaceMeta = (store: Store, meta: RunMeta): void => {
+  const current = store.readMeta(meta.runId);
+  store.transitionRun({
+    runId: meta.runId,
+    expectedRevision: current.revision ?? 0,
+    expectedStatuses: [current.status],
+    meta,
+  });
+};
 
 const cleanTemp = async (dir: string) => {
   try {
@@ -92,74 +124,123 @@ const cleanTemp = async (dir: string) => {
 };
 
 // ---------------------------------------------------------------------------
-// recoverOrphanedRuns (R8)
+// Startup orphan parking
 
-test("recoverOrphanedRuns: running run → queued + wip commit", () => {
+test("parkOrphanedRuns: running run is parked with its session evidence", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-orphan-"));
     const clock = fixedClock();
     const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
 
-    const meta = makeMeta({ runId: "20260101-000000-orphan", status: "running" as const });
+    const meta = makeMeta({
+      runId: "20260101-000000-orphan",
+      status: "running" as const,
+      babySessionId: "baby-existing",
+      daddySessionId: "daddy-existing",
+    });
     store.writeMeta(meta);
 
     strictEqual(store.readMeta("20260101-000000-orphan").status, "running");
 
-    recoverOrphanedRuns(store, fakeRepo(), clock);
+    parkOrphanedRuns(store, fakeRepo(), clock);
 
     const read = store.readMeta("20260101-000000-orphan");
-    equal(read.status, "queued");
-  })();
-});
-
-test("recoverOrphanedRuns: multiple running runs → all queued", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-orphan2-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-
-    store.writeMeta(makeMeta({ runId: "20260101-000000-a", status: "running" as const }));
-    store.writeMeta(makeMeta({ runId: "20260101-000000-b", status: "running" as const }));
-    store.writeMeta(makeMeta({ runId: "20260101-000000-c", status: "queued" as const }));
-
-    recoverOrphanedRuns(store, fakeRepo(), clock);
-
-    equal(store.readMeta("20260101-000000-a").status, "queued");
-    equal(store.readMeta("20260101-000000-b").status, "queued");
-    equal(store.readMeta("20260101-000000-c").status, "queued");
+    equal(read.status, "blocked");
+    equal(read.blockedReason, "crashed");
+    equal(read.babySessionId, "baby-existing");
+    equal(read.daddySessionId, "daddy-existing");
+    equal(store.listQueue().length, 0);
     await cleanTemp(tmp);
   })();
 });
 
-test("recoverOrphanedRuns: non-running runs left alone", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-orphan3-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+test("parkOrphanedRuns: a failed WIP commit cannot prevent parking and lease release", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-orphan-wip-failure-"));
+  const clock = fixedClock();
+  const repo = fakeRepo();
+  repo.wipCommit = () => {
+    throw new Error("git unavailable");
+  };
+  const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
+  const runId = "20260101-000000-orphan-wip-failure";
+  store.writeMeta(makeMeta({ runId, status: "running", worktree: "/tmp/preserved" }));
 
-    store.writeMeta(
-      makeMeta({
-        runId: "20260101-000000-wedged",
-        status: "blocked" as const,
-        blockedReason: "wedged" as const,
-      }),
-    );
-    store.writeMeta(
-      makeMeta({
-        runId: "20260101-000000-crashed",
-        status: "blocked" as const,
-        blockedReason: "crashed" as const,
-      }),
-    );
-    store.writeMeta(makeMeta({ runId: "20260101-000000-failed", status: "failed" as const }));
+  parkOrphanedRuns(store, repo, clock);
 
-    recoverOrphanedRuns(store, fakeRepo(), clock);
+  const meta = store.readMeta(runId);
+  equal(meta.status, "blocked");
+  equal(meta.blockedReason, "crashed");
+  await cleanTemp(tmp);
+});
 
-    equal(store.readMeta("20260101-000000-wedged").blockedReason, "wedged");
-    equal(store.readMeta("20260101-000000-crashed").blockedReason, "crashed");
-    equal(store.readMeta("20260101-000000-failed").status, "failed");
-    await cleanTemp(tmp);
-  })();
+test("parkOrphanedRuns: safe startup phase remains resumable with the same attempt", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-startup-resume-"));
+  const paths = makePaths(tmp);
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  const runId = "20260101-000000-startup-resume";
+  store.admitQueue(runId, packetRaw(runId));
+  const first = store.claimNextQueuedRun([], "worker-1")!;
+  forceStartupPhase(paths.dbFile, runId, {
+    runId,
+    attempt: 1,
+    phase: "sandbox_ready",
+    updatedAt: fixedClock().nowIso(),
+  });
+  store.releaseRepositoryLease(first.lease);
+
+  parkOrphanedRuns(store, fakeRepo(), fixedClock());
+  equal(store.readMeta(runId).status, "running");
+  const resumed = store.claimNextQueuedRun([], "worker-2");
+  equal(resumed?.runId, runId);
+  equal(store.readMeta(runId).attempt, 1);
+  await cleanTemp(tmp);
+});
+
+test("parkOrphanedRuns: setup_started is parked rather than replayed", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-setup-ambiguous-"));
+  const paths = makePaths(tmp);
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  const runId = "20260101-000000-setup-ambiguous";
+  store.admitQueue(runId, packetRaw(runId));
+  const claimed = store.claimNextQueuedRun([], "worker-1")!;
+  forceStartupPhase(paths.dbFile, runId, {
+    runId,
+    attempt: 1,
+    phase: "setup_started",
+    updatedAt: fixedClock().nowIso(),
+  });
+  store.releaseRepositoryLease(claimed.lease);
+
+  parkOrphanedRuns(store, fakeRepo(), fixedClock());
+  const meta = store.readMeta(runId);
+  equal(meta.status, "blocked");
+  equal(meta.blockedReason, "crashed");
+  ok(meta.blockedQuestion?.includes("will not be replayed"));
+  await cleanTemp(tmp);
+});
+
+test("parkOrphanedRuns: ambiguous session creation is parked rather than replayed", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-session-ambiguous-"));
+  const paths = makePaths(tmp);
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  const runId = "20260101-000000-session-ambiguous";
+  store.admitQueue(runId, packetRaw(runId));
+  const claimed = store.claimNextQueuedRun([], "worker-1")!;
+  forceStartupPhase(paths.dbFile, runId, {
+    runId,
+    attempt: 1,
+    phase: "planner_session_started",
+    updatedAt: fixedClock().nowIso(),
+  });
+  store.releaseRepositoryLease(claimed.lease);
+
+  parkOrphanedRuns(store, fakeRepo(), fixedClock());
+
+  const meta = store.readMeta(runId);
+  equal(meta.status, "blocked");
+  equal(meta.blockedReason, "crashed");
+  ok(meta.blockedQuestion?.includes("session creation"));
+  await cleanTemp(tmp);
 });
 
 // ---------------------------------------------------------------------------
@@ -338,395 +419,185 @@ test("recoverStaleActiveConvergences: multiple convergences all cleared", () => 
 });
 
 // ---------------------------------------------------------------------------
-// recoverStalledRun (R10) — singular, post-run
-
-test("recoverStalledRun: wedged with retries below cap → requeued", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-stall-1-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-
-    store.writeMeta(
-      makeMeta({
-        runId: "20260101-000000-wedged",
-        status: "blocked" as const,
-        blockedReason: "wedged" as const,
-        stallRetries: 0,
-      }),
-    );
-
-    recoverStalledRun(store, "20260101-000000-wedged", 2, clock);
-
-    const read = store.readMeta("20260101-000000-wedged");
-    equal(read.status, "queued");
-    equal(read.stallRetries, 1);
-    equal(read.blockedReason, undefined);
-    equal(read.blockedQuestion, undefined);
-    await cleanTemp(tmp);
-  })();
-});
-
-test("recoverStalledRun: wedged at cap (not yet promoted) → promote + requeue", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-stall-2-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-
-    store.writeMeta(
-      makeMeta({
-        runId: "20260101-000000-wedged",
-        status: "blocked" as const,
-        blockedReason: "wedged" as const,
-        stallRetries: 2,
-        blockedQuestion: "stalled on turn 5",
-      }),
-    );
-
-    const decision = recoverStalledRun(store, "20260101-000000-wedged", 2, clock);
-
-    equal(decision.action, "promote");
-    const read = store.readMeta("20260101-000000-wedged");
-    equal(read.status, "queued");
-    equal(read.promoted, true);
-    equal(read.stallRetries, 0); // fresh retry budget on the strong model
-    equal(read.blockedReason, undefined);
-    await cleanTemp(tmp);
-  })();
-});
-
-test("recoverStalledRun: wedged at cap AFTER promotion → escalate to human_decision", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-stall-2b-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-
-    store.writeMeta(
-      makeMeta({
-        runId: "20260101-000000-wedged",
-        status: "blocked" as const,
-        blockedReason: "wedged" as const,
-        stallRetries: 2,
-        promoted: true,
-        blockedQuestion: "stalled on turn 5",
-      }),
-    );
-
-    const decision = recoverStalledRun(store, "20260101-000000-wedged", 2, clock);
-
-    equal(decision.action, "escalate");
-    const read = store.readMeta("20260101-000000-wedged");
-    equal(read.status, "blocked");
-    equal(read.blockedReason, "human_decision");
-    ok(read.blockedQuestion?.includes("strong model"));
-    await cleanTemp(tmp);
-  })();
-});
-
-test("recoverStalledRun: crashed run → left alone", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-stall-3-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-
-    store.writeMeta(
-      makeMeta({
-        runId: "20260101-000000-crashed",
-        status: "blocked" as const,
-        blockedReason: "crashed" as const,
-        stallRetries: 0,
-      }),
-    );
-
-    recoverStalledRun(store, "20260101-000000-crashed", 2, clock);
-
-    const read = store.readMeta("20260101-000000-crashed");
-    equal(read.status, "blocked");
-    equal(read.blockedReason, "crashed");
-    await cleanTemp(tmp);
-  })();
-});
-
-test("recoverStalledRun: queued run → left alone", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-stall-4-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-
-    store.writeMeta(makeMeta({ runId: "20260101-000000-queued", status: "queued" as const }));
-
-    recoverStalledRun(store, "20260101-000000-queued", 2, clock);
-
-    const read = store.readMeta("20260101-000000-queued");
-    equal(read.status, "queued");
-    await cleanTemp(tmp);
-  })();
-});
-
-test("recoverStalledRun: run with human_decision → left alone", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-stall-5-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-
-    store.writeMeta(
-      makeMeta({
-        runId: "20260101-000000-human",
-        status: "blocked" as const,
-        blockedReason: "human_decision" as const,
-        stallRetries: 0,
-      }),
-    );
-
-    recoverStalledRun(store, "20260101-000000-human", 2, clock);
-
-    const read = store.readMeta("20260101-000000-human");
-    equal(read.status, "blocked");
-    equal(read.blockedReason, "human_decision");
-    await cleanTemp(tmp);
-  })();
-});
-
-test("recoverStalledRun: absent run → no-op", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-stall-6-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-
-    // Should not throw
-    recoverStalledRun(store, "20260101-000000-absent", 2, clock);
-    await cleanTemp(tmp);
-  })();
-});
-
-// ---------------------------------------------------------------------------
-// recoverStalledRunsAtStartup (R10)
-
-test("recoverStalledRunsAtStartup: wedged below cap → requeued", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-startup-1-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-
-    store.writeMeta(
-      makeMeta({
-        runId: "20260101-000000-w1",
-        status: "blocked" as const,
-        blockedReason: "wedged" as const,
-        stallRetries: 0,
-      }),
-    );
-    store.writeMeta(
-      makeMeta({
-        runId: "20260101-000000-w2",
-        status: "blocked" as const,
-        blockedReason: "wedged" as const,
-        stallRetries: 1,
-      }),
-    );
-    store.writeMeta(makeMeta({ runId: "20260101-000000-ok", status: "queued" as const }));
-
-    recoverStalledRunsAtStartup(store, 2, clock);
-
-    equal(store.readMeta("20260101-000000-w1").status, "queued");
-    equal(store.readMeta("20260101-000000-w1").stallRetries, 1);
-    equal(store.readMeta("20260101-000000-w2").status, "queued");
-    equal(store.readMeta("20260101-000000-w2").stallRetries, 2);
-    equal(store.readMeta("20260101-000000-ok").status, "queued");
-    await cleanTemp(tmp);
-  })();
-});
-
-test("recoverStalledRunsAtStartup: wedged at cap (not yet promoted) → promote + requeue", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-startup-2-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-
-    store.writeMeta(
-      makeMeta({
-        runId: "20260101-000000-wedged",
-        status: "blocked" as const,
-        blockedReason: "wedged" as const,
-        stallRetries: 2,
-      }),
-    );
-
-    recoverStalledRunsAtStartup(store, 2, clock);
-
-    const read = store.readMeta("20260101-000000-wedged");
-    equal(read.status, "queued");
-    equal(read.promoted, true);
-    equal(read.blockedReason, undefined);
-    await cleanTemp(tmp);
-  })();
-});
-
-test("recoverStalledRunsAtStartup: wedged at cap AFTER promotion → escalate", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-startup-2b-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-
-    store.writeMeta(
-      makeMeta({
-        runId: "20260101-000000-wedged",
-        status: "blocked" as const,
-        blockedReason: "wedged" as const,
-        stallRetries: 2,
-        promoted: true,
-      }),
-    );
-
-    recoverStalledRunsAtStartup(store, 2, clock);
-
-    const read = store.readMeta("20260101-000000-wedged");
-    equal(read.status, "blocked");
-    equal(read.blockedReason, "human_decision");
-    ok(read.blockedQuestion?.includes("promoted"));
-    await cleanTemp(tmp);
-  })();
-});
-
-test("recoverStalledRunsAtStartup: crashed runs left alone", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-startup-3-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-
-    store.writeMeta(
-      makeMeta({
-        runId: "20260101-000000-crashed",
-        status: "blocked" as const,
-        blockedReason: "crashed" as const,
-        stallRetries: 0,
-      }),
-    );
-
-    recoverStalledRunsAtStartup(store, 2, clock);
-
-    const read = store.readMeta("20260101-000000-crashed");
-    equal(read.status, "blocked");
-    equal(read.blockedReason, "crashed");
-    await cleanTemp(tmp);
-  })();
-});
-
-test("recoverStalledRunsAtStartup: no wedged runs → no-op", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-startup-4-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-
-    store.writeMeta(makeMeta({ runId: "20260101-000000-ok", status: "queued" as const }));
-    store.writeMeta(makeMeta({ runId: "20260101-000000-running", status: "running" as const }));
-
-    recoverStalledRunsAtStartup(store, 2, clock);
-
-    equal(store.readMeta("20260101-000000-ok").status, "queued");
-    equal(store.readMeta("20260101-000000-running").status, "running");
-    await cleanTemp(tmp);
-  })();
-});
-
-// ---------------------------------------------------------------------------
-// Combined: orphan + stalled startup sweep (typical boot sequence)
-
-test("recoverOrphanedRuns + recoverStalledRunsAtStartup: mixed states at startup", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-combined-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-
-    // Orphaned: running
-    store.writeMeta(makeMeta({ runId: "20260101-000000-orphan", status: "running" as const }));
-    // Stalled wedged: blocked/wedged with retries under cap
-    store.writeMeta(
-      makeMeta({
-        runId: "20260101-000000-wedged",
-        status: "blocked" as const,
-        blockedReason: "wedged" as const,
-        stallRetries: 0,
-      }),
-    );
-    // Crashed: blocked/crashed — should be left alone
-    store.writeMeta(
-      makeMeta({
-        runId: "20260101-000000-crashed",
-        status: "blocked" as const,
-        blockedReason: "crashed" as const,
-      }),
-    );
-    // Already queued: should stay queued
-    store.writeMeta(makeMeta({ runId: "20260101-000000-queued", status: "queued" as const }));
-
-    // Typical startup sequence: orphan first, then stalled
-    recoverOrphanedRuns(store, fakeRepo(), clock);
-    recoverStalledRunsAtStartup(store, 2, clock);
-
-    equal(store.readMeta("20260101-000000-orphan").status, "queued");
-    equal(store.readMeta("20260101-000000-wedged").status, "queued");
-    equal(store.readMeta("20260101-000000-crashed").blockedReason, "crashed");
-    equal(store.readMeta("20260101-000000-queued").status, "queued");
-    await cleanTemp(tmp);
-  })();
-});
-
-// ---------------------------------------------------------------------------
-// recoverStalledRun: wedged with 0 maxStallRetries → immediate escalate
-
-test("recoverStalledRun: maxStallRetries=0 + promoteAtCap disabled → escalate immediately", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-no-retry-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-
-    store.writeMeta(
-      makeMeta({
-        runId: "20260101-000000-wedged",
-        status: "blocked" as const,
-        blockedReason: "wedged" as const,
-        stallRetries: 0,
-      }),
-    );
-
-    // promoteAtCap=false → no promoted attempt, escalate straight to Max.
-    const decision = recoverStalledRun(store, "20260101-000000-wedged", 0, clock, false);
-
-    equal(decision.action, "escalate");
-    const read = store.readMeta("20260101-000000-wedged");
-    equal(read.status, "blocked");
-    equal(read.blockedReason, "human_decision");
-    await cleanTemp(tmp);
-  })();
-});
-
-test("recoverStalledRun: maxStallRetries=0 with promoteAtCap → promote once before escalating", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-no-retry-promote-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-
-    store.writeMeta(
-      makeMeta({
-        runId: "20260101-000000-wedged",
-        status: "blocked" as const,
-        blockedReason: "wedged" as const,
-        stallRetries: 0,
-      }),
-    );
-
-    const decision = recoverStalledRun(store, "20260101-000000-wedged", 0, clock);
-
-    equal(decision.action, "promote");
-    const read = store.readMeta("20260101-000000-wedged");
-    equal(read.status, "queued");
-    equal(read.promoted, true);
-    await cleanTemp(tmp);
-  })();
-});
-
-// ---------------------------------------------------------------------------
 // runLoop lifecycle tests
+
+test("runLoop: startup failure after bridge bind always closes the bridge", async () => {
+  let closed = false;
+  const bridge: BridgePort = {
+    bind: async () => ({ byRunId: new Map() }),
+    clearActive: () => undefined,
+    close: () => {
+      closed = true;
+    },
+  };
+
+  await rejects(
+    () =>
+      runLoop(
+        Config.parse({}),
+        {} as Store,
+        fakeRepo(),
+        {
+          holdPowerAssertion: async () => {
+            throw new Error("caffeinate failed");
+          },
+        },
+        fixedClock(),
+        bridge,
+        async () => {},
+        async () => {},
+        async () => {},
+      ),
+    /caffeinate failed/,
+  );
+  equal(closed, true);
+});
+
+test("runLoop: incomplete accepted cleanup is reported without blocking readiness", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-acceptance-recovery-"));
+  const clock = fixedClock();
+  const repo = fakeRepo();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
+  const runId = "20260101-000000-accepted";
+  const meta = makeMeta({ runId, status: "ready_for_review", campaignId: runId });
+  store.writeMeta(meta);
+  const operation = {
+    campaignId: runId,
+    phase: "prepared" as const,
+    tipRunId: runId,
+    acceptedInto: meta.branch,
+    expectedTipSha: "head",
+    members: [
+      {
+        runId,
+        revision: meta.revision ?? 0,
+        status: "ready_for_review" as const,
+        repo: meta.repo,
+        branch: meta.branch,
+        worktree: meta.worktree,
+        base: meta.base,
+        pass: meta.pass ?? 1,
+      },
+    ],
+    cleanedSandboxes: [],
+    cleanedBranches: [],
+    updatedAt: clock.nowIso(),
+  };
+  store.persistAcceptanceOperation(operation);
+  const fetched = { ...operation, phase: "fetched" as const };
+  store.persistAcceptanceOperation(fetched);
+  const lease = store.acquireRepositoryLease(meta.repo, "accept-fixture", runId, "accept")!;
+  store.commitAcceptanceOperation(fetched, lease);
+  store.releaseRepositoryLease(lease);
+
+  let ready = false;
+  const stop = new AbortController();
+  await runLoop(
+    Config.parse({ stateRoot: tmp }),
+    store,
+    repo,
+    { holdPowerAssertion: async () => {} },
+    clock,
+    { bind: async () => ({ byRunId: new Map() }), clearActive: () => {}, close: () => {} },
+    async () => {},
+    async () => {},
+    async () => stop.abort(),
+    {
+      stopSignal: stop.signal,
+      onReady: () => {
+        ready = true;
+      },
+    },
+  );
+  equal(ready, true);
+  equal(store.readAcceptanceOperation(runId)?.phase, "accepted");
+  equal(store.listRepositoryLeases().length, 0);
+  ok(
+    store
+      .readJournal(runId)
+      .some(
+        (event) =>
+          event.event === "driver_note" &&
+          event.note.includes("cleanup") &&
+          event.note.includes("retry"),
+      ),
+  );
+  await cleanTemp(tmp);
+});
+
+test("runLoop: busy acceptance cleanup does not wait or block readiness", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-acceptance-shutdown-"));
+  const clock = fixedClock();
+  const repo = fakeRepo();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
+  const runId = "20260101-000000-accepted";
+  const meta = makeMeta({ runId, status: "ready_for_review", campaignId: runId });
+  store.writeMeta(meta);
+  const operation = {
+    campaignId: runId,
+    phase: "prepared" as const,
+    tipRunId: runId,
+    acceptedInto: meta.branch,
+    expectedTipSha: "head",
+    members: [
+      {
+        runId,
+        revision: meta.revision ?? 0,
+        status: "ready_for_review" as const,
+        repo: meta.repo,
+        branch: meta.branch,
+        worktree: meta.worktree,
+        base: meta.base,
+        pass: meta.pass ?? 1,
+      },
+    ],
+    cleanedSandboxes: [],
+    cleanedBranches: [],
+    updatedAt: clock.nowIso(),
+  };
+  store.persistAcceptanceOperation(operation);
+  const fetched = { ...operation, phase: "fetched" as const };
+  store.persistAcceptanceOperation(fetched);
+  const acceptanceLease = store.acquireRepositoryLease(
+    meta.repo,
+    "accept-fixture",
+    runId,
+    "accept",
+  )!;
+  store.commitAcceptanceOperation(fetched, acceptanceLease);
+  store.releaseRepositoryLease(acceptanceLease);
+  ok(store.acquireRepositoryLease(meta.repo, "live-owner", "other-run", "execute"));
+  const stop = new AbortController();
+  let ready = false;
+
+  await runLoop(
+    Config.parse({ stateRoot: tmp }),
+    store,
+    repo,
+    { holdPowerAssertion: async () => {} },
+    clock,
+    { bind: async () => ({ byRunId: new Map() }), clearActive: () => {}, close: () => {} },
+    async () => {},
+    async () => {},
+    async () => {},
+    {
+      stopSignal: stop.signal,
+      onReady: () => {
+        ready = true;
+        stop.abort();
+      },
+    },
+  );
+
+  equal(ready, true);
+  equal(store.readAcceptanceOperation(runId)?.phase, "accepted");
+  ok(
+    store
+      .readJournal(runId)
+      .some((event) => event.event === "driver_note" && event.note.includes("repository is busy")),
+  );
+  await cleanTemp(tmp);
+});
 
 test("runLoop: drain queue before waiting", () => {
   return (async () => {
@@ -742,7 +613,7 @@ test("runLoop: drain queue before waiting", () => {
     const executeRun: ExecuteRunCallback = async (runId, meta, ref, clock) => {
       executeRunCallCount++;
       const m = store.readMeta(runId);
-      store.writeMeta({ ...m, status: "accepted" as const, updatedAt: clock.nowIso() });
+      replaceMeta(store, { ...m, status: "accepted" as const, updatedAt: clock.nowIso() });
       if (executeRunCallCount >= 2) {
         process.emit("SIGINT" as NodeJS.Signals);
       }
@@ -779,278 +650,7 @@ test("runLoop: drain queue before waiting", () => {
   })();
 });
 
-test("runLoop: wedged run → recoverStalledRun → requeued", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-lifecycle-wedged-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-
-    // Seed a queued run.
-    store.writeMeta(
-      makeMeta({ runId: "20260101-000000-w", status: "queued" as const, attempt: 1 }),
-    );
-
-    let executeRunCallCount = 0;
-    const executeRun: ExecuteRunCallback = async (runId, meta, ref, clock) => {
-      executeRunCallCount++;
-      if (executeRunCallCount === 1) {
-        // First call: park as wedged.
-        store.writeMeta({
-          ...store.readMeta(runId),
-          status: "blocked" as const,
-          blockedReason: "wedged" as const,
-          blockedQuestion: "stalled on turn 3",
-          updatedAt: clock.nowIso(),
-        });
-      } else {
-        // Second call: accept + trigger stop.
-        store.writeMeta({
-          ...store.readMeta(runId),
-          status: "accepted" as const,
-          updatedAt: clock.nowIso(),
-        });
-        process.emit("SIGINT" as NodeJS.Signals);
-      }
-    };
-
-    const waitForWork: WaitForWorkCallback = async () => {};
-    const convergeStep: ConvergeCallback = async () => {};
-
-    const bridge: BridgePort = {
-      bind: () => Promise.resolve({ byRunId: new Map() }),
-      clearActive: (_ref, _runId) => undefined,
-      close: () => undefined,
-    };
-
-    await runLoop(
-      Config.parse({}),
-      store,
-      fakeRepo(),
-      { holdPowerAssertion: async () => {} },
-      clock,
-      bridge,
-      executeRun,
-      convergeStep,
-      waitForWork,
-    );
-
-    const finalMeta = store.readMeta("20260101-000000-w");
-    equal(finalMeta.status, "accepted");
-    equal(finalMeta.stallRetries, 1);
-    await cleanTemp(tmp);
-  })();
-});
-
-test("runLoop: blocked recovery uses override model label", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-blocked-promo-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-    const runId = "20260101-000000-blocked-promo";
-
-    store.writeMeta(
-      makeMeta({
-        runId,
-        status: "queued" as const,
-        babyModel: "registry-fast",
-      }),
-    );
-
-    const stopController = new AbortController();
-    const executeRun: ExecuteRunCallback = async (id, _meta, _ref, runClock) => {
-      const meta = store.readMeta(id);
-      store.writeMeta({
-        ...meta,
-        status: "blocked" as const,
-        blockedReason: "wedged" as const,
-        stallRetries: 2,
-        updatedAt: runClock.nowIso(),
-      });
-      stopController.abort();
-    };
-    const convergeStep: ConvergeCallback = async () => {};
-    const waitForWork: WaitForWorkCallback = async () => {};
-    const bridge: BridgePort = {
-      bind: () => Promise.resolve({ byRunId: new Map() }),
-      clearActive: (_ref, _runId) => undefined,
-      close: () => undefined,
-    };
-
-    const config = Config.parse({
-      baby: {
-        models: {
-          "registry-fast": {
-            providerId: "alt-provider",
-            modelId: "alt-model",
-            baseUrl: "http://alt-provider.local/v1",
-            contextWindow: 200_000,
-          },
-        },
-      },
-    });
-
-    await runLoop(
-      config,
-      store,
-      fakeRepo(),
-      { holdPowerAssertion: async () => {} },
-      clock,
-      bridge,
-      executeRun,
-      convergeStep,
-      waitForWork,
-      { stopSignal: stopController.signal },
-    );
-
-    const journal = store.readJournal(runId);
-    const promoEvent = journal.find((e) => e.event === "model_promoted");
-    ok(promoEvent, "startup promotion should be journaled");
-    if (promoEvent?.event === "model_promoted") {
-      equal(promoEvent.from, "alt-provider/alt-model");
-    }
-
-    await cleanTemp(tmp);
-  })();
-});
-
-test("runLoop: post-run promotion uses override model label", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-postrun-promo-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-    const runId = "20260101-000000-postrun-promo";
-
-    store.writeMeta(
-      makeMeta({
-        runId,
-        status: "queued" as const,
-        babyModel: "registry-fast",
-      }),
-    );
-
-    const stopController = new AbortController();
-    const executeRun: ExecuteRunCallback = async (id, _meta, _ref, runClock) => {
-      const meta = store.readMeta(id);
-      store.writeMeta({ ...meta, status: "accepted" as const, updatedAt: runClock.nowIso() });
-    };
-    const convergeStep: ConvergeCallback = async (id) => {
-      const meta = store.readMeta(id);
-      store.writeMeta({
-        ...meta,
-        status: "blocked" as const,
-        blockedReason: "wedged" as const,
-        stallRetries: 2,
-        updatedAt: clock.nowIso(),
-      });
-      stopController.abort();
-    };
-    const waitForWork: WaitForWorkCallback = async () => {};
-    const bridge: BridgePort = {
-      bind: () => Promise.resolve({ byRunId: new Map() }),
-      clearActive: (_ref, _runId) => undefined,
-      close: () => undefined,
-    };
-
-    const config = Config.parse({
-      baby: {
-        models: {
-          "registry-fast": {
-            providerId: "alt-provider",
-            modelId: "alt-model",
-            baseUrl: "http://alt-provider.local/v1",
-            contextWindow: 200_000,
-          },
-        },
-      },
-    });
-
-    await runLoop(
-      config,
-      store,
-      fakeRepo(),
-      { holdPowerAssertion: async () => {} },
-      clock,
-      bridge,
-      executeRun,
-      convergeStep,
-      waitForWork,
-      { stopSignal: stopController.signal },
-    );
-
-    const journal = store.readJournal(runId);
-    const promoEvent = journal.find((e) => e.event === "model_promoted");
-    ok(promoEvent, "post-run promotion should be journaled");
-    if (promoEvent?.event === "model_promoted") {
-      equal(promoEvent.from, "alt-provider/alt-model");
-    }
-
-    await cleanTemp(tmp);
-  })();
-});
-
-// ---------------------------------------------------------------------------
-// decideCrashRecovery usage in run-loop crash branch
-
-test("runLoop crash branch: decideCrashRecovery requeue under cap → queued", () => {
-  return (async () => {
-    const tmp = await mkdtempP(join(tmpdir(), "runloop-crash-retry-"));
-    const clock = fixedClock();
-    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-
-    store.writeMeta(
-      makeMeta({
-        runId: "20260101-000000-c",
-        status: "blocked" as const,
-        blockedReason: "crashed" as const,
-        crashRetries: 0,
-      }),
-    );
-
-    const decision = decideCrashRecovery(
-      { status: "blocked", blockedReason: "crashed", crashRetries: 0 },
-      2,
-    );
-
-    equal(decision.action, "requeue");
-    if (decision.action === "requeue") {
-      equal(decision.crashRetries, 1);
-    }
-
-    const read = store.readMeta("20260101-000000-c");
-    equal(read.status, "blocked"); // run-loop would change this to queued
-    equal(read.blockedReason, "crashed");
-
-    await cleanTemp(tmp);
-  })();
-});
-
-test("runLoop crash branch: decideCrashRecovery escalate at cap", () => {
-  return (async () => {
-    const decision = decideCrashRecovery(
-      { status: "blocked", blockedReason: "crashed", crashRetries: 2 },
-      2,
-    );
-
-    equal(decision.action, "escalate");
-    if (decision.action === "escalate") {
-      equal(decision.crashRetries, 2);
-    }
-  })();
-});
-
-test("runLoop crash branch: decideCrashRecovery ignores non-crashed reasons", () => {
-  return (async () => {
-    for (const reason of ["wedged", "human_decision"] as const) {
-      const decision = decideCrashRecovery(
-        { status: "blocked", blockedReason: reason, crashRetries: 0 },
-        2,
-      );
-      equal(decision.action, "none", `${reason} should not be handled by crash recovery`);
-    }
-  })();
-});
-
-test("runLoop crash branch: thrown executeRun requeues crashed run under cap", () => {
+test("runLoop crash branch: thrown executeRun parks for operator action", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-crash-queue-"));
     const clock = fixedClock();
@@ -1069,6 +669,7 @@ test("runLoop crash branch: thrown executeRun requeues crashed run under cap", (
       readDiffStats: () => ({}),
       reviewableDiff: () => "",
       reviewableDiffAgainst: () => "",
+      resolveRevision: () => "abc",
       reconciliationGitState: () => ({
         head: "abc",
         status: [] as string[],
@@ -1119,15 +720,783 @@ test("runLoop crash branch: thrown executeRun requeues crashed run under cap", (
 
     const meta = store.readMeta(runId);
     equal(executeRunCalls, 1);
-    equal(meta.status, "queued");
-    equal(meta.crashRetries, 1);
-    equal(meta.blockedReason, undefined);
+    equal(meta.status, "blocked");
+    equal(meta.crashRetries, 0);
+    equal(meta.blockedReason, "crashed");
     equal(wipCommitCalls, 1);
     await cleanTemp(tmp);
   })();
 });
 
-test("runLoop crash branch: thrown executeRun escalates crashed run at cap", () => {
+test("runLoop: operator cancellation stops without crash recovery", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-operator-cancel-"));
+  const clock = fixedClock();
+  const stopController = new AbortController();
+  const abortMap = new Map<string, RunAbort>();
+  const runId = "20260101-000000-operator-cancel";
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  store.writeMeta(makeMeta({ runId, status: "queued", crashRetries: 0 }));
+
+  const executeRun: ExecuteRunCallback = async () => {
+    const active = abortMap.get(runId);
+    ok(active);
+    active.cause = "operator_cancel";
+    active.controller.abort();
+    throw new DOMException("cancelled", "AbortError");
+  };
+
+  await runLoop(
+    Config.parse({}),
+    store,
+    fakeRepo(),
+    { holdPowerAssertion: async () => {} },
+    clock,
+    {
+      bind: () => Promise.resolve({ byRunId: new Map() }),
+      clearActive: () => undefined,
+      close: () => undefined,
+    },
+    executeRun,
+    async () => {},
+    async () => stopController.abort(),
+    { stopSignal: stopController.signal, abortMap },
+  );
+
+  const meta = store.readMeta(runId);
+  equal(meta.status, "stopped");
+  equal(meta.crashRetries, 0);
+  await cleanTemp(tmp);
+});
+
+test("runLoop: operator cancellation during setup_started parks ambiguous setup", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-setup-cancel-"));
+  const clock = fixedClock();
+  const stopController = new AbortController();
+  const abortMap = new Map<string, RunAbort>();
+  const runId = "20260101-000000-setup-cancel";
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  store.admitQueue(runId, packetRaw(runId));
+
+  await runLoop(
+    Config.parse({ stateRoot: tmp }),
+    store,
+    fakeRepo(),
+    { holdPowerAssertion: async () => {} },
+    clock,
+    { bind: async () => ({ byRunId: new Map() }), clearActive: () => {}, close: () => {} },
+    async (id, _meta, _ref, _clock, _signal, lease) => {
+      store.persistRunStartup(
+        { runId: id, attempt: 1, phase: "setup_started", updatedAt: clock.nowIso() },
+        lease,
+      );
+      const active = abortMap.get(id)!;
+      active.cause = "operator_cancel";
+      active.controller.abort();
+      throw new DOMException("cancelled", "AbortError");
+    },
+    async () => {},
+    async () => stopController.abort(),
+    { stopSignal: stopController.signal, abortMap },
+  );
+
+  const meta = store.readMeta(runId);
+  equal(meta.status, "blocked");
+  equal(meta.blockedReason, "crashed");
+  ok(meta.blockedQuestion?.includes("setup"));
+  await cleanTemp(tmp);
+});
+
+test("runLoop: daemon shutdown during setup_started parks ambiguous setup", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-setup-shutdown-"));
+  const clock = fixedClock();
+  const stopController = new AbortController();
+  const abortMap = new Map<string, RunAbort>();
+  const runId = "20260101-000000-setup-shutdown";
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  store.admitQueue(runId, packetRaw(runId));
+
+  await runLoop(
+    Config.parse({ stateRoot: tmp }),
+    store,
+    fakeRepo(),
+    { holdPowerAssertion: async () => {} },
+    clock,
+    { bind: async () => ({ byRunId: new Map() }), clearActive: () => {}, close: () => {} },
+    async (id, _meta, _ref, _clock, _signal, lease) => {
+      store.persistRunStartup(
+        { runId: id, attempt: 1, phase: "setup_started", updatedAt: clock.nowIso() },
+        lease,
+      );
+      const active = abortMap.get(id)!;
+      active.cause = "daemon_shutdown";
+      active.controller.abort();
+      throw new DOMException("cancelled", "AbortError");
+    },
+    async () => {},
+    async () => stopController.abort(),
+    { stopSignal: stopController.signal, abortMap },
+  );
+
+  const meta = store.readMeta(runId);
+  equal(meta.status, "blocked");
+  equal(meta.blockedReason, "crashed");
+  ok(meta.blockedQuestion?.includes("setup"));
+  await cleanTemp(tmp);
+});
+
+test("runLoop: repository lease loss abandons ownership without mutation and worker continues", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-lease-loss-"));
+  const clock = fixedClock();
+  const stopController = new AbortController();
+  const runA = "20260101-000000-lease-a";
+  const runB = "20260101-000000-lease-b";
+  const repo = fakeRepo();
+  let repoMutations = 0;
+  repo.wipCommit = () => {
+    repoMutations++;
+    return undefined;
+  };
+  const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
+  store.writeMeta(makeMeta({ runId: runA, status: "queued", repo: "/tmp/repo-a" }));
+  store.writeMeta(makeMeta({ runId: runB, status: "queued", repo: "/tmp/repo-b" }));
+  const heartbeat = store.heartbeatRepositoryLease.bind(store);
+  store.heartbeatRepositoryLease = (lease) => (lease.runId === runA ? undefined : heartbeat(lease));
+  let transitionedAfterLoss = 0;
+  const transitionRun = store.transitionRun.bind(store);
+  let leaseLost = false;
+  store.transitionRun = (transition) => {
+    if (leaseLost && transition.runId === runA) {
+      transitionedAfterLoss++;
+    }
+    return transitionRun(transition);
+  };
+  const abortMap = new Map<string, RunAbort>();
+  let observedCause: RunAbort["cause"];
+
+  await runLoop(
+    Config.parse({ stateRoot: tmp }),
+    store,
+    repo,
+    { holdPowerAssertion: async () => {} },
+    clock,
+    { bind: async () => ({ byRunId: new Map() }), clearActive: () => {}, close: () => {} },
+    async (runId, _meta, _ref, _clock, signal) => {
+      if (runId === runA) {
+        await new Promise<void>((resolve) =>
+          signal!.addEventListener("abort", () => resolve(), { once: true }),
+        );
+        leaseLost = true;
+        observedCause = abortMap.get(runId)?.cause;
+        throw signal!.reason;
+      }
+      replaceMeta(store, { ...store.readMeta(runId), status: "accepted" });
+      stopController.abort();
+    },
+    async () => {},
+    async () => {},
+    { stopSignal: stopController.signal, abortMap, heartbeatIntervalMs: 1 },
+  );
+
+  equal(store.readMeta(runA).status, "running");
+  equal(store.readMeta(runB).status, "accepted");
+  equal(transitionedAfterLoss, 0);
+  equal(repoMutations, 0);
+  equal(observedCause, "repository_lease_lost");
+  await cleanTemp(tmp);
+});
+
+test("runLoop: startup resumes an unpublished durable convergence operation", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-convergence-recovery-"));
+  const clock = fixedClock();
+  const stopController = new AbortController();
+  const runId = "20260101-000000-convergence-recovery";
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  store.writeMeta(makeMeta({ runId, status: "ready_for_review", repo: "/tmp/recovery-repo" }));
+  store.readConvergenceOperation = () => ({
+    runId,
+    attempt: 1,
+    phase: "autofix_applied",
+    autofixFingerprint: "fingerprint",
+  });
+  store.appendDecision(runId, {
+    timestamp: clock.nowIso(),
+    source: "max",
+    questionType: "convergence_retry",
+    currentSlice: "attempt:1",
+    question: "Reviewer transport failed",
+    evidence: [],
+    status: "proceed",
+    answer: "retry",
+    constraints: [],
+  });
+  let recovered = 0;
+  const abortMap = new Map<string, RunAbort>();
+
+  await runLoop(
+    Config.parse({ stateRoot: tmp }),
+    store,
+    fakeRepo(),
+    { holdPowerAssertion: async () => {} },
+    clock,
+    { bind: async () => ({ byRunId: new Map() }), clearActive: () => {}, close: () => {} },
+    async () => {},
+    async (id, signal, lease) => {
+      equal(id, runId);
+      equal(lease?.purpose, "execute");
+      ok(abortMap.has(runId));
+      stopController.abort();
+      equal(signal?.aborted, true);
+      recovered++;
+    },
+    async () => {},
+    { stopSignal: stopController.signal, abortMap },
+  );
+
+  equal(recovered, 1);
+  equal(store.listRepositoryLeases().length, 0);
+  await cleanTemp(tmp);
+});
+
+test("runLoop: startup does not replay an unmarked convergence operation", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-convergence-unmarked-"));
+  const clock = fixedClock();
+  const stopController = new AbortController();
+  const runId = "20260101-000000-convergence-unmarked";
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  store.writeMeta(makeMeta({ runId, status: "ready_for_review" }));
+  store.readConvergenceOperation = () => ({
+    runId,
+    attempt: 1,
+    phase: "autofix_applied",
+    autofixFingerprint: "fingerprint",
+  });
+  let convergenceCalls = 0;
+
+  await runLoop(
+    Config.parse({ stateRoot: tmp }),
+    store,
+    fakeRepo(),
+    { holdPowerAssertion: async () => {} },
+    clock,
+    { bind: async () => ({ byRunId: new Map() }), clearActive: () => {}, close: () => {} },
+    async () => {},
+    async () => {
+      convergenceCalls++;
+    },
+    async () => stopController.abort(),
+    { stopSignal: stopController.signal },
+  );
+
+  equal(convergenceCalls, 0);
+  await cleanTemp(tmp);
+});
+
+test("runLoop: startup resumes a durable decided convergence operation", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-convergence-decided-"));
+  const clock = fixedClock();
+  const stopController = new AbortController();
+  const runId = "20260101-000000-convergence-decided";
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  store.writeMeta(makeMeta({ runId, status: "ready_for_review" }));
+  store.readConvergenceOperation = () =>
+    ({ runId, attempt: 1, phase: "decided" }) as NonNullable<
+      ReturnType<Store["readConvergenceOperation"]>
+    >;
+  let convergenceCalls = 0;
+
+  await runLoop(
+    Config.parse({ stateRoot: tmp }),
+    store,
+    fakeRepo(),
+    { holdPowerAssertion: async () => {} },
+    clock,
+    { bind: async () => ({ byRunId: new Map() }), clearActive: () => {}, close: () => {} },
+    async () => {},
+    async () => {
+      convergenceCalls++;
+      stopController.abort();
+    },
+    async () => {},
+    { stopSignal: stopController.signal },
+  );
+
+  equal(convergenceCalls, 1);
+  await cleanTemp(tmp);
+});
+
+test("runLoop: explicit convergence retry failure parks only that run and worker continues", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-convergence-retry-failure-"));
+  const clock = fixedClock();
+  const stopController = new AbortController();
+  const retryRunId = "20260101-000000-retry-failure";
+  const unrelatedRunId = "20260101-000001-unrelated";
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  store.writeMeta(makeMeta({ runId: retryRunId, status: "ready_for_review" }));
+  store.writeMeta(makeMeta({ runId: unrelatedRunId, status: "queued" }));
+  const readOperation = store.readConvergenceOperation.bind(store);
+  store.readConvergenceOperation = (runId, attempt) =>
+    runId === retryRunId
+      ? {
+          runId,
+          attempt,
+          phase: "autofix_applied",
+          autofixFingerprint: "fingerprint",
+        }
+      : readOperation(runId, attempt);
+  let unrelatedExecutions = 0;
+
+  await runLoop(
+    Config.parse({ stateRoot: tmp, concurrency: { maxWorkers: 2 } }),
+    store,
+    fakeRepo(),
+    { holdPowerAssertion: async () => {} },
+    clock,
+    { bind: async () => ({ byRunId: new Map() }), clearActive: () => {}, close: () => {} },
+    async (runId) => {
+      equal(runId, unrelatedRunId);
+      unrelatedExecutions++;
+      replaceMeta(store, { ...store.readMeta(runId), status: "accepted" });
+      stopController.abort();
+    },
+    async (runId) => {
+      equal(runId, retryRunId);
+      throw new Error("review transport still unavailable");
+    },
+    async () => {},
+    {
+      stopSignal: stopController.signal,
+      onReady: () => {
+        store.appendDecision(retryRunId, {
+          timestamp: clock.nowIso(),
+          source: "max",
+          questionType: "convergence_retry",
+          currentSlice: "attempt:1",
+          question: "Retry convergence",
+          evidence: [],
+          status: "proceed",
+          answer: "retry",
+          constraints: [],
+        });
+      },
+    },
+  );
+
+  equal(unrelatedExecutions, 1);
+  equal(store.readMeta(unrelatedRunId).status, "accepted");
+  const retryMeta = store.readMeta(retryRunId);
+  equal(retryMeta.status, "blocked");
+  equal(retryMeta.blockedReason, "crashed");
+  ok(retryMeta.blockedQuestion?.includes("review transport still unavailable"));
+  await cleanTemp(tmp);
+});
+
+test("runLoop: operator cancellation during convergence stops the run", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-convergence-cancel-"));
+  const clock = fixedClock();
+  const stopController = new AbortController();
+  const abortMap = new Map<string, RunAbort>();
+  const runId = "20260101-000000-convergence-cancel";
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  store.writeMeta(makeMeta({ runId, status: "queued", crashRetries: 0 }));
+
+  const executeRun: ExecuteRunCallback = async (id) => {
+    const meta = store.readMeta(id);
+    replaceMeta(store, { ...meta, status: "ready_for_review", updatedAt: clock.nowIso() });
+  };
+  const convergeStep: ConvergeCallback = async (id, signal) => {
+    const active = abortMap.get(id);
+    ok(active);
+    active.cause = "operator_cancel";
+    active.controller.abort();
+    equal(signal?.aborted, true);
+  };
+
+  await runLoop(
+    Config.parse({}),
+    store,
+    fakeRepo(),
+    { holdPowerAssertion: async () => {} },
+    clock,
+    {
+      bind: () => Promise.resolve({ byRunId: new Map() }),
+      clearActive: () => undefined,
+      close: () => undefined,
+    },
+    executeRun,
+    convergeStep,
+    async () => stopController.abort(),
+    { stopSignal: stopController.signal, abortMap },
+  );
+
+  const meta = store.readMeta(runId);
+  equal(meta.status, "stopped");
+  equal(meta.crashRetries, 0);
+  await cleanTemp(tmp);
+});
+
+test("runLoop: late cancellation cannot overwrite an accepted convergence decision", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-convergence-terminal-cancel-"));
+  const clock = fixedClock();
+  const stopController = new AbortController();
+  const abortMap = new Map<string, RunAbort>();
+  const runId = "20260101-000000-convergence-terminal-cancel";
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  store.writeMeta(makeMeta({ runId, status: "queued" }));
+
+  await runLoop(
+    Config.parse({}),
+    store,
+    fakeRepo(),
+    { holdPowerAssertion: async () => {} },
+    clock,
+    {
+      bind: () => Promise.resolve({ byRunId: new Map() }),
+      clearActive: () => undefined,
+      close: () => undefined,
+    },
+    async (id) => {
+      replaceMeta(store, { ...store.readMeta(id), status: "ready_for_review" });
+    },
+    async (id) => {
+      replaceMeta(store, { ...store.readMeta(id), status: "accepted" });
+      const active = abortMap.get(id);
+      ok(active);
+      active.cause = "operator_cancel";
+      active.controller.abort();
+    },
+    async () => stopController.abort(),
+    { stopSignal: stopController.signal, abortMap },
+  );
+
+  equal(store.readMeta(runId).status, "accepted");
+  await cleanTemp(tmp);
+});
+
+test("runLoop: convergence failure parks the run without clearing the bridge", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-convergence-failure-"));
+  const clock = fixedClock();
+  const stopController = new AbortController();
+  const runId = "20260101-000000-convergence-failure";
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  store.writeMeta(makeMeta({ runId, status: "queued" }));
+  let clearCalls = 0;
+
+  await runLoop(
+    Config.parse({}),
+    store,
+    fakeRepo(),
+    { holdPowerAssertion: async () => {} },
+    clock,
+    {
+      bind: () => Promise.resolve({ byRunId: new Map() }),
+      clearActive: () => {
+        clearCalls++;
+      },
+      close: () => undefined,
+    },
+    async (id) => {
+      const meta = store.readMeta(id);
+      replaceMeta(store, { ...meta, status: "ready_for_review", updatedAt: clock.nowIso() });
+    },
+    async () => {
+      stopController.abort();
+      throw new Error("campaign unavailable");
+    },
+    async () => {},
+    { stopSignal: stopController.signal },
+  );
+
+  const meta = store.readMeta(runId);
+  equal(meta.status, "blocked");
+  equal(meta.blockedReason, "crashed");
+  ok(meta.blockedQuestion?.includes("campaign unavailable"));
+  equal(clearCalls, 0);
+  await cleanTemp(tmp);
+});
+
+test("runLoop: convergence failure preserves human-owned escalation", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-convergence-escalation-failure-"));
+  const clock = fixedClock();
+  const stopController = new AbortController();
+  const runId = "20260101-000000-convergence-escalation-failure";
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  store.writeMeta(makeMeta({ runId, status: "queued" }));
+
+  await runLoop(
+    Config.parse({}),
+    store,
+    fakeRepo(),
+    { holdPowerAssertion: async () => {} },
+    clock,
+    {
+      bind: () => Promise.resolve({ byRunId: new Map() }),
+      clearActive: () => undefined,
+      close: () => undefined,
+    },
+    async (id) => {
+      const meta = store.readMeta(id);
+      replaceMeta(store, { ...meta, status: "ready_for_review", updatedAt: clock.nowIso() });
+    },
+    async (id) => {
+      const meta = store.readMeta(id);
+      replaceMeta(store, {
+        ...meta,
+        status: "blocked",
+        blockedReason: "human_decision",
+        blockedQuestion: "choose policy",
+        updatedAt: clock.nowIso(),
+      });
+      stopController.abort();
+      throw new Error("ledger unavailable");
+    },
+    async () => {},
+    { stopSignal: stopController.signal },
+  );
+
+  const meta = store.readMeta(runId);
+  equal(meta.status, "blocked");
+  equal(meta.blockedReason, "human_decision");
+  equal(meta.blockedQuestion, "choose policy");
+  ok(
+    store
+      .readJournal(runId)
+      .some((event) => event.event === "driver_note" && event.note.includes("ledger unavailable")),
+  );
+  await cleanTemp(tmp);
+});
+
+test("runLoop: convergence failure preserves operator rejection", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-convergence-rejection-failure-"));
+  const clock = fixedClock();
+  const stopController = new AbortController();
+  const runId = "20260101-000000-convergence-rejection-failure";
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  store.writeMeta(makeMeta({ runId, status: "queued" }));
+
+  await runLoop(
+    Config.parse({}),
+    store,
+    fakeRepo(),
+    { holdPowerAssertion: async () => {} },
+    clock,
+    {
+      bind: () => Promise.resolve({ byRunId: new Map() }),
+      clearActive: () => undefined,
+      close: () => undefined,
+    },
+    async (id) => {
+      const meta = store.readMeta(id);
+      replaceMeta(store, { ...meta, status: "ready_for_review", updatedAt: clock.nowIso() });
+    },
+    async (id) => {
+      const meta = store.readMeta(id);
+      replaceMeta(store, {
+        ...meta,
+        status: "blocked",
+        blockedReason: "stop_condition",
+        blockedQuestion: "change the implementation",
+        updatedAt: clock.nowIso(),
+      });
+      stopController.abort();
+      throw new Error("run changed during convergence");
+    },
+    async () => {},
+    { stopSignal: stopController.signal },
+  );
+
+  const meta = store.readMeta(runId);
+  equal(meta.status, "blocked");
+  equal(meta.blockedReason, "stop_condition");
+  equal(meta.blockedQuestion, "change the implementation");
+  ok(
+    store
+      .readJournal(runId)
+      .some(
+        (event) =>
+          event.event === "driver_note" && event.note.includes("run changed during convergence"),
+      ),
+  );
+  await cleanTemp(tmp);
+});
+
+test("runLoop: keeps one cancellation owner across execution and convergence", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-continuous-owner-"));
+  const clock = fixedClock();
+  const stopController = new AbortController();
+  const abortMap = new Map<string, RunAbort>();
+  const runId = "20260101-000000-continuous-owner";
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  store.writeMeta(makeMeta({ runId, status: "queued" }));
+  let executionOwner: RunAbort | undefined;
+
+  await runLoop(
+    Config.parse({}),
+    store,
+    fakeRepo(),
+    { holdPowerAssertion: async () => {} },
+    clock,
+    {
+      bind: () => Promise.resolve({ byRunId: new Map() }),
+      clearActive: () => undefined,
+      close: () => undefined,
+    },
+    async (id) => {
+      executionOwner = abortMap.get(id);
+      const meta = store.readMeta(id);
+      replaceMeta(store, { ...meta, status: "ready_for_review", updatedAt: clock.nowIso() });
+    },
+    async (id) => {
+      equal(abortMap.get(id), executionOwner);
+      stopController.abort();
+    },
+    async () => {},
+    { stopSignal: stopController.signal, abortMap },
+  );
+
+  await cleanTemp(tmp);
+});
+
+test("runLoop: operator cancellation retained after execution skips convergence", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-cancel-before-convergence-"));
+  const clock = fixedClock();
+  const stopController = new AbortController();
+  const abortMap = new Map<string, RunAbort>();
+  const runId = "20260101-000000-cancel-before-convergence";
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  store.writeMeta(makeMeta({ runId, status: "queued" }));
+  let convergenceCalls = 0;
+
+  await runLoop(
+    Config.parse({}),
+    store,
+    fakeRepo(),
+    { holdPowerAssertion: async () => {} },
+    clock,
+    {
+      bind: () => Promise.resolve({ byRunId: new Map() }),
+      clearActive: () => undefined,
+      close: () => undefined,
+    },
+    async (id) => {
+      const active = abortMap.get(id);
+      ok(active);
+      active.cause = "operator_cancel";
+      active.controller.abort();
+      const meta = store.readMeta(id);
+      replaceMeta(store, { ...meta, status: "ready_for_review", updatedAt: clock.nowIso() });
+    },
+    async () => {
+      convergenceCalls++;
+    },
+    async () => stopController.abort(),
+    { stopSignal: stopController.signal, abortMap },
+  );
+
+  equal(convergenceCalls, 0);
+  equal(store.readMeta(runId).status, "stopped");
+  await cleanTemp(tmp);
+});
+
+test("runLoop: external shutdown aborts active execution", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-external-shutdown-"));
+  const clock = fixedClock();
+  const stopController = new AbortController();
+  const runId = "20260101-000000-external-shutdown";
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  store.writeMeta(makeMeta({ runId, status: "queued" }));
+  let observedAbort = false;
+
+  await runLoop(
+    Config.parse({}),
+    store,
+    fakeRepo(),
+    { holdPowerAssertion: async () => {} },
+    clock,
+    {
+      bind: () => Promise.resolve({ byRunId: new Map() }),
+      clearActive: () => undefined,
+      close: () => undefined,
+    },
+    async (_id, _meta, _ref, _clock, signal) => {
+      setTimeout(() => stopController.abort(), 0);
+      await new Promise<void>((resolve) =>
+        signal?.addEventListener("abort", () => resolve(), { once: true }),
+      );
+      observedAbort = signal?.aborted === true;
+      throw new DOMException("shutdown", "AbortError");
+    },
+    async () => {},
+    async () => {},
+    { stopSignal: stopController.signal },
+  );
+
+  equal(observedAbort, true);
+  equal(store.readMeta(runId).status, "stopped");
+  await cleanTemp(tmp);
+});
+
+test("runLoop: daemon shutdown before convergence is recovered on restart", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-convergence-shutdown-"));
+  const clock = fixedClock();
+  const stopController = new AbortController();
+  const runId = "20260101-000000-convergence-shutdown";
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  store.writeMeta(makeMeta({ runId, status: "queued" }));
+  let convergenceCalls = 0;
+
+  await runLoop(
+    Config.parse({}),
+    store,
+    fakeRepo(),
+    { holdPowerAssertion: async () => {} },
+    clock,
+    {
+      bind: () => Promise.resolve({ byRunId: new Map() }),
+      clearActive: () => undefined,
+      close: () => undefined,
+    },
+    async (id) => {
+      const meta = store.readMeta(id);
+      replaceMeta(store, { ...meta, status: "ready_for_review", updatedAt: clock.nowIso() });
+      stopController.abort();
+    },
+    async () => {
+      convergenceCalls++;
+    },
+    async () => {},
+    { stopSignal: stopController.signal },
+  );
+
+  equal(convergenceCalls, 0);
+  equal(store.readMeta(runId).status, "ready_for_review");
+
+  const restartController = new AbortController();
+  await runLoop(
+    Config.parse({}),
+    store,
+    fakeRepo(),
+    { holdPowerAssertion: async () => {} },
+    clock,
+    {
+      bind: () => Promise.resolve({ byRunId: new Map() }),
+      clearActive: () => undefined,
+      close: () => undefined,
+    },
+    async () => {
+      throw new Error("execution must not restart");
+    },
+    async () => {
+      convergenceCalls++;
+    },
+    async () => {},
+    { stopSignal: restartController.signal, onReady: () => restartController.abort() },
+  );
+
+  equal(convergenceCalls, 1);
+  await cleanTemp(tmp);
+});
+
+test("runLoop crash branch: existing retry metadata does not trigger a retry", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "runloop-crash-block-"));
     const clock = fixedClock();
@@ -1146,6 +1515,7 @@ test("runLoop crash branch: thrown executeRun escalates crashed run at cap", () 
       readDiffStats: () => ({}),
       reviewableDiff: () => "",
       reviewableDiffAgainst: () => "",
+      resolveRevision: () => "abc",
       reconciliationGitState: () => ({
         head: "abc",
         status: [] as string[],
@@ -1268,9 +1638,9 @@ test("runLoop crash path clears active run pointer on executeRun throw", () => {
 });
 
 // ---------------------------------------------------------------------------
-// runLoop: repo-affinity wiring — excludedRepos from active runs + convergences
+// runLoop: repo affinity is owned by the atomic store claim
 
-test("runLoop: excludedRepos is built from listActiveRuns and listActiveConvergences", () => {
+test("runLoop: repository affinity is delegated to the atomic store claim", () => {
   return (async () => {
     const clock = fixedClock();
 
@@ -1309,6 +1679,18 @@ test("runLoop: excludedRepos is built from listActiveRuns and listActiveConverge
       writeMeta: () => {
         throw new Error("writeMeta should not be called");
       },
+      transitionRun: () => {
+        throw new Error("transitionRun should not be called");
+      },
+      readRunStartup: () => undefined,
+      persistRunStartup: () => {},
+      initializeRunStartup: () => {},
+      activateRunStartup: (_operation, transition) => transition.meta,
+      acceptCampaign: () => [],
+      readAcceptanceOperation: () => undefined,
+      persistAcceptanceOperation: () => {},
+      commitAcceptanceOperation: () => [],
+      answerRun: (transition) => transition.meta,
       listStaged: () => [],
       readCampaign: () => undefined,
       listActiveRuns: () => [
@@ -1320,6 +1702,7 @@ test("runLoop: excludedRepos is built from listActiveRuns and listActiveConverge
           startedAt: clock.nowIso(),
         } as ActiveRun,
       ],
+      syncActiveRunProjection: () => {},
       listActiveConvergences: () => [
         {
           runId: "20260101-000000-converge-x",
@@ -1331,6 +1714,11 @@ test("runLoop: excludedRepos is built from listActiveRuns and listActiveConverge
         // Return undefined so runLoop goes to the wait path.
         return undefined;
       },
+      acquireRepositoryLease: () => undefined,
+      admitQueueWithCampaign: () => {},
+      heartbeatRepositoryLease: (lease) => lease,
+      releaseRepositoryLease: () => false,
+      listRepositoryLeases: () => [],
       // Unused stubs (not called with stopSignal + empty queue).
       readMeta: () => {
         throw new Error("readMeta should not be called");
@@ -1382,6 +1770,9 @@ test("runLoop: excludedRepos is built from listActiveRuns and listActiveConverge
         throw new Error("not called");
       },
       readConvergence: () => [],
+      readConvergenceOperation: () => undefined,
+      persistConvergenceOperation: () => {},
+      publishConvergence: () => undefined,
       addActiveRun: () => {
         throw new Error("not called");
       },
@@ -1408,7 +1799,6 @@ test("runLoop: excludedRepos is built from listActiveRuns and listActiveConverge
         throw new Error("not called");
       },
       readQueuePacket: () => undefined,
-      initMetaFromQueue: () => undefined,
       readStaged: () => undefined,
       writeStaged: () => {
         throw new Error("not called");
@@ -1470,18 +1860,65 @@ test("runLoop: excludedRepos is built from listActiveRuns and listActiveConverge
       { stopSignal: stopController.signal },
     );
 
-    // Verify: excludedRepos contains the repos from active runs and active convergences.
-    deepEqual(
-      capturedExcludedRepos.sort(),
-      ["/tmp/active-repo", "/tmp/convergence-repo"].sort(),
-      "excludedRepos should contain repos from active runs and active convergences",
-    );
+    // The run loop no longer makes a stale pre-claim repository snapshot.
+    deepEqual(capturedExcludedRepos, []);
   })();
 });
 
 // ---------------------------------------------------------------------------
 // Worker-pool: two workers claim different-repo runs concurrently
 // ---------------------------------------------------------------------------
+
+test("runLoop: one worker failure shuts down and awaits sibling workers", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "runloop-worker-failure-"));
+  const clock = fixedClock();
+  const stopController = new AbortController();
+  const abortMap = new Map<string, RunAbort>();
+  const runId = "20260101-000000-worker-failure";
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  store.writeMeta(makeMeta({ runId, status: "queued" }));
+  const claimNext = store.claimNextQueuedRun.bind(store);
+  let claimCalls = 0;
+  store.claimNextQueuedRun = (...args) => {
+    claimCalls++;
+    if (claimCalls === 2) {
+      throw new Error("claim failed");
+    }
+    return claimNext(...args);
+  };
+  let siblingSettled = false;
+
+  await rejects(
+    runLoop(
+      Config.parse({ concurrency: { maxWorkers: 2 } }),
+      store,
+      fakeRepo(),
+      { holdPowerAssertion: async () => {} },
+      clock,
+      {
+        bind: () => Promise.resolve({ byRunId: new Map() }),
+        clearActive: () => undefined,
+        close: () => undefined,
+      },
+      async (_id, _meta, _ref, _clock, signal) => {
+        await new Promise<void>((resolve) =>
+          signal!.addEventListener("abort", () => resolve(), { once: true }),
+        );
+        siblingSettled = true;
+        throw signal!.reason;
+      },
+      async () => {},
+      async () => {},
+      { stopSignal: stopController.signal, abortMap },
+    ),
+    /claim failed/,
+  );
+
+  equal(siblingSettled, true);
+  equal(claimCalls, 2);
+  equal(abortMap.size, 0);
+  await cleanTemp(tmp);
+});
 
 test("runLoop with maxWorkers=2: two workers claim different-repo runs", () => {
   return (async () => {
@@ -1498,12 +1935,22 @@ test("runLoop with maxWorkers=2: two workers claim different-repo runs", () => {
     );
 
     let executeRunCallCount = 0;
+    let completedRunCount = 0;
+    let releaseExecutions!: () => void;
+    const executionBarrier = new Promise<void>((resolve) => {
+      releaseExecutions = resolve;
+    });
     const stopController = new AbortController();
     const executeRun: ExecuteRunCallback = async (runId, meta, ref, clock) => {
       executeRunCallCount++;
+      if (executeRunCallCount === 2) {
+        releaseExecutions();
+      }
+      await executionBarrier;
       const m = store.readMeta(runId);
-      store.writeMeta({ ...m, status: "accepted" as const, updatedAt: clock.nowIso() });
-      if (executeRunCallCount >= 2) {
+      replaceMeta(store, { ...m, status: "accepted" as const, updatedAt: clock.nowIso() });
+      completedRunCount++;
+      if (completedRunCount === 2) {
         stopController.abort();
       }
     };

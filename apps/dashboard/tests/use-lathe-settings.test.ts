@@ -13,6 +13,8 @@ const fakeResponse = (body: unknown, status = 200): Response =>
     headers: { "content-type": "application/json" },
   });
 
+const settingsResponse = (settings: SettingsDto, restartRequired = false) => ({ settings, restartRequired });
+
 const makeFakeFetch = (responses: Map<string, Response>): RivetFetch => {
   return async (request: Request): Promise<Response> => {
     const pathname = new URL(request.url, "http://localhost").pathname;
@@ -52,31 +54,42 @@ const baseSettings: SettingsDto = {
     providerId: "omlx", modelId: "Qwen3.6-35B", baseUrl: "http://localhost:8000/v1",
     apiKey: "secret-key", agent: "baby", contextWindow: 114_688, timeoutMs: 1_800_000,
     turnSteps: 30, thinkingMode: "budget", thinkingBudget: 6_000,
+    models: {
+      large: {
+        providerId: "omlx", modelId: "Qwen3.6-70B", baseUrl: "http://localhost:8000/v1",
+        contextWindow: 200_000, apiKey: "model-key", timeoutMs: 1_800_000, thinkingBudget: null,
+      },
+    },
   },
   superdaddy: {
     providerId: "openai", modelId: "gpt-5.5", agent: "superdaddy", timeoutMs: 1_800_000,
     baseUrl: "https://chatgpt.com/backend-api/codex", headerTimeoutMs: 3_600_000,
     turnSteps: 40, skillPath: "~/.config/opencode/skills/meridian/SKILL.md",
     packetSkillPath: "~/.config/opencode/skills/packet/SKILL.md",
-    diffCapBytes: 131_072, transportRetries: 2,
+    diffCapBytes: 131_072,
   },
   thresholds: {
     rotationFraction: 0.65, ladderParkAt: 10, ladderRotateAt: 4,
     checkpointNudgeMs: 1_200_000, checkpointToolCalls: 50, checkpointFiles: 6,
     checkpointLoc: 80, reportRejectionParkAt: 3, checkpointBounceLimit: 1,
-    verificationTimeoutMs: 600_000, maxPasses: 3, maxReviewerUnreachable: 3,
-    promoteAtCap: true, maxStallRetries: 2, maxCrashRetries: 2,
+    verificationTimeoutMs: 600_000, maxPasses: 3,
+    promoteAtCap: true,
     maxReorientRetries: 2, maxRunMs: 21_600_000, contextTokensFloor: 128,
   },
-  idleTimeoutMs: 120_000,
+  idleTimeoutMs: false,
   concurrency: { maxWorkers: 1 },
   daemon: { host: "127.0.0.1", port: 4198 },
   mutationCommandPatterns: ["\\b(pnpm|npm|yarn)\\b.*\\bgenerate\\b"],
-  repos: {},
+  repos: {
+    repo: {
+      seed: { copies: [], writes: {} },
+      setup: { commands: [{ command: "pnpm install", dir: "." }] },
+    },
+  },
 };
 
 test("useLatheSettings load: sets loaded and draft from GET /settings", async () => {
-  const c = makeClient(new Map([["GET /settings", fakeResponse(baseSettings)]]));
+  const c = makeClient(new Map([["GET /settings", fakeResponse(settingsResponse(baseSettings))]]));
   const s = useLatheSettings(c);
 
   await s.load();
@@ -88,7 +101,7 @@ test("useLatheSettings load: sets loaded and draft from GET /settings", async ()
 });
 
 test("useLatheSettings dirty: false when draft untouched", async () => {
-  const c = makeClient(new Map([["GET /settings", fakeResponse(baseSettings)]]));
+  const c = makeClient(new Map([["GET /settings", fakeResponse(settingsResponse(baseSettings))]]));
   const s = useLatheSettings(c);
 
   await s.load();
@@ -96,7 +109,7 @@ test("useLatheSettings dirty: false when draft untouched", async () => {
 });
 
 test("useLatheSettings dirty: true after mutating draft", async () => {
-  const c = makeClient(new Map([["GET /settings", fakeResponse(baseSettings)]]));
+  const c = makeClient(new Map([["GET /settings", fakeResponse(settingsResponse(baseSettings))]]));
   const s = useLatheSettings(c);
 
   await s.load();
@@ -110,8 +123,8 @@ test("useLatheSettings save: sends full SettingsDto and resets dirty", async () 
   const savedSettings: SettingsDto = { ...baseSettings, opencode: { ...baseSettings.opencode, port: 4199 } };
   const c = makeSequencedClient(
     new Map([
-      ["GET /settings", [fakeResponse(baseSettings)]],
-      ["PUT /settings", [fakeResponse(savedSettings, 200)]],
+      ["GET /settings", [fakeResponse(settingsResponse(baseSettings))]],
+      ["PUT /settings", [fakeResponse(settingsResponse(savedSettings, true), 200)]],
     ]),
   );
   const s = useLatheSettings(c);
@@ -127,12 +140,63 @@ test("useLatheSettings save: sends full SettingsDto and resets dirty", async () 
   assert.equal(s.dirty.value, false);
   assert.equal(s.error.value, null);
   assert.deepStrictEqual(s.loaded.value, savedSettings);
+  assert.equal(s.restartRequired.value, true);
+});
+
+test("useLatheSettings save: preserves edits made while the submitted snapshot is in flight", async () => {
+  let resolveSave: ((response: Response) => void) | undefined;
+  let submitted: SettingsDto | undefined;
+  const c = createClient({
+    baseUrl: "http://localhost",
+    fetch: async (request) => {
+      if (request.method === "GET") return fakeResponse(settingsResponse(baseSettings));
+      submitted = JSON.parse(await request.text()) as SettingsDto;
+      return new Promise<Response>((resolve) => { resolveSave = resolve; });
+    },
+  });
+  const s = useLatheSettings(c);
+  await s.load();
+  s.draft.value!.opencode.port = 4199;
+
+  const save = s.save();
+  s.draft.value!.daemon.port = 5000;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  resolveSave!(fakeResponse(settingsResponse({ ...baseSettings, opencode: { ...baseSettings.opencode, port: 4199 } }, true)));
+  assert.equal(await save, true);
+
+  assert.equal(submitted?.opencode.port, 4199);
+  assert.equal(submitted?.daemon.port, 4198);
+  assert.equal(s.draft.value?.daemon.port, 5000);
+  assert.equal(s.loaded.value?.daemon.port, 4198);
+  assert.equal(s.dirty.value, true);
+});
+
+test("useLatheSettings save: concurrent calls coalesce into one request", async () => {
+  let saves = 0;
+  let resolveSave: ((response: Response) => void) | undefined;
+  const c = createClient({
+    baseUrl: "http://localhost",
+    fetch: async (request) => {
+      if (request.method === "GET") return fakeResponse(settingsResponse(baseSettings));
+      saves += 1;
+      return new Promise<Response>((resolve) => { resolveSave = resolve; });
+    },
+  });
+  const s = useLatheSettings(c);
+  await s.load();
+
+  const first = s.save();
+  const second = s.save();
+  assert.equal(saves, 1);
+  resolveSave!(fakeResponse(settingsResponse(baseSettings)));
+  assert.deepStrictEqual(await Promise.all([first, second]), [true, true]);
+  assert.equal(saves, 1);
 });
 
 test("useLatheSettings save: 400 sets error and returns false", async () => {
   const c = makeSequencedClient(
     new Map([
-      ["GET /settings", [fakeResponse(baseSettings)]],
+      ["GET /settings", [fakeResponse(settingsResponse(baseSettings))]],
       ["PUT /settings", [fakeResponse({ code: "VALIDATION", message: "invalid port" }, 400)]],
     ]),
   );
@@ -172,7 +236,7 @@ test("useLatheSettings restart: 400 sets error", async () => {
 });
 
 test("useLatheSettings resetDraft: restores draft from loaded", async () => {
-  const c = makeClient(new Map([["GET /settings", fakeResponse(baseSettings)]]));
+  const c = makeClient(new Map([["GET /settings", fakeResponse(settingsResponse(baseSettings))]]));
   const s = useLatheSettings(c);
 
   await s.load();
@@ -207,10 +271,10 @@ test("useLatheSettings save: sends full SettingsDto (not partial patch)", async 
     if (key === "PUT /settings") {
       const body = await request.text();
       capturedBody = body;
-      return fakeResponse(baseSettings);
+      return fakeResponse(settingsResponse(baseSettings, true));
     }
     if (key === "GET /settings") {
-      return fakeResponse(baseSettings);
+      return fakeResponse(settingsResponse(baseSettings));
     }
     return fakeResponse({ code: "NOT_FOUND", message: "not found" }, 404);
   };

@@ -22,7 +22,6 @@ import type { Contract, Endpoint } from "rivet-ts";
 export type RunStatus =
   | "queued"
   | "running"
-  | "interrupted"
   | "ready_for_review"
   | "blocked"
   | "accepted" // reviewed branch fetched into the source repo; manual merge remains
@@ -152,6 +151,7 @@ export interface ValidatePacketFrontmatter {
   pass: number;
   regression_outcomes: Array<{ id: string; description: string }>;
   promoted: boolean;
+  baby_model?: string;
 }
 
 export interface ValidatePacketResponse {
@@ -223,6 +223,16 @@ export interface SettingsBabyPromoteToDto {
   modelId: string;
 }
 
+export interface SettingsBabyModelDto {
+  providerId: string;
+  modelId: string;
+  baseUrl: string;
+  contextWindow: number;
+  apiKey: string;
+  timeoutMs: number;
+  thinkingBudget: number | null;
+}
+
 export interface SettingsBabyDto {
   providerId: string;
   modelId: string;
@@ -235,6 +245,7 @@ export interface SettingsBabyDto {
   thinkingMode: "budget" | "disabled";
   thinkingBudget: number | null;
   promoteTo?: SettingsBabyPromoteToDto;
+  models: Record<string, SettingsBabyModelDto>;
 }
 
 export interface SettingsSuperdaddyDto {
@@ -242,14 +253,13 @@ export interface SettingsSuperdaddyDto {
   modelId: string;
   agent: string;
   timeoutMs: number;
-  baseUrl: string;
-  headerTimeoutMs: number;
+  baseUrl: string | null;
+  headerTimeoutMs: number | false;
   apiKey?: string;
   turnSteps: number;
   skillPath: string;
   packetSkillPath: string;
   diffCapBytes: number;
-  transportRetries: number;
 }
 
 export interface SettingsThresholdsDto {
@@ -264,10 +274,7 @@ export interface SettingsThresholdsDto {
   checkpointBounceLimit: number;
   verificationTimeoutMs: number;
   maxPasses: number;
-  maxReviewerUnreachable: number;
   promoteAtCap: boolean;
-  maxStallRetries: number;
-  maxCrashRetries: number;
   maxReorientRetries: number;
   maxRunMs: number;
   contextTokensFloor: number;
@@ -289,6 +296,9 @@ export interface SettingsRepoSeedDto {
 
 export interface SettingsRepoDto {
   seed: SettingsRepoSeedDto;
+  setup: {
+    commands: Array<{ command: string; dir: string }>;
+  };
 }
 
 export interface SettingsDto {
@@ -298,11 +308,22 @@ export interface SettingsDto {
   baby: SettingsBabyDto;
   superdaddy: SettingsSuperdaddyDto;
   thresholds: SettingsThresholdsDto;
-  idleTimeoutMs: number;
+  idleTimeoutMs: number | false;
   concurrency: SettingsConcurrencyDto;
   daemon: SettingsDaemonDto;
   mutationCommandPatterns: string[];
   repos: Record<string, SettingsRepoDto>;
+}
+
+export interface SettingsResponseDto {
+  settings: SettingsDto;
+  restartRequired: boolean;
+}
+
+export interface StopRunResponseDto {
+  runId: string;
+  status: "stopped" | "cancellation_requested";
+  cancellationRequested: boolean;
 }
 
 /* ------------------- run ledger DTOs ------------------- */
@@ -401,37 +422,23 @@ export interface VerificationResultDto {
   outputTail: string;
 }
 
-export type ConvergenceLogEntryDto =
-  | {
-      kind: "reviewed";
-      at: string;
-      runId: string;
-      campaignId: string;
-      pass: number;
-      maxPasses: number;
-      verification: { green: boolean; commands: VerificationResultDto[] };
-      decision: ConvergeDecisionDto;
-      amendedCommitSha: string | null;
-      primary: SuperReviewDto;
-      primaryRaw: string;
-    }
-  | {
-      kind: "unreachable";
-      at: string;
-      runId: string;
-      campaignId: string;
-      pass: number;
-      maxPasses: number;
-      verification: { green: boolean; commands: VerificationResultDto[] };
-      detail: string;
-      attempt: number;
-      budget: number;
-    };
+export type ConvergenceLogEntryDto = {
+  kind: "reviewed";
+  at: string;
+  runId: string;
+  campaignId: string;
+  pass: number;
+  maxPasses: number;
+  verification: { green: boolean; commands: VerificationResultDto[] };
+  decision: ConvergeDecisionDto;
+  amendedCommitSha: string | null;
+  primary: SuperReviewDto;
+  primaryRaw: string;
+};
 
 export type TailRunStatus =
   | "queued"
   | "running"
-  | "interrupted"
   | "ready_for_review"
   | "blocked"
   | "failed"
@@ -500,6 +507,7 @@ export interface TailSnapshotDto {
   turn: number;
   rotations: number;
   panes: TailAgentPanesDto;
+  acceptanceReviewLines: string[];
   driverCommands: TailDriverCommandDto[];
   journal: TailJournalLineDto[];
   lastSeq: number;
@@ -508,6 +516,7 @@ export interface TailSnapshotDto {
 export type TailSpeaker = "baby" | "daddy" | "super";
 export type TailLineStyle = "think" | "text";
 export type VerificationPhaseDto = "report" | "convergence" | "autofix";
+export type TailSuperVerdict = "accept" | "request_changes" | "escalate";
 
 export type TailEvent =
   | {
@@ -549,7 +558,13 @@ export type TailEvent =
       detail: string;
       input?: string;
     }
-  | { kind: "tail.agent.panes.replaced"; runId: string; panes: TailAgentPanesDto }
+  | {
+      kind: "tail.agent.panes.replaced";
+      runId: string;
+      /** Authoritative agent transcript only; semantic review state is separate. */
+      panes: TailAgentPanesDto;
+      acceptanceReviewLines: string[];
+    }
   | {
       kind: "tail.driver.command";
       runId: string;
@@ -580,11 +595,21 @@ export type TailEvent =
       at: string;
     }
   | {
+      kind: "tail.super.status";
+      runId: string;
+      seq: number;
+      at: string;
+      status: "started" | "cancelled" | "failed";
+      pass: number;
+      detail?: string;
+      lines: string[];
+    }
+  | {
       kind: "tail.super.verdict";
       runId: string;
       seq: number;
       at: string;
-      verdict: string;
+      verdict: TailSuperVerdict;
       pass: number;
       findings: string[];
       lines: string[];
@@ -600,6 +625,7 @@ const TAIL_EVENT_KIND_MAP = {
   "tail.agent.panes.replaced": true,
   "tail.driver.command": true,
   "tail.driver.delta": true,
+  "tail.super.status": true,
   "tail.super.verdict": true,
   "tail.run.changed": true,
   "tail.ping": true,
@@ -667,6 +693,7 @@ export interface LatheContract extends Contract<"LatheContract"> {
     successStatus: 202;
     errors: [
       { status: 400; response: ErrorResponse; description: "invalid packet" },
+      { status: 503; response: ErrorResponse; description: "run driver unavailable" },
       { status: 500; response: ErrorResponse; description: "internal error" },
     ];
   }>;
@@ -679,6 +706,7 @@ export interface LatheContract extends Contract<"LatheContract"> {
     successStatus: 202;
     errors: [
       { status: 400; response: ErrorResponse; description: "invalid packet" },
+      { status: 503; response: ErrorResponse; description: "run driver unavailable" },
       { status: 500; response: ErrorResponse; description: "internal error" },
     ];
   }>;
@@ -689,6 +717,7 @@ export interface LatheContract extends Contract<"LatheContract"> {
     input: EnqueueChainRequest;
     response: RunSummaryDto[];
     successStatus: 202;
+    errors: [{ status: 503; response: ErrorResponse; description: "run driver unavailable" }];
   }>;
 
   listRuns: Endpoint<{
@@ -729,10 +758,12 @@ export interface LatheContract extends Contract<"LatheContract"> {
     method: "POST";
     route: "/runs/{runId}/stop";
     params: { runId: string };
-    response: RunSummaryDto;
+    response: StopRunResponseDto;
+    successStatus: 202;
     errors: [
       { status: 404; response: ErrorResponse; description: "run not found" },
-      { status: 409; response: ErrorResponse; description: "run is terminal" },
+      { status: 409; response: ErrorResponse; description: "run is terminal or has no active cancellation owner" },
+      { status: 503; response: ErrorResponse; description: "run driver unavailable" },
     ];
   }>;
 
@@ -743,8 +774,10 @@ export interface LatheContract extends Contract<"LatheContract"> {
     params: { runId: string };
     response: RunSummaryDto;
     errors: [
+      { status: 400; response: ErrorResponse; description: "invalid answer" },
       { status: 404; response: ErrorResponse; description: "run not found" },
       { status: 409; response: ErrorResponse; description: "run is not answerable" },
+      { status: 503; response: ErrorResponse; description: "run driver unavailable" },
     ];
   }>;
 
@@ -760,6 +793,7 @@ export interface LatheContract extends Contract<"LatheContract"> {
     errors: [
       { status: 404; response: ErrorResponse; description: "run not found" },
       { status: 409; response: ErrorResponse; description: "not a chain tip or accept refused" },
+      { status: 503; response: ErrorResponse; description: "run driver unavailable" },
     ];
   }>;
 
@@ -772,6 +806,7 @@ export interface LatheContract extends Contract<"LatheContract"> {
     errors: [
       { status: 404; response: ErrorResponse; description: "run not found" },
       { status: 409; response: ErrorResponse; description: "run is not reviewable" },
+      { status: 503; response: ErrorResponse; description: "run driver unavailable" },
     ];
   }>;
 
@@ -783,6 +818,7 @@ export interface LatheContract extends Contract<"LatheContract"> {
     errors: [
       { status: 404; response: ErrorResponse; description: "run not found" },
       { status: 409; response: ErrorResponse; description: "run is terminal" },
+      { status: 503; response: ErrorResponse; description: "run driver unavailable" },
     ];
   }>;
 
@@ -809,14 +845,14 @@ export interface LatheContract extends Contract<"LatheContract"> {
   getSettings: Endpoint<{
     method: "GET";
     route: "/settings";
-    response: SettingsDto;
+    response: SettingsResponseDto;
   }>;
 
   updateSettings: Endpoint<{
     method: "PUT";
     route: "/settings";
     input: SettingsDto;
-    response: SettingsDto;
+    response: SettingsResponseDto;
     errors: [{ status: 400; response: ErrorResponse; description: "invalid config body" }];
   }>;
 
@@ -911,6 +947,7 @@ export interface LatheContract extends Contract<"LatheContract"> {
     errors: [
       { status: 404; response: ErrorResponse; description: "plan not found" },
       { status: 400; response: ErrorResponse; description: "plan failed admission" },
+      { status: 503; response: ErrorResponse; description: "run driver unavailable" },
     ];
   }>;
 }

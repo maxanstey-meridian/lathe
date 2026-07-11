@@ -83,6 +83,41 @@ test("decideConvergence: accept + verification RED → escalate (under-reported)
   assert.ok(red.reason.includes("under-reported"));
 });
 
+test("decideConvergence: accept + grounded P0/P1 findings cannot stop", () => {
+  for (const severity of ["P0", "P1"] as const) {
+    const contradictory = decideConvergence(
+      review("accept", [finding(`grounded-${severity.toLowerCase()}`, severity, "clause")]),
+      true,
+      1,
+      3,
+    );
+    assert.equal(contradictory.action, "escalate");
+    assert.match(contradictory.reason, /grounded P0\/P1/);
+  }
+});
+
+test("decideConvergence: accept + failed command cannot stop at any severity", () => {
+  for (const severity of ["P0", "P1", "P2", "P3"] as const) {
+    const contradictory = decideConvergence(
+      review("accept", [finding(`failed-${severity.toLowerCase()}`, severity, "command_fail")]),
+      true,
+      1,
+      3,
+    );
+    assert.equal(contradictory.action, "escalate");
+    assert.match(contradictory.reason, /failed command/);
+  }
+});
+
+test("decideConvergence: accept + recommend_stop false cannot stop", () => {
+  const contradictoryReview = review("accept", []);
+  contradictoryReview.convergence.recommend_stop = false;
+
+  const decision = decideConvergence(contradictoryReview, true, 1, 3);
+  assert.equal(decision.action, "escalate");
+  assert.match(decision.reason, /recommend_stop=false/);
+});
+
 test("decideConvergence: blockers author until the cap, then escalate", () => {
   const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
   const d1 = decideConvergence(blocked, true, 1, 3);
@@ -99,6 +134,14 @@ test("decideConvergence: explicit escalate / human_decision_needed always wins",
     decideConvergence(review("accept", [], "needs a call"), true, 1, 3).action,
     "escalate",
   );
+});
+
+test("SuperReview rejects empty human decisions instead of treating them as absent", () => {
+  const candidate = review("accept", []);
+  candidate.human_decision_needed = "   ";
+  const parsed = parseSuperReview(JSON.stringify(candidate));
+  assert.equal(parsed.verdict, "escalate");
+  assert.ok(parsed.human_decision_needed);
 });
 
 test("decideConvergence: pass > maxPasses → escalate", () => {
@@ -120,15 +163,10 @@ test("decideConvergence: request_changes AT the cap + promote enabled → author
   assert.equal(d.blockers.length, 1);
 });
 
-test("decideConvergence: ESCALATE verdict AT the cap + findings → author PROMOTED (the reported bug)", () => {
-  // The exact shape that parked run 20260625-142532-lathe-http-surface-fix3: super-
-  // daddy returns `escalate` with a human ask at pass 3/3. Before this fix it parked;
-  // now the cap gives Baby one promoted pass at the same task on Daddy's model.
+test("decideConvergence: human decision AT the cap cannot become a promoted pass", () => {
   const escalated = review("escalate", [finding("x", "P0", "command_fail")], "restore the checker");
   const d = decideConvergence(escalated, true, 3, 3, promote());
-  assert.equal(d.action, "author");
-  assert.equal(d.promote, true);
-  assert.equal(d.blockers.length, 1);
+  assert.deepEqual(d, { action: "escalate", reason: "restore the checker" });
 });
 
 test("decideConvergence: AT the cap but ALREADY promoted → escalate (no double promotion)", () => {
@@ -730,7 +768,6 @@ const tipMeta = (overrides: Partial<RunMeta> = {}): RunMeta => ({
   stallRetries: 0,
   crashRetries: 0,
   reorientRetries: 0,
-  reviewerUnreachable: 0,
   promoted: false,
   pass: 1,
   updatedAt: "2026-06-18T00:00:00.000Z",

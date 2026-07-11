@@ -65,7 +65,7 @@ const input = (): SuperReviewInput => ({
 
 test("reviewer: a successful call returns a reviewed outcome", async () => {
   const { executor, sends } = makeExecutor(async () => textResponse(ACCEPT_JSON));
-  const reviewer = createReviewer(executor, model, 5000, 2);
+  const reviewer = createReviewer(executor, model, 5000);
 
   const outcome = await reviewer.superReview(input());
 
@@ -73,11 +73,36 @@ test("reviewer: a successful call returns a reviewed outcome", async () => {
   if (outcome.kind === "reviewed") {
     equal(outcome.review.verdict, "accept");
   }
-  equal(sends(), 1, "no retries on success");
+  equal(sends(), 1);
+});
+
+test("reviewer: session creation failure returns unreachable", async () => {
+  const { executor, sends } = makeExecutor(async () => textResponse(ACCEPT_JSON));
+  executor.createSession = async () => {
+    throw new Error("session service unavailable");
+  };
+  const reviewer = createReviewer(executor, model, 5000);
+
+  const review = await reviewer.superReview(input());
+  const authoring = await reviewer.authorFollowup({
+    worktree: input().worktree,
+    packetSkillText: "skill",
+    blockers: [],
+    priorOutcomes: [],
+    pass: 2,
+    campaignId: "campaign-a",
+  });
+
+  equal(review.kind, "unreachable");
+  equal(authoring.kind, "unreachable");
+  equal(sends(), 0);
 });
 
 test("reviewer: an empty current exchange does not reuse a stale verdict", async () => {
-  const old = { ...textResponse(ACCEPT_JSON), info: { ...textResponse(ACCEPT_JSON).info, id: "old" } };
+  const old = {
+    ...textResponse(ACCEPT_JSON),
+    info: { ...textResponse(ACCEPT_JSON).info, id: "old" },
+  };
   const current = textResponse("");
   current.info.id = "current";
   let sent = false;
@@ -87,11 +112,11 @@ test("reviewer: an empty current exchange does not reuse a stale verdict", async
       sent = true;
       return current;
     },
-    listMessages: async () => sent ? [old, current] : [old],
+    listMessages: async () => (sent ? [old, current] : [old]),
     deleteSession: async () => {},
     abortSession: async () => {},
   };
-  const reviewer = createReviewer(executor, model, 5000, 0);
+  const reviewer = createReviewer(executor, model, 5000);
 
   const outcome = await reviewer.superReview(input());
 
@@ -101,11 +126,11 @@ test("reviewer: an empty current exchange does not reuse a stale verdict", async
   }
 });
 
-test("reviewer: a persistent transient drop retries then returns unreachable", async () => {
+test("reviewer: a transient drop returns unreachable after one attempt", async () => {
   const { executor, sends } = makeExecutor(async () => {
     throw new Error("socket hang up");
   });
-  const reviewer = createReviewer(executor, model, 5000, 1); // 1 retry → 2 attempts
+  const reviewer = createReviewer(executor, model, 5000);
 
   const outcome = await reviewer.superReview(input());
 
@@ -113,14 +138,14 @@ test("reviewer: a persistent transient drop retries then returns unreachable", a
   if (outcome.kind === "unreachable") {
     match(outcome.detail, /Connection dropped: socket hang up/);
   }
-  equal(sends(), 2, "initial attempt + one retry");
+  equal(sends(), 1);
 });
 
 test("reviewer: a fatal error returns unreachable WITHOUT retrying", async () => {
   const { executor, sends } = makeExecutor(async () => {
     throw new Error("APIError (HTTP 400): bad request");
   });
-  const reviewer = createReviewer(executor, model, 5000, 3);
+  const reviewer = createReviewer(executor, model, 5000);
 
   const outcome = await reviewer.superReview(input());
 
@@ -128,22 +153,22 @@ test("reviewer: a fatal error returns unreachable WITHOUT retrying", async () =>
   equal(sends(), 1, "a fatal error is not retried");
 });
 
-test("reviewer: a transient drop that recovers returns the reviewed outcome", async () => {
+test("reviewer: does not hide a transient drop by retrying the turn", async () => {
   const { executor, sends } = makeExecutor(async (attempt) => {
     if (attempt === 0) {
       throw new Error("ECONNRESET");
     }
     return textResponse(ACCEPT_JSON);
   });
-  const reviewer = createReviewer(executor, model, 5000, 2);
+  const reviewer = createReviewer(executor, model, 5000);
 
   const outcome = await reviewer.superReview(input());
 
-  equal(outcome.kind, "reviewed");
-  equal(sends(), 2, "recovered on the retry");
+  equal(outcome.kind, "unreachable");
+  equal(sends(), 1);
 });
 
-test("reviewer: a transient PROVIDER error (HTTP 200 + error field) is retried", async () => {
+test("reviewer: a provider error is returned after one attempt", async () => {
   // The provider failure rides on the turn's info.error, not a thrown reject.
   const { executor, sends } = makeExecutor(async () => ({
     info: {
@@ -154,12 +179,12 @@ test("reviewer: a transient PROVIDER error (HTTP 200 + error field) is retried",
     },
     parts: [],
   }));
-  const reviewer = createReviewer(executor, model, 5000, 1);
+  const reviewer = createReviewer(executor, model, 5000);
 
   const outcome = await reviewer.superReview(input());
 
   equal(outcome.kind, "unreachable");
-  equal(sends(), 2, "provider 503 classified transient and retried");
+  equal(sends(), 1);
 });
 
 test("reviewer: authorFollowup uses the latest assistant reply, not stale history", async () => {
@@ -167,15 +192,15 @@ test("reviewer: authorFollowup uses the latest assistant reply, not stale histor
   const { executor } = makeExecutor(async () => textResponse("fallback"));
   let listCall = 0;
   const stale = {
-      info: { id: "old", sessionID: "s", role: "assistant", model: "test" as unknown as string },
-      parts: [{ type: "text", text: "---\nsummary: stale attempt\n---\n\n# stale packet" }],
-    };
+    info: { id: "old", sessionID: "s", role: "assistant", model: "test" as unknown as string },
+    parts: [{ type: "text", text: "---\nsummary: stale attempt\n---\n\n# stale packet" }],
+  };
   const latest = {
-      info: { id: "new", sessionID: "s", role: "assistant", model: "test" as unknown as string },
-      parts: [{ type: "text", text: latestPacket }],
-    };
-  executor.listMessages = async () => listCall++ === 0 ? [stale] : [stale, latest];
-  const reviewer = createReviewer(executor, model, 5000, 1);
+    info: { id: "new", sessionID: "s", role: "assistant", model: "test" as unknown as string },
+    parts: [{ type: "text", text: latestPacket }],
+  };
+  executor.listMessages = async () => (listCall++ === 0 ? [stale] : [stale, latest]);
+  const reviewer = createReviewer(executor, model, 5000);
 
   const outcome = await reviewer.authorFollowup({
     worktree: "/wt",

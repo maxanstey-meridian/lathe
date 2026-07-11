@@ -62,6 +62,7 @@ const snapshot = (runId: string): TailSnapshotDto => ({
   turn: 0,
   rotations: 0,
   panes: { baby: [], daddy: [], super: [] },
+  acceptanceReviewLines: [],
   driverCommands: [],
   journal: [],
   lastSeq: 0,
@@ -82,7 +83,7 @@ test("useLatheTail waits for the first frame and ignores callbacks from a closed
   const wrapper = mount(
     defineComponent({
       setup() {
-        tail = useLatheTail();
+        tail = useLatheTail(Date.now);
         return () => null;
       },
     }),

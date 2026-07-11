@@ -175,218 +175,119 @@
     {
       "name": "ConvergenceLogEntryDto",
       "typeParameters": [],
-      "type": {
-        "kind": "taggedUnion",
-        "discriminator": "kind",
-        "variants": [
-          {
-            "tag": "reviewed",
-            "type": {
-              "kind": "inlineObject",
-              "properties": [
-                {
-                  "name": "kind",
-                  "type": {
-                    "kind": "stringUnion",
-                    "values": [
-                      "reviewed"
-                    ]
-                  }
-                },
-                {
-                  "name": "at",
-                  "type": {
-                    "kind": "primitive",
-                    "type": "string"
-                  }
-                },
-                {
-                  "name": "runId",
-                  "type": {
-                    "kind": "primitive",
-                    "type": "string"
-                  }
-                },
-                {
-                  "name": "campaignId",
-                  "type": {
-                    "kind": "primitive",
-                    "type": "string"
-                  }
-                },
-                {
-                  "name": "pass",
-                  "type": {
-                    "kind": "primitive",
-                    "type": "number"
-                  }
-                },
-                {
-                  "name": "maxPasses",
-                  "type": {
-                    "kind": "primitive",
-                    "type": "number"
-                  }
-                },
-                {
-                  "name": "verification",
-                  "type": {
-                    "kind": "inlineObject",
-                    "properties": [
-                      {
-                        "name": "green",
-                        "type": {
-                          "kind": "primitive",
-                          "type": "boolean"
-                        }
-                      },
-                      {
-                        "name": "commands",
-                        "type": {
-                          "kind": "array",
-                          "element": {
-                            "kind": "ref",
-                            "name": "VerificationResultDto"
-                          }
-                        }
-                      }
-                    ]
-                  }
-                },
-                {
-                  "name": "decision",
-                  "type": {
+      "properties": [
+        {
+          "name": "kind",
+          "type": {
+            "kind": "stringUnion",
+            "values": [
+              "reviewed"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "at",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "campaignId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "pass",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "maxPasses",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "verification",
+          "type": {
+            "kind": "inlineObject",
+            "properties": [
+              {
+                "name": "green",
+                "type": {
+                  "kind": "primitive",
+                  "type": "boolean"
+                }
+              },
+              {
+                "name": "commands",
+                "type": {
+                  "kind": "array",
+                  "element": {
                     "kind": "ref",
-                    "name": "ConvergeDecisionDto"
-                  }
-                },
-                {
-                  "name": "amendedCommitSha",
-                  "type": {
-                    "kind": "nullable",
-                    "inner": {
-                      "kind": "primitive",
-                      "type": "string"
-                    }
-                  }
-                },
-                {
-                  "name": "primary",
-                  "type": {
-                    "kind": "ref",
-                    "name": "SuperReviewDto"
-                  }
-                },
-                {
-                  "name": "primaryRaw",
-                  "type": {
-                    "kind": "primitive",
-                    "type": "string"
+                    "name": "VerificationResultDto"
                   }
                 }
-              ]
+              }
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "decision",
+          "type": {
+            "kind": "ref",
+            "name": "ConvergeDecisionDto"
+          },
+          "optional": false
+        },
+        {
+          "name": "amendedCommitSha",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
             }
           },
-          {
-            "tag": "unreachable",
-            "type": {
-              "kind": "inlineObject",
-              "properties": [
-                {
-                  "name": "kind",
-                  "type": {
-                    "kind": "stringUnion",
-                    "values": [
-                      "unreachable"
-                    ]
-                  }
-                },
-                {
-                  "name": "at",
-                  "type": {
-                    "kind": "primitive",
-                    "type": "string"
-                  }
-                },
-                {
-                  "name": "runId",
-                  "type": {
-                    "kind": "primitive",
-                    "type": "string"
-                  }
-                },
-                {
-                  "name": "campaignId",
-                  "type": {
-                    "kind": "primitive",
-                    "type": "string"
-                  }
-                },
-                {
-                  "name": "pass",
-                  "type": {
-                    "kind": "primitive",
-                    "type": "number"
-                  }
-                },
-                {
-                  "name": "maxPasses",
-                  "type": {
-                    "kind": "primitive",
-                    "type": "number"
-                  }
-                },
-                {
-                  "name": "verification",
-                  "type": {
-                    "kind": "inlineObject",
-                    "properties": [
-                      {
-                        "name": "green",
-                        "type": {
-                          "kind": "primitive",
-                          "type": "boolean"
-                        }
-                      },
-                      {
-                        "name": "commands",
-                        "type": {
-                          "kind": "array",
-                          "element": {
-                            "kind": "ref",
-                            "name": "VerificationResultDto"
-                          }
-                        }
-                      }
-                    ]
-                  }
-                },
-                {
-                  "name": "detail",
-                  "type": {
-                    "kind": "primitive",
-                    "type": "string"
-                  }
-                },
-                {
-                  "name": "attempt",
-                  "type": {
-                    "kind": "primitive",
-                    "type": "number"
-                  }
-                },
-                {
-                  "name": "budget",
-                  "type": {
-                    "kind": "primitive",
-                    "type": "number"
-                  }
-                }
-              ]
-            }
-          }
-        ]
-      }
+          "optional": false
+        },
+        {
+          "name": "primary",
+          "type": {
+            "kind": "ref",
+            "name": "SuperReviewDto"
+          },
+          "optional": false
+        },
+        {
+          "name": "primaryRaw",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        }
+      ]
     },
     {
       "name": "ConvergenceSignalDto",
@@ -1625,6 +1526,82 @@
             "name": "SettingsBabyPromoteToDto"
           },
           "optional": true
+        },
+        {
+          "name": "models",
+          "type": {
+            "kind": "dictionary",
+            "value": {
+              "kind": "ref",
+              "name": "SettingsBabyModelDto"
+            }
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "SettingsBabyModelDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "providerId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "modelId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "baseUrl",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "contextWindow",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "apiKey",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "timeoutMs",
+          "type": {
+            "kind": "primitive",
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "thinkingBudget",
+          "type": {
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "number"
+            }
+          },
+          "optional": false
         }
       ]
     },
@@ -1779,8 +1756,17 @@
         {
           "name": "idleTimeoutMs",
           "type": {
-            "kind": "primitive",
-            "type": "number"
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "primitive",
+                "type": "number"
+              },
+              {
+                "kind": "literal",
+                "value": false
+              }
+            ]
           },
           "optional": false
         },
@@ -1873,6 +1859,40 @@
             "name": "SettingsRepoSeedDto"
           },
           "optional": false
+        },
+        {
+          "name": "setup",
+          "type": {
+            "kind": "inlineObject",
+            "properties": [
+              {
+                "name": "commands",
+                "type": {
+                  "kind": "array",
+                  "element": {
+                    "kind": "inlineObject",
+                    "properties": [
+                      {
+                        "name": "command",
+                        "type": {
+                          "kind": "primitive",
+                          "type": "string"
+                        }
+                      },
+                      {
+                        "name": "dir",
+                        "type": {
+                          "kind": "primitive",
+                          "type": "string"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "optional": false
         }
       ]
     },
@@ -1899,6 +1919,28 @@
               "kind": "primitive",
               "type": "string"
             }
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "SettingsResponseDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "settings",
+          "type": {
+            "kind": "ref",
+            "name": "SettingsDto"
+          },
+          "optional": false
+        },
+        {
+          "name": "restartRequired",
+          "type": {
+            "kind": "primitive",
+            "type": "boolean"
           },
           "optional": false
         }
@@ -1943,16 +1985,28 @@
         {
           "name": "baseUrl",
           "type": {
-            "kind": "primitive",
-            "type": "string"
+            "kind": "nullable",
+            "inner": {
+              "kind": "primitive",
+              "type": "string"
+            }
           },
           "optional": false
         },
         {
           "name": "headerTimeoutMs",
           "type": {
-            "kind": "primitive",
-            "type": "number"
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "primitive",
+                "type": "number"
+              },
+              {
+                "kind": "literal",
+                "value": false
+              }
+            ]
           },
           "optional": false
         },
@@ -1990,14 +2044,6 @@
         },
         {
           "name": "diffCapBytes",
-          "type": {
-            "kind": "primitive",
-            "type": "number"
-          },
-          "optional": false
-        },
-        {
-          "name": "transportRetries",
           "type": {
             "kind": "primitive",
             "type": "number"
@@ -2099,34 +2145,10 @@
           "optional": false
         },
         {
-          "name": "maxReviewerUnreachable",
-          "type": {
-            "kind": "primitive",
-            "type": "number"
-          },
-          "optional": false
-        },
-        {
           "name": "promoteAtCap",
           "type": {
             "kind": "primitive",
             "type": "boolean"
-          },
-          "optional": false
-        },
-        {
-          "name": "maxStallRetries",
-          "type": {
-            "kind": "primitive",
-            "type": "number"
-          },
-          "optional": false
-        },
-        {
-          "name": "maxCrashRetries",
-          "type": {
-            "kind": "primitive",
-            "type": "number"
           },
           "optional": false
         },
@@ -2463,6 +2485,39 @@
           "type": {
             "kind": "primitive",
             "type": "string"
+          },
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "StopRunResponseDto",
+      "typeParameters": [],
+      "properties": [
+        {
+          "name": "runId",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "status",
+          "type": {
+            "kind": "stringUnion",
+            "values": [
+              "stopped",
+              "cancellation_requested"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "cancellationRequested",
+          "type": {
+            "kind": "primitive",
+            "type": "boolean"
           },
           "optional": false
         }
@@ -2943,6 +2998,17 @@
           "optional": false
         },
         {
+          "name": "acceptanceReviewLines",
+          "type": {
+            "kind": "array",
+            "element": {
+              "kind": "primitive",
+              "type": "string"
+            }
+          },
+          "optional": false
+        },
+        {
           "name": "driverCommands",
           "type": {
             "kind": "array",
@@ -3189,6 +3255,14 @@
             "type": "boolean"
           },
           "optional": false
+        },
+        {
+          "name": "baby_model",
+          "type": {
+            "kind": "primitive",
+            "type": "string"
+          },
+          "optional": true
         }
       ]
     },
@@ -3304,7 +3378,6 @@
       "values": [
         "queued",
         "running",
-        "interrupted",
         "ready_for_review",
         "blocked",
         "accepted",
@@ -3317,7 +3390,6 @@
       "values": [
         "queued",
         "running",
-        "interrupted",
         "ready_for_review",
         "blocked",
         "failed",
@@ -3378,6 +3450,14 @@
             "name": "ErrorResponse"
           },
           "description": "internal error"
+        },
+        {
+          "statusCode": 503,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run driver unavailable"
         }
       ]
     },
@@ -3424,6 +3504,14 @@
             "name": "ErrorResponse"
           },
           "description": "internal error"
+        },
+        {
+          "statusCode": 503,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run driver unavailable"
         }
       ]
     },
@@ -3460,6 +3548,14 @@
               "name": "RunSummaryDto"
             }
           }
+        },
+        {
+          "statusCode": 503,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run driver unavailable"
         }
       ]
     },
@@ -3614,15 +3710,15 @@
       ],
       "returnType": {
         "kind": "ref",
-        "name": "RunSummaryDto"
+        "name": "StopRunResponseDto"
       },
       "controllerName": "lathe",
       "responses": [
         {
-          "statusCode": 201,
+          "statusCode": 202,
           "dataType": {
             "kind": "ref",
-            "name": "RunSummaryDto"
+            "name": "StopRunResponseDto"
           }
         },
         {
@@ -3639,7 +3735,15 @@
             "kind": "ref",
             "name": "ErrorResponse"
           },
-          "description": "run is terminal"
+          "description": "run is terminal or has no active cancellation owner"
+        },
+        {
+          "statusCode": 503,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run driver unavailable"
         }
       ]
     },
@@ -3681,6 +3785,14 @@
           }
         },
         {
+          "statusCode": 400,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "invalid answer"
+        },
+        {
           "statusCode": 404,
           "dataType": {
             "kind": "ref",
@@ -3695,6 +3807,14 @@
             "name": "ErrorResponse"
           },
           "description": "run is not answerable"
+        },
+        {
+          "statusCode": 503,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run driver unavailable"
         }
       ]
     },
@@ -3741,6 +3861,14 @@
             "name": "ErrorResponse"
           },
           "description": "not a chain tip or accept refused"
+        },
+        {
+          "statusCode": 503,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run driver unavailable"
         }
       ]
     },
@@ -3796,6 +3924,14 @@
             "name": "ErrorResponse"
           },
           "description": "run is not reviewable"
+        },
+        {
+          "statusCode": 503,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run driver unavailable"
         }
       ]
     },
@@ -3842,6 +3978,14 @@
             "name": "ErrorResponse"
           },
           "description": "run is terminal"
+        },
+        {
+          "statusCode": 503,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run driver unavailable"
         }
       ]
     },
@@ -3936,7 +4080,7 @@
       "params": [],
       "returnType": {
         "kind": "ref",
-        "name": "SettingsDto"
+        "name": "SettingsResponseDto"
       },
       "controllerName": "lathe",
       "responses": [
@@ -3944,7 +4088,7 @@
           "statusCode": 200,
           "dataType": {
             "kind": "ref",
-            "name": "SettingsDto"
+            "name": "SettingsResponseDto"
           }
         }
       ]
@@ -3966,7 +4110,7 @@
       ],
       "returnType": {
         "kind": "ref",
-        "name": "SettingsDto"
+        "name": "SettingsResponseDto"
       },
       "controllerName": "lathe",
       "responses": [
@@ -3974,7 +4118,7 @@
           "statusCode": 200,
           "dataType": {
             "kind": "ref",
-            "name": "SettingsDto"
+            "name": "SettingsResponseDto"
           }
         },
         {
@@ -4417,6 +4561,14 @@
             "name": "ErrorResponse"
           },
           "description": "plan not found"
+        },
+        {
+          "statusCode": 503,
+          "dataType": {
+            "kind": "ref",
+            "name": "ErrorResponse"
+          },
+          "description": "run driver unavailable"
         }
       ]
     }

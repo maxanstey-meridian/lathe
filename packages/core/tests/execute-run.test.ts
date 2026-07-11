@@ -18,11 +18,27 @@ import { makePaths } from "../src/config/paths.js";
 import { Config } from "../src/config/schemas.js";
 import { initialGateState } from "../src/domain/gate.js";
 import { parsePacketShape, type Packet } from "../src/domain/packet.js";
-import { decideRunStart } from "../src/domain/run.js";
+import { decideRunStart, type RunMeta } from "../src/domain/run.js";
 import type { BridgeIntent } from "../src/domain/turn.js";
 import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 
 const RUN_ID = "20260101-000000-execrun";
+
+const makeTestExecuteRun = <Ref>(ports: RunPorts, bridge: BridgeBinding<Ref>) => {
+  const execute = makeExecuteRun(ports, bridge);
+  return (...args: Parameters<typeof execute>): ReturnType<typeof execute> => {
+    const lease =
+      args[5] ??
+      ports.store
+        .listRepositoryLeases()
+        .find((candidate) => candidate.repo === args[1].repo && candidate.runId === args[0]) ??
+      ports.store.acquireRepositoryLease(args[1].repo, `test:${args[0]}`, args[0], "execute");
+    if (!lease) {
+      throw new Error(`test could not acquire repository lease for ${args[0]}`);
+    }
+    return execute(args[0], args[1], args[2], args[3], args[4], lease);
+  };
+};
 
 const PACKET_RAW = `---
 repo: /tmp/test-repo
@@ -65,6 +81,7 @@ const fakeRepo = (): Repo => ({
   readDiffStats: () => ({}),
   reviewableDiff: () => "diff",
   reviewableDiffAgainst: () => "diff",
+  resolveRevision: () => "abc",
   reconciliationGitState: () => ({
     head: "abc",
     status: [] as string[],
@@ -160,6 +177,21 @@ const cleanTemp = async (dir: string) => {
   }
 };
 
+const admitAndClaim = (store: Store): void => {
+  store.admitQueue(RUN_ID, PACKET_RAW);
+  ok(store.claimNextQueuedRun([]));
+};
+
+const replaceMeta = (store: Store, meta: RunMeta): void => {
+  const current = store.readMeta(meta.runId);
+  store.transitionRun({
+    runId: meta.runId,
+    expectedRevision: current.revision ?? 0,
+    expectedStatuses: [current.status],
+    meta,
+  });
+};
+
 // ---------------------------------------------------------------------------
 // decideRunStart (run lifecycle: fresh vs resume)
 // ---------------------------------------------------------------------------
@@ -199,7 +231,6 @@ test("rotateSession: replaces the session, updates meta, latches first-edit (wit
       stallRetries: 0,
       crashRetries: 0,
       reorientRetries: 0,
-      reviewerUnreachable: 0,
       promoted: false,
       pass: 1,
       updatedAt: "2026-01-01T00:00:00.000Z",
@@ -251,7 +282,6 @@ test("rotateSession: no checkpoint stacks reconciliation (O6)", () => {
       stallRetries: 0,
       crashRetries: 0,
       reorientRetries: 0,
-      reviewerUnreachable: 0,
       promoted: false,
       pass: 1,
       updatedAt: "2026-01-01T00:00:00.000Z",
@@ -287,6 +317,188 @@ test("rotateSession: no checkpoint stacks reconciliation (O6)", () => {
   })();
 });
 
+test("rotateSession: persists the replacement before deleting the old session", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "rot-order-"));
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+  const packet = parseFixture();
+  store.writeMeta({
+    runId: RUN_ID,
+    status: "running",
+    attempt: 1,
+    repo: "/tmp/test-repo",
+    base: "main",
+    branch: `meridian/${RUN_ID}`,
+    worktree: "/tmp/wt",
+    babySessionId: "baby-0",
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    promoted: false,
+    pass: 1,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+  store.writeGateState(
+    RUN_ID,
+    initialGateState(
+      RUN_ID,
+      [],
+      [],
+      {
+        checkpointNudgeMs: 1,
+        checkpointToolCalls: 1,
+        checkpointFiles: 1,
+        checkpointLoc: 1,
+        mutationCommandPatterns: [],
+      },
+      "2026-01-01T00:00:00.000Z",
+    ),
+  );
+  const calls: string[] = [];
+  const transitionRun = store.transitionRun.bind(store);
+  store.transitionRun = (transition) => {
+    calls.push("persist");
+    return transitionRun(transition);
+  };
+  const executor: Executor = {
+    ...scriptedExecutor(emptyChannel(), []),
+    createSession: async () => {
+      calls.push("create:new");
+      return "baby-1";
+    },
+    deleteSession: async (sessionId) => {
+      calls.push(`delete:${sessionId}`);
+      if (sessionId === "baby-0") {
+        throw new Error("old cleanup failed");
+      }
+    },
+  };
+
+  const newId = await rotateSession(
+    makePorts(store, fakeRepo(), executor, fakePlanner()),
+    packet,
+    "/tmp/wt",
+    "baby-0",
+    3,
+    false,
+  );
+
+  equal(newId, "baby-1");
+  deepEqual(calls, ["create:new", "persist", "delete:baby-0"]);
+  equal(store.readMeta(RUN_ID).babySessionId, "baby-1");
+  await cleanTemp(tmp);
+});
+
+test("rotateSession: deletes the new session when persisting its pointer fails", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "rot-persist-failure-"));
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+  const packet = parseFixture();
+  store.writeMeta({
+    runId: RUN_ID,
+    status: "running",
+    attempt: 1,
+    repo: "/tmp/test-repo",
+    base: "main",
+    branch: `meridian/${RUN_ID}`,
+    worktree: "/tmp/wt",
+    babySessionId: "baby-0",
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    promoted: false,
+    pass: 1,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const deleted: string[] = [];
+  store.transitionRun = () => {
+    throw new Error("persist failed");
+  };
+  const executor: Executor = {
+    ...scriptedExecutor(emptyChannel(), []),
+    createSession: async () => "baby-1",
+    deleteSession: async (sessionId) => {
+      deleted.push(sessionId);
+    },
+  };
+
+  await rejects(
+    rotateSession(
+      makePorts(store, fakeRepo(), executor, fakePlanner()),
+      packet,
+      "/tmp/wt",
+      "baby-0",
+      3,
+      false,
+    ),
+    /persist failed/,
+  );
+  deepEqual(deleted, ["baby-1"]);
+  await cleanTemp(tmp);
+});
+
+test("rotateSession: fences replacement persistence with the current repository lease", async () => {
+  const packet = parseFixture();
+  const lease = {
+    repo: "/tmp/test-repo",
+    ownerId: "worker",
+    runId: RUN_ID,
+    purpose: "execute" as const,
+    epoch: 1,
+    acquiredAt: "now",
+    heartbeatAt: "now",
+    expiresAt: "later",
+  };
+  let observedLease: typeof lease | undefined;
+  const store = {
+    readMeta: () => ({
+      runId: RUN_ID,
+      status: "running" as const,
+      attempt: 1,
+      repo: lease.repo,
+      base: "main",
+      branch: `meridian/${RUN_ID}`,
+      worktree: "/tmp/wt",
+      stallRetries: 0,
+      crashRetries: 0,
+      reorientRetries: 0,
+      promoted: false,
+      pass: 1,
+      updatedAt: "now",
+    }),
+    transitionRun: (transition: { lease?: typeof lease; meta: { babySessionId?: string } }) => {
+      observedLease = transition.lease;
+      return transition.meta;
+    },
+    readGateState: () =>
+      initialGateState(
+        RUN_ID,
+        [],
+        [],
+        {
+          checkpointNudgeMs: 1,
+          checkpointToolCalls: 1,
+          checkpointFiles: 1,
+          checkpointLoc: 1,
+          mutationCommandPatterns: [],
+        },
+        "now",
+      ),
+    writeGateState: () => {},
+    appendJournal: () => {},
+  } as unknown as Store;
+
+  await rotateSession(
+    makePorts(store, fakeRepo(), scriptedExecutor(emptyChannel(), [], ["baby-1"]), fakePlanner()),
+    packet,
+    "/tmp/wt",
+    "baby-0",
+    3,
+    false,
+    lease,
+  );
+
+  strictEqual(observedLease, lease);
+});
+
 // ---------------------------------------------------------------------------
 // execute-run (R2)
 
@@ -294,7 +506,7 @@ test("makeExecuteRun: fresh run → init state → terminal status in meta", () 
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "exec-fresh-"));
     const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
-    store.admitQueue(RUN_ID, PACKET_RAW);
+    admitAndClaim(store);
 
     const channel = emptyChannel();
     const executor = scriptedExecutor(channel, [
@@ -316,7 +528,7 @@ test("makeExecuteRun: fresh run → init state → terminal status in meta", () 
       endRun: (_ref, _runId) => {},
     };
 
-    const executeRun = makeExecuteRun(ports, bridge);
+    const executeRun = makeTestExecuteRun(ports, bridge);
     await executeRun(
       RUN_ID,
       {
@@ -346,6 +558,312 @@ test("makeExecuteRun: fresh run → init state → terminal status in meta", () 
   })();
 });
 
+test("makeExecuteRun: persists started phases before creating planner and executor sessions", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "exec-session-started-"));
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+  admitAndClaim(store);
+  const observed: string[] = [];
+  const controller = new AbortController();
+  let handshakeSignal: AbortSignal | undefined;
+  const channel = emptyChannel();
+  const planner: Planner = {
+    ...fakePlanner(),
+    handshake: async (_seed, _directory, signal) => {
+      handshakeSignal = signal;
+      observed.push(store.readRunStartup(RUN_ID, 1)!.phase);
+      return "daddy-session";
+    },
+  };
+  const executor: Executor = {
+    ...scriptedExecutor(channel, [
+      {
+        intents: [
+          {
+            kind: "report-accepted",
+            status: "blocked",
+            blockedReason: "stop_condition",
+            blockedQuestion: "done",
+            summary: "done",
+          },
+        ],
+      },
+    ]),
+    createSession: async () => {
+      observed.push(store.readRunStartup(RUN_ID, 1)!.phase);
+      return "baby-session";
+    },
+  };
+  const executeRun = makeTestExecuteRun(makePorts(store, fakeRepo(), executor, planner), {
+    beginRun: () => channel,
+    endRun: () => {},
+  });
+
+  await executeRun(
+    RUN_ID,
+    {
+      repo: "/tmp/test-repo",
+      worktree: join(tmp, "wt"),
+      base: "main",
+      branch: `meridian/${RUN_ID}`,
+    },
+    {},
+    fixedClock(),
+    controller.signal,
+  );
+
+  deepEqual(observed, ["planner_session_started", "executor_session_started"]);
+  strictEqual(handshakeSignal, controller.signal);
+  await cleanTemp(tmp);
+});
+
+test("makeExecuteRun: lease loss before finalization prevents WIP commit and durable outcome", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "exec-finalize-lease-loss-"));
+  try {
+    let wipCommits = 0;
+    const repo: Repo = {
+      ...fakeRepo(),
+      wipCommit: () => {
+        wipCommits++;
+        return "unexpected";
+      },
+    };
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, fixedClock());
+    admitAndClaim(store);
+    const channel = emptyChannel();
+    const ports = makePorts(
+      store,
+      repo,
+      scriptedExecutor(channel, [
+        {
+          intents: [
+            {
+              kind: "report-accepted",
+              status: "blocked",
+              blockedReason: "stop_condition",
+              blockedQuestion: "done",
+              summary: "done",
+            },
+          ],
+        },
+      ]),
+      fakePlanner(),
+    );
+    store.heartbeatRepositoryLease = () => undefined;
+
+    await rejects(
+      makeTestExecuteRun(ports, { beginRun: () => channel, endRun: () => {} })(
+        RUN_ID,
+        {
+          repo: "/tmp/test-repo",
+          worktree: join(tmp, "wt"),
+          base: "main",
+          branch: `meridian/${RUN_ID}`,
+        },
+        {},
+        ports.clock,
+      ),
+      /repository lease lost/,
+    );
+
+    equal(wipCommits, 0);
+    equal(store.readMeta(RUN_ID).status, "running");
+    equal(
+      store.readJournal(RUN_ID).some((event) => event.event === "committed"),
+      false,
+    );
+  } finally {
+    await cleanTemp(tmp);
+  }
+});
+
+const executeReopenedStartup = async (
+  phase: "planner_session_created" | "executor_session_created",
+): Promise<void> => {
+  const tmp = await mkdtempP(join(tmpdir(), `exec-reopen-${phase}-`));
+  try {
+    const paths = makePaths(tmp);
+    const repo = fakeRepo();
+    const clock = fixedClock();
+    const initialStore = SqliteStoreAdapter.create(paths, repo, clock);
+    initialStore.admitQueue(RUN_ID, PACKET_RAW);
+    const claimed = initialStore.claimNextQueuedRun([], "first-driver")!;
+    const packet = parseFixture();
+    let startup = initialStore.readRunStartup(RUN_ID, 1)!;
+    initialStore.initializeRunStartup(
+      startup,
+      initialStore.initialLedger(packet),
+      initialStore.initialReviewState(RUN_ID),
+      initialGateState(
+        RUN_ID,
+        packet.frontmatter.expected_surface,
+        [],
+        {
+          checkpointNudgeMs: 1,
+          checkpointToolCalls: 1,
+          checkpointFiles: 1,
+          checkpointLoc: 1,
+          mutationCommandPatterns: [],
+        },
+        clock.nowIso(),
+      ),
+      claimed.lease,
+    );
+    startup = initialStore.readRunStartup(RUN_ID, 1)!;
+    for (const next of ["sandbox_ready", "setup_completed", "planner_session_started"] as const) {
+      initialStore.persistRunStartup({ ...startup, phase: next }, claimed.lease);
+      startup = initialStore.readRunStartup(RUN_ID, 1)!;
+    }
+    initialStore.persistRunStartup(
+      { ...startup, phase: "planner_session_created", plannerSessionId: "daddy-recovered" },
+      claimed.lease,
+    );
+    startup = initialStore.readRunStartup(RUN_ID, 1)!;
+    if (phase === "executor_session_created") {
+      initialStore.persistRunStartup(
+        {
+          runId: RUN_ID,
+          attempt: 1,
+          phase: "executor_session_started",
+          plannerSessionId: "daddy-recovered",
+          updatedAt: clock.nowIso(),
+        },
+        claimed.lease,
+      );
+      initialStore.persistRunStartup(
+        {
+          runId: RUN_ID,
+          attempt: 1,
+          phase: "executor_session_created",
+          plannerSessionId: "daddy-recovered",
+          executorSessionId: "baby-recovered",
+          updatedAt: clock.nowIso(),
+        },
+        claimed.lease,
+      );
+    }
+    initialStore.releaseRepositoryLease(claimed.lease);
+
+    const reopened = SqliteStoreAdapter.create(paths, repo, clock);
+    const recovered = reopened.claimNextQueuedRun([], "reopened-driver")!;
+    equal(recovered.runId, RUN_ID);
+    let handshakes = 0;
+    let resumes = 0;
+    let executorCreates = 0;
+    const channel = emptyChannel();
+    const planner: Planner = {
+      ...fakePlanner(),
+      handshake: async () => {
+        handshakes++;
+        return "unexpected";
+      },
+      resumeSession: async (sessionId) => {
+        resumes++;
+        equal(sessionId, "daddy-recovered");
+        return sessionId;
+      },
+    };
+    const executor: Executor = {
+      ...scriptedExecutor(channel, [
+        {
+          intents: [
+            {
+              kind: "report-accepted",
+              status: "blocked",
+              blockedReason: "stop_condition",
+              blockedQuestion: "complete",
+              summary: "complete",
+            },
+          ],
+        },
+      ]),
+      createSession: async () => {
+        executorCreates++;
+        return "baby-created-after-reopen";
+      },
+    };
+    const ports = makePorts(reopened, repo, executor, planner);
+    await makeExecuteRun(ports, { beginRun: () => channel, endRun: () => {} })(
+      RUN_ID,
+      {
+        repo: "/tmp/test-repo",
+        worktree: join(tmp, "runs", RUN_ID, "worktree"),
+        base: "main",
+        branch: `meridian/${RUN_ID}`,
+      },
+      {},
+      clock,
+      undefined,
+      recovered.lease,
+    );
+
+    equal(handshakes, 0);
+    equal(resumes, 1);
+    equal(executorCreates, phase === "planner_session_created" ? 1 : 0);
+    equal(
+      reopened.readMeta(RUN_ID).babySessionId,
+      phase === "planner_session_created" ? "baby-created-after-reopen" : "baby-recovered",
+    );
+    equal(reopened.readRunStartup(RUN_ID, 1)?.phase, "active");
+  } finally {
+    await cleanTemp(tmp);
+  }
+};
+
+test("makeExecuteRun: reopens SQLite and recovers planner_session_created", async () => {
+  await executeReopenedStartup("planner_session_created");
+});
+
+test("makeExecuteRun: reopens SQLite and recovers executor_session_created", async () => {
+  await executeReopenedStartup("executor_session_created");
+});
+
+test("makeExecuteRun: activation projection failure permits zero Executor turns", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "exec-activation-projection-"));
+  const paths = makePaths(tmp);
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  admitAndClaim(store);
+  mkdirSync(join(paths.root, "active-run.json"), { recursive: true });
+
+  let turns = 0;
+  let bridgeActivations = 0;
+  const executor: Executor = {
+    createSession: async () => "baby-projection",
+    sendMessage: async () => {
+      turns++;
+      throw new Error("Executor turn must not start");
+    },
+    listMessages: async () => [],
+    abortSession: async () => {},
+    deleteSession: async () => {},
+  };
+  const ports = makePorts(store, fakeRepo(), executor, fakePlanner());
+  const executeRun = makeTestExecuteRun(ports, {
+    beginRun: () => {
+      bridgeActivations++;
+      return emptyChannel();
+    },
+    endRun: () => {},
+  });
+
+  await rejects(
+    executeRun(
+      RUN_ID,
+      {
+        repo: "/tmp/test-repo",
+        worktree: join(tmp, "wt"),
+        base: "main",
+        branch: `meridian/${RUN_ID}`,
+      },
+      {},
+      ports.clock,
+    ),
+    /EISDIR/,
+  );
+  equal(bridgeActivations, 0);
+  equal(turns, 0);
+  await cleanTemp(tmp);
+});
+
 test("makeExecuteRun: fresh run executes configured repo setup commands after sandbox creation", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "exec-setup-"));
@@ -357,7 +875,7 @@ test("makeExecuteRun: fresh run executes configured repo setup commands after sa
       },
     };
     const store = SqliteStoreAdapter.create(makePaths(tmp), repo, fixedClock());
-    store.admitQueue(RUN_ID, PACKET_RAW);
+    admitAndClaim(store);
 
     const channel = emptyChannel();
     const executor = scriptedExecutor(channel, [
@@ -393,7 +911,7 @@ test("makeExecuteRun: fresh run executes configured repo setup commands after sa
       endRun: (_ref, _runId) => {},
     };
 
-    const executeRun = makeExecuteRun(ports, bridge);
+    const executeRun = makeTestExecuteRun(ports, bridge);
     await executeRun(
       RUN_ID,
       {
@@ -426,23 +944,27 @@ test("makeExecuteRun: setup success is not reclassified while a descendant retai
       createSandbox: () => mkdirSync(worktree, { recursive: true }),
     };
     const store = SqliteStoreAdapter.create(makePaths(tmp), repo, fixedClock());
-    store.admitQueue(RUN_ID, PACKET_RAW);
+    admitAndClaim(store);
     const channel = emptyChannel();
     const ports = makePorts(
       store,
       repo,
-      scriptedExecutor(channel, [{
-        intents: [{
-          kind: "report-accepted",
-          status: "blocked",
-          blockedReason: "human_decision",
-          blockedQuestion: "decide",
-          summary: "blocked out",
-        }],
-      }]),
+      scriptedExecutor(channel, [
+        {
+          intents: [
+            {
+              kind: "report-accepted",
+              status: "blocked",
+              blockedReason: "human_decision",
+              blockedQuestion: "decide",
+              summary: "blocked out",
+            },
+          ],
+        },
+      ]),
       fakePlanner(),
       Config.parse({
-        thresholds: { verificationTimeoutMs: 50 },
+        thresholds: { verificationTimeoutMs: 250 },
         repos: {
           "/tmp/test-repo": {
             setup: { commands: [{ command: "sleep 1 & disown; exit 0", dir: "." }] },
@@ -450,7 +972,7 @@ test("makeExecuteRun: setup success is not reclassified while a descendant retai
         },
       }),
     );
-    const executeRun = makeExecuteRun(ports, {
+    const executeRun = makeTestExecuteRun(ports, {
       beginRun: () => channel,
       endRun: () => {},
     });
@@ -487,7 +1009,7 @@ test("makeExecuteRun: rejects a setup directory symlink escaping the worktree be
       },
     };
     const store = SqliteStoreAdapter.create(makePaths(tmp), repo, fixedClock());
-    store.admitQueue(RUN_ID, PACKET_RAW);
+    admitAndClaim(store);
     let plannerSessions = 0;
     let executorSessions = 0;
     const planner: Planner = {
@@ -517,7 +1039,7 @@ test("makeExecuteRun: rejects a setup directory symlink escaping the worktree be
         },
       }),
     );
-    const executeRun = makeExecuteRun(ports, {
+    const executeRun = makeTestExecuteRun(ports, {
       beginRun: () => emptyChannel(),
       endRun: () => {},
     });
@@ -554,7 +1076,7 @@ test("makeExecuteRun: aborts a running setup command before starting sessions", 
       createSandbox: () => mkdirSync(worktree, { recursive: true }),
     };
     const store = SqliteStoreAdapter.create(makePaths(tmp), repo, fixedClock());
-    store.admitQueue(RUN_ID, PACKET_RAW);
+    admitAndClaim(store);
     let plannerSessions = 0;
     let executorSessions = 0;
     const planner: Planner = {
@@ -584,7 +1106,7 @@ test("makeExecuteRun: aborts a running setup command before starting sessions", 
         },
       }),
     );
-    const executeRun = makeExecuteRun(ports, {
+    const executeRun = makeTestExecuteRun(ports, {
       beginRun: () => emptyChannel(),
       endRun: () => {},
     });
@@ -630,20 +1152,14 @@ test("makeExecuteRun: real fresh queue path — reads the live run packet", () =
     const tmp = await mkdtempP(join(tmpdir(), "exec-fresh-queue-"));
     const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
 
-    // Write the live packet directly (admitQueue writes it here).
-    const paths = makePaths(tmp);
-    mkdirSync(paths.runDir(RUN_ID), { recursive: true });
-    writeFileSync(paths.packetFile(RUN_ID), PACKET_RAW);
-
-    // Simulate what run-loop does: initMetaFromQueue → writeMeta as running.
-    const meta = store.initMetaFromQueue(RUN_ID);
-    ok(meta, "initMetaFromQueue produced a RunMeta from the queue packet");
+    store.admitQueue(RUN_ID, PACKET_RAW);
+    const meta = store.readMeta(RUN_ID);
     equal(meta.repo, "/tmp/test-repo");
     equal(meta.base, "main");
     equal(meta.branch, `meridian/${RUN_ID}`);
     equal(meta.worktree, join(tmp, "runs", RUN_ID, "worktree"));
     equal(meta.babyModel, "codestral-latest", "babyModel persisted from queue packet into meta");
-    store.writeMeta({ ...meta, status: "running" as const, updatedAt: "2026-01-01T00:00:00.000Z" });
+    store.claimNextQueuedRun([]);
 
     const channel = emptyChannel();
     const executor = scriptedExecutor(channel, [
@@ -665,7 +1181,7 @@ test("makeExecuteRun: real fresh queue path — reads the live run packet", () =
       endRun: (_ref, _runId) => {},
     };
 
-    const executeRun = makeExecuteRun(ports, bridge);
+    const executeRun = makeTestExecuteRun(ports, bridge);
     await executeRun(
       RUN_ID,
       {
@@ -700,10 +1216,10 @@ test("makeExecuteRun: resume → reuses prior Daddy session ID, refreshes gate",
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "exec-resume-"));
     const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
-    store.admitQueue(RUN_ID, PACKET_RAW);
+    admitAndClaim(store);
 
     // Prior meta from the previous run session.
-    store.writeMeta({
+    replaceMeta(store, {
       runId: RUN_ID,
       status: "queued",
       attempt: 1,
@@ -716,11 +1232,17 @@ test("makeExecuteRun: resume → reuses prior Daddy session ID, refreshes gate",
       stallRetries: 0,
       crashRetries: 0,
       reorientRetries: 2,
-      reviewerUnreachable: 0,
       promoted: false,
       pass: 1,
+      startedAt: "2025-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
+    const activateRunStartup = store.activateRunStartup.bind(store);
+    let activeStartedAt: string | undefined;
+    store.activateRunStartup = (operation, transition) => {
+      activeStartedAt = transition.activeRun?.startedAt ?? activeStartedAt;
+      return activateRunStartup(operation, transition);
+    };
     // Prior gate state.
     store.writeGateState(
       RUN_ID,
@@ -790,7 +1312,7 @@ test("makeExecuteRun: resume → reuses prior Daddy session ID, refreshes gate",
       endRun: (_ref, _runId) => {},
     };
 
-    const executeRun = makeExecuteRun(ports, bridge);
+    const executeRun = makeTestExecuteRun(ports, bridge);
     await executeRun(
       RUN_ID,
       {
@@ -805,9 +1327,14 @@ test("makeExecuteRun: resume → reuses prior Daddy session ID, refreshes gate",
 
     const meta = store.readMeta(RUN_ID);
     equal(meta.status, "blocked");
-    equal(meta.attempt, 2, "resume increments attempt");
+    equal(meta.attempt, 1, "execution preserves the attempt acquired by the queue claim");
     equal(meta.daddySessionId, "daddy-prior", "resume preserves prior Daddy session ID");
     equal(meta.babySessionId, "baby-1", "new Baby session created");
+    equal(meta.startedAt, "2025-01-01T00:00:00.000Z", "run history keeps its original start");
+    ok(
+      activeStartedAt && activeStartedAt !== meta.startedAt,
+      "active claim receives a fresh timestamp",
+    );
     equal(
       handshakeCalled,
       false,
@@ -831,9 +1358,9 @@ test("makeExecuteRun: resume replaces stale Daddy session before reconciliation"
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "exec-stale-daddy-"));
     const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
-    store.admitQueue(RUN_ID, PACKET_RAW);
+    admitAndClaim(store);
 
-    store.writeMeta({
+    replaceMeta(store, {
       runId: RUN_ID,
       status: "queued",
       attempt: 1,
@@ -846,7 +1373,6 @@ test("makeExecuteRun: resume replaces stale Daddy session before reconciliation"
       stallRetries: 0,
       crashRetries: 0,
       reorientRetries: 0,
-      reviewerUnreachable: 0,
       promoted: false,
       pass: 1,
       updatedAt: "2026-01-01T00:00:00.000Z",
@@ -874,9 +1400,12 @@ test("makeExecuteRun: resume replaces stale Daddy session before reconciliation"
 
     let resumeCalled = false;
     let handshakeCalled = false;
+    let handshakeSignal: AbortSignal | undefined;
+    const controller = new AbortController();
     const planner: Planner = {
-      handshake: async () => {
+      handshake: async (_seed, _directory, signal) => {
         handshakeCalled = true;
+        handshakeSignal = signal;
         return "daddy-new";
       },
       resumeSession: async () => {
@@ -936,7 +1465,7 @@ test("makeExecuteRun: resume replaces stale Daddy session before reconciliation"
       endRun: (_ref, _runId) => {},
     };
 
-    const executeRun = makeExecuteRun(ports, bridge);
+    const executeRun = makeTestExecuteRun(ports, bridge);
     await executeRun(
       RUN_ID,
       {
@@ -947,12 +1476,14 @@ test("makeExecuteRun: resume replaces stale Daddy session before reconciliation"
       },
       {},
       ports.clock,
+      controller.signal,
     );
 
     const meta = store.readMeta(RUN_ID);
     equal(meta.daddySessionId, "daddy-new");
     equal(resumeCalled, false, "stale Daddy session is not resumed");
     equal(handshakeCalled, true, "fresh Daddy handshake replaces stale session");
+    strictEqual(handshakeSignal, controller.signal);
     equal(abortCalled, true, "stale Daddy session is aborted");
     equal(deleteCalled, true, "stale Daddy session is deleted");
     const journal = store.readJournal(RUN_ID);
@@ -969,9 +1500,9 @@ test("makeExecuteRun: resume without checkpoint but prior accepted reconciliatio
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "exec-recon-"));
     const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
-    store.admitQueue(RUN_ID, PACKET_RAW);
+    admitAndClaim(store);
 
-    store.writeMeta({
+    replaceMeta(store, {
       runId: RUN_ID,
       status: "queued",
       attempt: 1,
@@ -984,7 +1515,6 @@ test("makeExecuteRun: resume without checkpoint but prior accepted reconciliatio
       stallRetries: 0,
       crashRetries: 0,
       reorientRetries: 0,
-      reviewerUnreachable: 0,
       promoted: false,
       pass: 1,
       updatedAt: "2026-01-01T00:00:00.000Z",
@@ -1067,7 +1597,7 @@ test("makeExecuteRun: resume without checkpoint but prior accepted reconciliatio
       endRun: (_ref, _runId) => {},
     };
 
-    const executeRun = makeExecuteRun(ports, bridge);
+    const executeRun = makeTestExecuteRun(ports, bridge);
     await executeRun(
       RUN_ID,
       {
@@ -1112,9 +1642,14 @@ test("makeExecuteRun: invalid queue packet → meta failed, no throw", () => {
       stallRetries: 0,
       crashRetries: 0,
       reorientRetries: 0,
-      reviewerUnreachable: 0,
       promoted: false,
       pass: 1,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    store.persistRunStartup({
+      runId: RUN_ID,
+      attempt: 1,
+      phase: "claimed",
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
 
@@ -1123,7 +1658,7 @@ test("makeExecuteRun: invalid queue packet → meta failed, no throw", () => {
       beginRun: () => emptyChannel(),
       endRun: (_ref, _runId) => {},
     };
-    const executeRun = makeExecuteRun(ports, bridge);
+    const executeRun = makeTestExecuteRun(ports, bridge);
 
     await executeRun(
       RUN_ID,
@@ -1146,10 +1681,10 @@ test("makeExecuteRun: run with prior meta but no baby session → fresh", () => 
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "exec-fresh-no-baby-"));
     const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
-    store.admitQueue(RUN_ID, PACKET_RAW);
+    admitAndClaim(store);
 
     // Prior meta WITHOUT a babySessionId (e.g. a crashed run where baby session was lost).
-    store.writeMeta({
+    replaceMeta(store, {
       runId: RUN_ID,
       status: "queued",
       attempt: 1,
@@ -1161,7 +1696,6 @@ test("makeExecuteRun: run with prior meta but no baby session → fresh", () => 
       stallRetries: 0,
       crashRetries: 0,
       reorientRetries: 0,
-      reviewerUnreachable: 0,
       promoted: false,
       pass: 1,
       updatedAt: "2026-01-01T00:00:00.000Z",
@@ -1187,7 +1721,7 @@ test("makeExecuteRun: run with prior meta but no baby session → fresh", () => 
       endRun: (_ref, _runId) => {},
     };
 
-    const executeRun = makeExecuteRun(ports, bridge);
+    const executeRun = makeTestExecuteRun(ports, bridge);
     await executeRun(
       RUN_ID,
       {
@@ -1202,7 +1736,7 @@ test("makeExecuteRun: run with prior meta but no baby session → fresh", () => 
 
     const meta = store.readMeta(RUN_ID);
     equal(meta.status, "blocked");
-    equal(meta.attempt, 2);
+    equal(meta.attempt, 1);
     // The ledger + gate were initialised (fresh state).
     equal(store.readLedger(RUN_ID).outcomes.length, 1);
     // The first seed was Q1 (fresh).
@@ -1283,10 +1817,15 @@ new body
       stallRetries: 0,
       crashRetries: 0,
       reorientRetries: 0,
-      reviewerUnreachable: 0,
       promoted: false,
       pass: 1,
       updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    store.persistRunStartup({
+      runId: RUN_ID,
+      attempt: 1,
+      phase: "claimed",
+      updatedAt: clock.nowIso(),
     });
 
     const channel = emptyChannel();
@@ -1309,7 +1848,7 @@ new body
       endRun: (_ref, _runId) => {},
     };
 
-    const executeRun = makeExecuteRun(ports, bridge);
+    const executeRun = makeTestExecuteRun(ports, bridge);
     await executeRun(
       RUN_ID,
       {
@@ -1388,10 +1927,15 @@ new body
       stallRetries: 0,
       crashRetries: 0,
       reorientRetries: 0,
-      reviewerUnreachable: 0,
       promoted: false,
       pass: 1,
       updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    store.persistRunStartup({
+      runId: RUN_ID,
+      attempt: 1,
+      phase: "claimed",
+      updatedAt: clock.nowIso(),
     });
 
     const channel = emptyChannel();
@@ -1414,7 +1958,7 @@ new body
       endRun: (_ref, _runId) => {},
     };
 
-    const executeRun = makeExecuteRun(ports, bridge);
+    const executeRun = makeTestExecuteRun(ports, bridge);
     await executeRun(
       RUN_ID,
       {
@@ -1471,7 +2015,18 @@ new body
       endRun: (_ref, _runId) => {},
     };
 
-    const executeRun2 = makeExecuteRun(ports2, bridge2);
+    const priorLease = store.listRepositoryLeases().at(0);
+    if (priorLease) {
+      store.releaseRepositoryLease(priorLease);
+    }
+    replaceMeta(store, {
+      ...store.readMeta(RUN_ID),
+      status: "queued",
+      updatedAt: ports2.clock.nowIso(),
+    });
+    ok(store.claimNextQueuedRun([]));
+
+    const executeRun2 = makeTestExecuteRun(ports2, bridge2);
     await executeRun2(
       RUN_ID,
       {

@@ -19,7 +19,7 @@
     "@lathe/core": "workspace:*",
     "@lathe/contract": "workspace:*",
     "hono": "^4.6.0",
-    "rivet-ts": "github:maxanstey-meridian/rivet-ts#v0.11.1"
+    "rivet-ts": "github:maxanstey-meridian/rivet-ts#v0.12.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

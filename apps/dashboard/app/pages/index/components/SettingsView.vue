@@ -7,8 +7,16 @@ import { injectLatheSettings } from "../ports/lathe-settings";
 
 const settings = injectLatheSettings();
 
+const optionalNumberDefaults: Record<string, number> = {
+  idleTimeoutMs: 120_000,
+  "superdaddy.headerTimeoutMs": 3_600_000,
+};
+const priorOptionalNumbers = new Map<string, number>();
+const numberErrors = ref<Record<string, string>>({});
+
 onMounted(async () => {
   await settings.load();
+  priorOptionalNumbers.clear();
   hydrateReposText();
 });
 
@@ -86,7 +94,36 @@ const setNested = (obj: unknown, path: string, value: unknown): void => {
 // ── Event helpers for template ──
 const onNumberInput = (fieldPath: string, event: Event): void => {
   const value = (event.target as HTMLInputElement).value;
-  handleFieldInput(fieldPath, parseNumber(value));
+  const parsed = parseNumber(value);
+  if (parsed === null) {
+    numberErrors.value = { ...numberErrors.value, [fieldPath]: "Enter a valid number" };
+    return;
+  }
+  clearNumberError(fieldPath);
+  handleFieldInput(fieldPath, parsed);
+};
+
+const clearNumberError = (fieldPath: string): void => {
+  const { [fieldPath]: _cleared, ...remaining } = numberErrors.value;
+  numberErrors.value = remaining;
+};
+
+const onOptionalNumberToggle = (fieldPath: string, event: Event): void => {
+  const enabled = (event.target as HTMLInputElement).checked;
+  const current = getNested(settings.draft.value, fieldPath);
+  if (!enabled) {
+    clearNumberError(fieldPath);
+    if (typeof current === "number") priorOptionalNumbers.set(fieldPath, current);
+    handleFieldInput(fieldPath, false);
+    return;
+  }
+
+  const loaded = getNested(settings.loaded.value, fieldPath);
+  handleFieldInput(
+    fieldPath,
+    priorOptionalNumbers.get(fieldPath)
+      ?? (typeof loaded === "number" ? loaded : optionalNumberDefaults[fieldPath]),
+  );
 };
 
 const onSelectChange = (fieldPath: string, event: Event): void => {
@@ -101,7 +138,7 @@ const onCheckboxChange = (fieldPath: string, event: Event): void => {
 
 const onTextInput = (fieldPath: string, event: Event): void => {
   const value = (event.target as HTMLInputElement).value;
-  handleFieldInput(fieldPath, value);
+  handleFieldInput(fieldPath, fieldPath === "superdaddy.baseUrl" && value === "" ? null : value);
 };
 
 const onTextareaInput = (fieldPath: string, event: Event): void => {
@@ -176,11 +213,12 @@ const updateRepos = (val: string): void => {
 const showRestartConfirm = ref(false);
 
 const handleSave = async (): Promise<void> => {
-  if (settings.reposParseError.value) {
+  if (settings.reposParseError.value || Object.keys(numberErrors.value).length > 0) {
     return;
   }
-  await settings.save();
-  hydrateReposText();
+  const saved = await settings.save();
+  if (saved) priorOptionalNumbers.clear();
+  if (!settings.reposParseError.value) hydrateReposText();
 };
 
 const handleRestart = async (): Promise<void> => {
@@ -211,6 +249,8 @@ const handlePromoteToggle = (event: Event): void => {
 };
 
 const handleDiscard = (): void => {
+  priorOptionalNumbers.clear();
+  numberErrors.value = {};
   settings.resetDraft();
   hydrateReposText();
 };
@@ -243,6 +283,14 @@ watch(
       color="success"
       variant="soft"
       :title="settings.success.value"
+    />
+
+    <UAlert
+      v-if="settings.restartRequired.value"
+      class="shrink-0 rounded-none"
+      color="warning"
+      variant="soft"
+      title="Saved settings require a daemon restart before they take effect."
     />
 
     <!-- Loading state -->
@@ -280,13 +328,39 @@ watch(
                 <!-- Input area (span remaining cols) -->
                 <div class="sm:col-span-2">
                   <!-- Number input -->
-                  <input
-                    v-if="field.type === 'number'"
-                    :value="getNested(settings.draft.value, field.name)"
-                    @input="onNumberInput(field.name, $event)"
-                    type="number"
-                    class="w-full rounded-md border border-slate-700 bg-slate-800 px-3 py-1.5 text-sm text-slate-200 placeholder-slate-600 focus:border-cyan-500 focus:outline-none"
-                  />
+                  <template v-if="field.type === 'number'">
+                    <input
+                      :value="getNested(settings.draft.value, field.name)"
+                      @input="onNumberInput(field.name, $event)"
+                      type="number"
+                      class="w-full rounded-md border border-slate-700 bg-slate-800 px-3 py-1.5 text-sm text-slate-200 placeholder-slate-600 focus:border-cyan-500 focus:outline-none"
+                    />
+                    <p v-if="numberErrors[field.name]" class="mt-1 text-xs text-red-400">
+                      {{ numberErrors[field.name] }}
+                    </p>
+                  </template>
+
+                  <template v-else-if="field.type === 'numberOrFalse'">
+                    <div class="flex items-center gap-3">
+                      <input
+                        :checked="getNested(settings.draft.value, field.name) !== false"
+                        :aria-label="`Enable ${field.label}`"
+                        @change="onOptionalNumberToggle(field.name, $event)"
+                        type="checkbox"
+                        class="h-4 w-4 rounded border-slate-700 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
+                      />
+                      <input
+                        :value="getNested(settings.draft.value, field.name) === false ? '' : getNested(settings.draft.value, field.name)"
+                        :disabled="getNested(settings.draft.value, field.name) === false"
+                        @input="onNumberInput(field.name, $event)"
+                        type="number"
+                        class="w-full rounded-md border border-slate-700 bg-slate-800 px-3 py-1.5 text-sm text-slate-200 placeholder-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                      />
+                    </div>
+                    <p v-if="numberErrors[field.name]" class="mt-1 text-xs text-red-400">
+                      {{ numberErrors[field.name] }}
+                    </p>
+                  </template>
 
                   <!-- Select -->
                   <select
@@ -439,7 +513,7 @@ watch(
               color="primary"
               variant="soft"
               :loading="settings.saving.value"
-              :disabled="!settings.dirty.value"
+              :disabled="!settings.dirty.value || !!settings.reposParseError.value || Object.keys(numberErrors).length > 0"
               @click="handleSave"
             >
               Save
@@ -469,7 +543,7 @@ watch(
       <template #body>
         <div class="space-y-3">
           <p class="text-sm text-slate-400">
-            Are you sure you want to restart the daemon? This will briefly interrupt all active runs.
+            Are you sure you want to restart the daemon? Active runs will be stopped and must be requeued manually.
           </p>
           <div class="flex justify-end gap-2">
             <UButton

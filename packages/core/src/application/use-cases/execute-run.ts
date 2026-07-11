@@ -25,6 +25,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { TurnResponse } from "../../domain/agent-response.js";
 import { priorReconciliationAccepted, rotationGateState } from "../../domain/gate-decisions.js";
 import { initialGateState } from "../../domain/gate.js";
+import { RunStartupOperation } from "../../domain/operations.js";
 import { parsePacketShape } from "../../domain/packet.js";
 import type { Packet } from "../../domain/packet.js";
 import {
@@ -36,6 +37,8 @@ import {
 } from "../../domain/prompts.js";
 import { renderReportMarkdown } from "../../domain/report.js";
 import { decideRunStart } from "../../domain/run.js";
+import type { RepositoryLease } from "../ports/store.js";
+import { keepRepositoryLease } from "./repository-lease-keeper.js";
 import type { ExecuteRunCallback } from "./run-loop.js";
 import {
   journal,
@@ -189,6 +192,7 @@ const replaceStaleDaddySession = async (
   packet: Packet,
   worktree: string,
   staleSessionId: string,
+  signal?: AbortSignal,
 ): Promise<string> => {
   const { executor, planner } = ports;
   try {
@@ -202,17 +206,20 @@ const replaceStaleDaddySession = async (
     /* best effort: stale session cleanup is not required for correctness */
   }
 
-  return planner.handshake(renderDaddySeed(packet.raw), worktree);
+  return planner.handshake(renderDaddySeed(packet.raw), worktree, signal);
 };
 
 export const makeExecuteRun =
   <Ref>(ports: RunPorts, bridge: BridgeBinding<Ref>): ExecuteRunCallback<Ref> =>
-  async (runId, runMeta, ref, _clock, signal): Promise<void> => {
-    // Snapshot config for this run — configSource is refreshed by PUT /settings,
-    // so each run sees the latest repos[*].seed, thresholds, etc.
+  async (runId, runMeta, ref, _clock, signal, lease): Promise<void> => {
+    // Runtime config is the daemon startup snapshot; persisted settings take
+    // effect after the explicit restart reported by PUT /settings.
     const config = ports.configSource.get();
     const { store, repo, executor, planner, clock } = ports;
     const { repo: repoPath, worktree, base, branch } = runMeta as RunMetaPaths;
+    if (!lease) {
+      throw new Error(`executeRun requires repository lease ownership for ${runId}`);
+    }
 
     const priorMeta = store.readMetaIfExists(runId);
     const queuePacket = store.readQueuePacket(runId);
@@ -225,24 +232,56 @@ export const makeExecuteRun =
     const shape = parsePacketShape(raw, runId);
     if (!shape.ok) {
       if (priorMeta) {
-        store.writeMeta({ ...priorMeta, status: "failed", updatedAt: clock.nowIso() });
+        store.transitionRun({
+          runId,
+          expectedRevision: priorMeta.revision ?? 0,
+          expectedStatuses: [priorMeta.status],
+          meta: { ...priorMeta, status: "failed", updatedAt: clock.nowIso() },
+          ...(lease ? { lease } : {}),
+        });
       }
       return;
     }
     const packet = shape.packet;
 
     const isResume = startDecision.mode === "resume";
-    const attempt = (priorMeta?.attempt ?? 0) + 1;
+    const attempt = priorMeta?.attempt ?? 1;
+    let startup = store.readRunStartup(runId, attempt);
+    if (!startup) {
+      throw new Error(`missing startup operation for ${runId}/${attempt}`);
+    }
 
-    if (!isResume) {
+    const advanceStartup = (
+      phase: RunStartupOperation["phase"],
+      fields: Record<string, unknown> = {},
+    ): void => {
+      startup = RunStartupOperation.parse({
+        ...startup,
+        ...fields,
+        phase,
+        updatedAt: clock.nowIso(),
+      });
+      store.persistRunStartup(startup, lease);
+    };
+
+    if (
+      startup.phase === "setup_started" ||
+      startup.phase === "planner_session_started" ||
+      startup.phase === "executor_session_started"
+    ) {
+      throw new Error(
+        `${startup.phase} may have completed before interruption; refusing ambiguous replay`,
+      );
+    }
+
+    if (!isResume && startup.phase === "claimed") {
       // Fresh: clear stale resume artifacts from a prior session, then seed
       // fresh durable state so a later unchanged-packet pickup cannot resume
       // from pre-fresh checkpoint/decision/review state.
-      store.clearResumeArtifacts(runId);
-      store.writeLedger(store.initialLedger(packet));
-      store.replaceObligations(runId, []);
-      store.writeGateState(
-        runId,
+      store.initializeRunStartup(
+        startup,
+        store.initialLedger(packet),
+        store.initialReviewState(runId),
         initialGateState(
           runId,
           packet.frontmatter.expected_surface,
@@ -256,7 +295,11 @@ export const makeExecuteRun =
           },
           clock.nowIso(),
         ),
+        lease,
       );
+      startup = store.readRunStartup(runId, attempt)!;
+    }
+    if (!isResume && startup.phase === "state_initialized") {
       // A self-rooted clone: opencode roots on the sandbox, never climbing a
       // worktree linkage back into the source repo. Resume reuses the sandbox.
       repo.createSandbox(repoPath, worktree, branch, base);
@@ -279,6 +322,9 @@ export const makeExecuteRun =
           writeFileSync(dst, content);
         }
       }
+      advanceStartup("sandbox_ready");
+    }
+    if (!isResume && startup.phase === "sandbox_ready") {
       const setup = config.repos[repoPath]?.setup;
       if (setup) {
         for (const command of setup.commands) {
@@ -286,6 +332,7 @@ export const makeExecuteRun =
             event: "driver_note",
             note: `setup: ${command.command}`,
           });
+          advanceStartup("setup_started");
           await runSetupCommand(
             command.command,
             worktree,
@@ -295,7 +342,8 @@ export const makeExecuteRun =
           );
         }
       }
-    } else {
+      advanceStartup("setup_completed");
+    } else if (isResume && startup.phase === "claimed") {
       // Resume: REFRESH config-derived gate fields (cadence + mutation patterns)
       // from current config; preserve run-state (phase, baseline,
       // lastAcceptedDecisionAt).
@@ -308,6 +356,7 @@ export const makeExecuteRun =
         checkpointLoc: config.thresholds.checkpointLoc,
         mutationCommandPatterns: config.mutationCommandPatterns,
       });
+      advanceStartup("setup_completed");
     }
 
     if (signal?.aborted) {
@@ -316,18 +365,22 @@ export const makeExecuteRun =
 
     // Daddy: ONE session for the run's whole life (M6). The adapter creates a
     // fresh one or resumes the prior session that already holds the packet.
-    let daddySessionId: string;
-    if (isResume && priorMeta?.daddySessionId) {
+    let daddySessionId = "plannerSessionId" in startup ? startup.plannerSessionId : undefined;
+    if (daddySessionId) {
+      daddySessionId = await planner.resumeSession(daddySessionId);
+    } else if (isResume && priorMeta?.daddySessionId) {
       if (await daddySessionIsStale(executor, priorMeta.daddySessionId)) {
         journal(ports, runId, 0, {
           event: "driver_note",
           note: `replacing stale Daddy session ${priorMeta.daddySessionId}`,
         });
+        advanceStartup("planner_session_started");
         daddySessionId = await replaceStaleDaddySession(
           ports,
           packet,
           worktree,
           priorMeta.daddySessionId,
+          signal,
         );
         journal(ports, runId, 0, {
           event: "driver_note",
@@ -337,42 +390,63 @@ export const makeExecuteRun =
         daddySessionId = await planner.resumeSession(priorMeta.daddySessionId);
       }
     } else {
-      daddySessionId = await planner.handshake(renderDaddySeed(packet.raw), worktree);
+      advanceStartup("planner_session_started");
+      daddySessionId = await planner.handshake(renderDaddySeed(packet.raw), worktree, signal);
     }
-    const babySessionId = await executor.createSession(`baby:${runId}`, worktree);
+    if (
+      startup.phase !== "planner_session_created" &&
+      startup.phase !== "executor_session_created"
+    ) {
+      advanceStartup("planner_session_created", { plannerSessionId: daddySessionId });
+    }
+    const existingExecutorSessionId =
+      "executorSessionId" in startup ? startup.executorSessionId : undefined;
+    if (!existingExecutorSessionId) {
+      advanceStartup("executor_session_started");
+    }
+    const babySessionId =
+      existingExecutorSessionId ?? (await executor.createSession(`baby:${runId}`, worktree));
+    if (!existingExecutorSessionId) {
+      advanceStartup("executor_session_created", { executorSessionId: babySessionId });
+    }
 
-    store.writeMeta({
+    const startedAt = priorMeta?.startedAt ?? clock.nowIso();
+    const activeStartedAt = clock.nowIso();
+    store.activateRunStartup(startup, {
       runId,
-      status: "running",
-      attempt,
-      repo: repoPath,
-      base,
-      branch,
-      worktree,
-      summary: packet.frontmatter.summary,
-      babySessionId,
-      daddySessionId,
-      campaignId: priorMeta?.campaignId,
-      pass: priorMeta?.pass ?? 1,
-      stallRetries: priorMeta?.stallRetries ?? 0,
-      crashRetries: priorMeta?.crashRetries ?? 0,
-      reorientRetries: priorMeta?.reorientRetries ?? 0,
-      reviewerUnreachable: priorMeta?.reviewerUnreachable ?? 0,
-      // Carry the strong-model promotion across the requeue/resume — turn-loop
-      // reads this to start on the promoted model.
-      promoted: priorMeta?.promoted ?? false,
-      babyModel: priorMeta?.babyModel,
-      startedAt: priorMeta?.startedAt ?? clock.nowIso(),
-      updatedAt: clock.nowIso(),
+      expectedRevision: priorMeta?.revision ?? 0,
+      expectedStatuses: ["queued", "running"],
+      meta: {
+        runId,
+        status: "running",
+        attempt,
+        repo: repoPath,
+        base,
+        branch,
+        worktree,
+        summary: packet.frontmatter.summary,
+        babySessionId,
+        daddySessionId,
+        campaignId: priorMeta?.campaignId,
+        pass: priorMeta?.pass ?? 1,
+        stallRetries: priorMeta?.stallRetries ?? 0,
+        crashRetries: priorMeta?.crashRetries ?? 0,
+        reorientRetries: priorMeta?.reorientRetries ?? 0,
+        promoted: priorMeta?.promoted ?? false,
+        babyModel: priorMeta?.babyModel,
+        startedAt,
+        updatedAt: clock.nowIso(),
+      },
+      activeRun: {
+        runId,
+        runDir: dirname(worktree),
+        worktree,
+        babySessionId,
+        startedAt: activeStartedAt,
+      },
+      event: { at: clock.nowIso(), turn: 0, event: "run_started", runId, attempt },
+      lease,
     });
-    store.addActiveRun({
-      runId,
-      runDir: dirname(worktree),
-      worktree,
-      babySessionId,
-      startedAt: clock.nowIso(),
-    });
-    journal(ports, runId, 0, { event: "run_started", runId, attempt });
 
     // Seed choice: fresh → Q1; resume with a checkpoint → Q2; resume without
     // but prior reconciliation was accepted → Q8b (skip redundant recon);
@@ -458,12 +532,13 @@ export const makeExecuteRun =
         seed,
         deadlineMs,
         signal,
+        lease,
       );
     } finally {
       bridge.endRun(ref, packet.runId);
     }
 
-    finalizeRun(ports, runId, worktree, result);
+    finalizeRun(ports, runId, worktree, result, lease);
   };
 
 // ---------------------------------------------------------------------------
@@ -476,50 +551,75 @@ const finalizeRun = (
   runId: string,
   worktree: string,
   result: TurnLoopResult,
+  lease: RepositoryLease,
 ): void => {
   const { store, repo, clock } = ports;
   const { outcome } = result;
+  const keeper = keepRepositoryLease(store, lease);
 
-  const sha = repo.wipCommit(worktree, `lathe: WIP ${runId} [${outcome.status}]`);
+  const sha = keeper.effect(() =>
+    repo.wipCommit(worktree, `lathe: WIP ${runId} [${outcome.status}]`),
+  );
   if (sha) {
-    journal(ports, runId, 0, {
-      event: "committed",
-      sha,
-      message: `lathe: WIP ${runId} [${outcome.status}]`,
-    });
+    keeper.effect(() =>
+      journal(ports, runId, 0, {
+        event: "committed",
+        sha,
+        message: `lathe: WIP ${runId} [${outcome.status}]`,
+      }),
+    );
   }
 
   if (outcome.status === "ready_for_review" && result.acceptedReport) {
     const markdown = renderReportMarkdown(result.acceptedReport, runId, result.finalReview);
-    store.writeReport(runId, result.acceptedReport, markdown);
+    keeper.effect(() => store.writeReport(runId, result.acceptedReport!, markdown));
   }
 
+  keeper.renew();
   const meta = store.readMeta(runId);
   if (outcome.status === "blocked") {
-    journal(ports, runId, 0, {
-      event: "parked",
-      reason: outcome.reason,
-      question: outcome.question,
-    });
-    store.writeMeta({
-      ...meta,
-      status: "blocked",
-      blockedReason: outcome.reason,
-      blockedQuestion: outcome.question,
-      endedAt: clock.nowIso(),
-      updatedAt: clock.nowIso(),
-    });
+    keeper.effect(() =>
+      store.transitionRun({
+        runId,
+        expectedRevision: meta.revision ?? 0,
+        expectedStatuses: ["running"],
+        meta: {
+          ...meta,
+          status: "blocked",
+          blockedReason: outcome.reason,
+          blockedQuestion: outcome.question,
+          endedAt: clock.nowIso(),
+          updatedAt: clock.nowIso(),
+        },
+        activeRun: null,
+        lease: keeper.current(),
+        event: {
+          at: clock.nowIso(),
+          turn: 0,
+          event: "parked",
+          reason: outcome.reason,
+          question: outcome.question,
+        },
+      }),
+    );
   } else {
     if (outcome.status === "failed") {
-      journal(ports, runId, 0, { event: "driver_note", note: outcome.note });
+      keeper.effect(() => journal(ports, runId, 0, { event: "driver_note", note: outcome.note }));
     }
-    store.writeMeta({
-      ...meta,
-      status: outcome.status,
-      endedAt: clock.nowIso(),
-      updatedAt: clock.nowIso(),
-    });
+    keeper.effect(() =>
+      store.transitionRun({
+        runId,
+        expectedRevision: meta.revision ?? 0,
+        expectedStatuses: ["running"],
+        meta: {
+          ...meta,
+          status: outcome.status,
+          endedAt: clock.nowIso(),
+          updatedAt: clock.nowIso(),
+        },
+        activeRun: null,
+        lease: keeper.current(),
+      }),
+    );
   }
-
-  store.removeActiveRun(runId);
 };

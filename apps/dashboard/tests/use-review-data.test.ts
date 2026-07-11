@@ -2,7 +2,7 @@ import { test, expect } from "vitest";
 import { computed, defineComponent, nextTick, ref, type Ref } from "vue";
 import { mount } from "@vue/test-utils";
 
-import type { LatheStatus, StatusDto } from "../app/pages/index/ports/lathe-status";
+import type { LatheStatus, LatheStatusSnapshot } from "../app/pages/index/ports/lathe-status";
 import { useReviewData } from "../app/pages/index/composables/useReviewData";
 
 type ReviewRun = {
@@ -25,7 +25,7 @@ const makeReviewRun = (runId: string, status: string): ReviewRun => ({
   blockedQuestion: null,
 });
 
-const makeStatus = (): StatusDto => ({
+const makeStatus = (): LatheStatusSnapshot => ({
   activeRuns: [],
   queued: [],
   parked: [],
@@ -37,7 +37,7 @@ const makeStatus = (): StatusDto => ({
   },
 });
 
-const makeLatheStatus = (status: Ref<StatusDto | null>): LatheStatus => ({
+const makeLatheStatus = (status: Ref<LatheStatusSnapshot | null>): LatheStatus => ({
   status,
   isLoading: ref(false),
   errorMessage: ref(null),
@@ -53,7 +53,7 @@ const flush = async (): Promise<void> => {
 };
 
 const mountReviewDataHarness = (loadReviewRuns: () => Promise<ReviewRun[]> | ReviewRun[]) => {
-  const status = ref<StatusDto | null>(null);
+  const status = ref<LatheStatusSnapshot | null>(null);
   let api: ReturnType<typeof useReviewData> | undefined;
 
   const Harness = defineComponent({

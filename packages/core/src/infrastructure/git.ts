@@ -5,7 +5,18 @@
 // anything carrying a path or ref (refs and paths pass verbatim).
 
 import { spawnSync } from "child_process";
-import { existsSync, readFileSync, rmSync, statSync, realpathSync } from "fs";
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  rmSync,
+  statSync,
+  realpathSync,
+} from "fs";
 import { createHash } from "node:crypto";
 import { join, dirname, relative, isAbsolute, sep } from "path";
 import type { ReconciliationGitState } from "../domain/reconciliation.js";
@@ -59,28 +70,41 @@ export const createSandbox = (
 // at the parent's commits. `lathe accept` does the same fetch before fetching
 // into the source repo.
 //
-// Skips the fetch when the branch already exists in the repo — this happens in
-// chained accepts where a child run was accepted into this branch first,
-// leaving the repo's copy ahead of the sandbox's stale ref.
-//
-// `force` overrides the skip: accept uses it to always pull the sandbox tip,
-// avoiding a stale local ref when the sandbox branch advanced or was amended
-// after a prior convergence fetch.
+// Publication is compare-and-swap: callers must supply the exact source ref they
+// observed (null means absent) and the exact clone commit they intend to publish.
 export const fetchBranchFromClone = (
   repo: string,
   clone: string,
   branch: string,
-  force = false,
+  expectedOldSha: string | null,
+  expectedNewSha: string,
 ): void => {
-  if (!force) {
-    try {
-      git(repo, ["rev-parse", "--verify", branch]);
-      return;
-    } catch {
-      /* branch not in repo yet — fetch from clone */
+  const destinationRef = `refs/heads/${branch}`;
+  git(repo, ["check-ref-format", destinationRef]);
+  const cloneSha = git(clone, ["rev-parse", "--verify", `${branch}^{commit}`]);
+  if (cloneSha !== expectedNewSha) {
+    throw new Error(
+      `refusing to publish ${branch}: clone resolved to ${cloneSha}, expected ${expectedNewSha}`,
+    );
+  }
+  if (expectedOldSha !== expectedNewSha) {
+    const fields = git(repo, ["worktree", "list", "--porcelain", "-z"]).split("\0");
+    let worktree = repo;
+    for (const field of fields) {
+      if (field.startsWith("worktree ")) {
+        worktree = field.slice("worktree ".length);
+      } else if (field === `branch ${destinationRef}`) {
+        throw new Error(`refusing to move ${branch}: checked out in source worktree ${worktree}`);
+      }
     }
   }
-  git(repo, ["fetch", clone, `${force ? "+" : ""}${branch}:${branch}`]);
+  git(repo, ["fetch", "--no-write-fetch-head", clone, branch]);
+  git(repo, [
+    "update-ref",
+    destinationRef,
+    expectedNewSha,
+    expectedOldSha ?? "0000000000000000000000000000000000000000",
+  ]);
 };
 
 // Guarded teardown. `rm -rf` is a footgun, so this refuses unless the target is
@@ -326,6 +350,28 @@ export const reviewableDiffAgainst = (worktree: string, base: string, maxBytes: 
 const sha256 = (content: string | Buffer): string =>
   createHash("sha256").update(content).digest("hex");
 
+const sha256RegularFile = (path: string): string => {
+  if (!lstatSync(path).isFile()) {
+    throw new Error(`cannot fingerprint non-regular untracked path: ${path}`);
+  }
+
+  const fd = openSync(path, "r");
+  try {
+    if (!fstatSync(fd).isFile()) {
+      throw new Error(`cannot fingerprint non-regular untracked path: ${path}`);
+    }
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    for (let bytesRead = readSync(fd, buffer, 0, buffer.length, null); bytesRead > 0; ) {
+      hash.update(buffer.subarray(0, bytesRead));
+      bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+    }
+    return hash.digest("hex");
+  } finally {
+    closeSync(fd);
+  }
+};
+
 export const reconciliationGitState = (worktree: string): ReconciliationGitState => {
   const head = git(worktree, ["rev-parse", "HEAD"]);
   const status = git(worktree, ["status", "--porcelain=v1", "-z"])
@@ -343,30 +389,28 @@ export const reconciliationGitState = (worktree: string): ReconciliationGitState
     .map((l) => l.trim())
     .filter(Boolean)
     .filter((f) => !f.startsWith("node_modules/") && !f.includes("/node_modules/"))
-    .flatMap((path) => {
+    .map((path) => {
       const fullPath = join(worktree, path);
-      if (!existsSync(fullPath)) {
-        return [];
-      }
       try {
-        const content = readFileSync(fullPath);
-        if (content.length > 1024 * 1024 || content.includes(0)) {
-          return [];
-        }
-        return [{ path, hash: sha256(content) }];
-      } catch {
-        return [];
+        return { path, hash: sha256RegularFile(fullPath) };
+      } catch (error) {
+        throw new Error(`cannot fingerprint untracked path ${path}`, { cause: error });
       }
     })
     .sort((a, b) => a.path.localeCompare(b.path));
   return {
     head,
+    tree: git(worktree, ["rev-parse", "HEAD^{tree}"]),
+    commitMessage: git(worktree, ["log", "-1", "--format=%B"]),
     status,
     diffHash: sha256(diff),
     untracked,
     changedFiles: [...new Set([...trackedChanged, ...untracked.map((u) => u.path)])].sort(),
   };
 };
+
+export const resolveRevision = (worktree: string, ref: string): string =>
+  git(worktree, ["rev-parse", "--verify", `${ref}^{commit}`]);
 
 // HEAD branch in the worktree — used during admission to stamp the base from
 // current branch when the packet omits it (K1). Throws if the worktree is not
@@ -408,9 +452,15 @@ export const repoValid = (path: string): boolean => {
 // not exist in the source repo (never fetched during convergence), swallow
 // the error and return void.
 export const deleteBranch = (repo: string, branch: string): void => {
+  if (!branchExists(repo, branch)) {
+    return;
+  }
   try {
     git(repo, ["branch", "-D", branch]);
-  } catch {
-    // Branch may not exist in the source repo — best-effort, swallow.
+  } catch (error) {
+    if (!branchExists(repo, branch)) {
+      return;
+    }
+    throw error;
   }
 };

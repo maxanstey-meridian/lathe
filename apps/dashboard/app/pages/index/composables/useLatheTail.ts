@@ -5,13 +5,13 @@ import { onUnmounted, ref, watch } from "vue";
 import { daemonTailEventsUrl, daemonTailRunEventsUrl } from "../logic/daemon-url";
 import type { LatheTail } from "../ports/lathe-tail";
 
-export const useLatheTail = (): LatheTail => {
+export const useLatheTail = (currentTime: () => number): LatheTail => {
   const runtimeConfig = useRuntimeConfig();
   const state = ref(tailStateFromSnapshot(null));
   const isLoading = ref(false);
   const isLive = ref(false);
   const errorMessage = ref<string | null>(null);
-  const now = ref(Date.now());
+  const now = ref(currentTime());
   const selectedRunId = ref<string | null>(null);
 
   let reconnect = (): void => {};
@@ -56,7 +56,7 @@ export const useLatheTail = (): LatheTail => {
         if (ownGeneration !== generation) return;
         const event = JSON.parse(raw.data) as TailEvent;
         errorMessage.value = null;
-        state.value = applyTailEvent(state.value, event, Date.now());
+        state.value = applyTailEvent(state.value, event, currentTime());
         if (event.kind === "tail.run.changed") {
           isLoading.value = false;
         }
@@ -74,7 +74,7 @@ export const useLatheTail = (): LatheTail => {
   connectEventSource();
 
   const timer = setInterval(() => {
-    now.value = Date.now();
+    now.value = currentTime();
   }, 1_000);
 
   onUnmounted(() => {

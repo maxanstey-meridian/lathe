@@ -249,17 +249,28 @@ test("driver projection preserves split chunks independently for concurrent comm
   ]);
 });
 
-test("verdict projection remains part of every authoritative replacement", () => {
+test("authoritative replacements keep transcript and semantic review state separate", () => {
   const projection = createTailPaneProjection(() => "super", () => {});
-  projection.projectVerdict("run", ["verdict: accept (pass 1)", "  no findings"]);
+  projection.mergeVerdict("run", ["verdict: accept (pass 1)", "  no findings"]);
   projection.mergeHistory("run", "super", "reviewer", [{
     info: { id: "message", role: "assistant" },
     parts: [{ id: "text", type: "text", text: "review complete" }],
   }]);
 
-  deepStrictEqual(projection.panes("run").super.map((line) => line.text), [
-    "review complete",
+  deepStrictEqual(projection.panes("run").super.map((line) => line.text), ["review complete"]);
+  deepStrictEqual(projection.acceptanceReviewLines("run"), [
     "verdict: accept (pass 1)",
     "  no findings",
+  ]);
+});
+
+test("verdict projection retains the same newest text as the shared tail reducer", () => {
+  const projection = createTailPaneProjection(() => "super", () => {});
+  const line = `verdict-${"x".repeat(10_000)}`;
+
+  projection.mergeVerdict("run", [line]);
+
+  deepStrictEqual(projection.acceptanceReviewLines("run"), [
+    line.slice(-8_000),
   ]);
 });

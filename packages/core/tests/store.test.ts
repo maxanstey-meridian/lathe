@@ -1,5 +1,7 @@
-import { deepEqual, equal, strictEqual, ok, match, rejects } from "node:assert";
-import { mkdirSync, readFileSync } from "node:fs";
+import { deepEqual, equal, strictEqual, ok, match, rejects, throws } from "node:assert";
+import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,8 +21,36 @@ import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 const TS_COUNTER = { n: 0 };
 const fixedClock = (): Clock => ({
   now: () => 1700000000000 + TS_COUNTER.n++,
-  nowIso: () => `2026-01-01T00:00:${String(TS_COUNTER.n++).padStart(2, "0")}.000Z`,
+  nowIso: () => new Date(Date.UTC(2026, 0, 1) + TS_COUNTER.n++ * 1_000).toISOString(),
 });
+
+const seedExecutorStartup = (store: Store, runId: string, at: string): void => {
+  store.persistRunStartup({ runId, attempt: 1, phase: "claimed", updatedAt: at });
+  store.persistRunStartup({ runId, attempt: 1, phase: "setup_completed", updatedAt: at });
+  store.persistRunStartup({ runId, attempt: 1, phase: "planner_session_started", updatedAt: at });
+  store.persistRunStartup({
+    runId,
+    attempt: 1,
+    phase: "planner_session_created",
+    plannerSessionId: "planner",
+    updatedAt: at,
+  });
+  store.persistRunStartup({
+    runId,
+    attempt: 1,
+    phase: "executor_session_started",
+    plannerSessionId: "planner",
+    updatedAt: at,
+  });
+  store.persistRunStartup({
+    runId,
+    attempt: 1,
+    phase: "executor_session_created",
+    plannerSessionId: "planner",
+    executorSessionId: "baby",
+    updatedAt: at,
+  });
+};
 
 const fakeRepo = (opts?: {
   headBranch?: string;
@@ -147,7 +177,7 @@ test("store: meta round-trip", async () => {
   const meta = {
     runId: "20260101-000000-meta",
     status: "queued" as const,
-    attempt: 1,
+    attempt: 0,
     repo: "/tmp/repo",
     base: "main",
     branch: "meridian/20260101-000000-meta",
@@ -155,7 +185,6 @@ test("store: meta round-trip", async () => {
     stallRetries: 0,
     crashRetries: 0,
     reorientRetries: 0,
-    reviewerUnreachable: 0,
     promoted: false,
     pass: 1,
     updatedAt: clock.nowIso(),
@@ -164,7 +193,1136 @@ test("store: meta round-trip", async () => {
   const read = store.readMeta(meta.runId);
   equal(read.runId, meta.runId);
   equal(read.status, "queued");
-  equal(read.attempt, 1);
+  equal(read.attempt, 0);
+  await cleanTemp(tmp);
+});
+
+test("store: transitionRun commits meta, active pointer, and journal event atomically", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-transition-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const runId = "20260101-000000-transition";
+  const meta = {
+    runId,
+    status: "running" as const,
+    attempt: 1,
+    revision: 1,
+    repo: "/tmp/repo",
+    base: "main",
+    branch: `meridian/${runId}`,
+    worktree: join(tmp, "runs", runId, "worktree"),
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    promoted: false,
+    pass: 1,
+    updatedAt: clock.nowIso(),
+  };
+  store.writeMeta(meta);
+  store.addActiveRun({
+    runId,
+    runDir: join(tmp, "runs", runId),
+    worktree: meta.worktree,
+    babySessionId: "baby-transition",
+    startedAt: clock.nowIso(),
+  });
+
+  const next = store.transitionRun({
+    runId,
+    expectedRevision: 1,
+    expectedStatuses: ["running"],
+    meta: { ...meta, status: "blocked", blockedReason: "human_decision" },
+    activeRun: null,
+    event: {
+      at: clock.nowIso(),
+      turn: 0,
+      event: "parked",
+      reason: "human_decision",
+    },
+  });
+
+  equal(next.revision, 2);
+  equal(store.readMeta(runId).status, "blocked");
+  deepEqual(store.listActiveRuns(), []);
+  equal(store.readJournal(runId).at(0)?.event, "parked");
+  await rejects(
+    async () =>
+      store.transitionRun({
+        runId,
+        expectedRevision: 1,
+        expectedStatuses: ["blocked"],
+        meta: next,
+      }),
+    /revision conflict/,
+  );
+  equal(store.readMeta(runId).revision, 2);
+  strictEqual(store.readJournal(runId).length, 1);
+
+  const rollbackRunId = "20260101-000001-transition-rollback";
+  store.writeMeta({ ...meta, runId: rollbackRunId, revision: 0, status: "queued" });
+  strictEqual(store.claimNextQueuedRun([])?.runId, rollbackRunId);
+  store.addActiveRun({
+    runId: rollbackRunId,
+    runDir: join(tmp, "runs", rollbackRunId),
+    worktree: meta.worktree,
+    babySessionId: "baby-rollback",
+    startedAt: clock.nowIso(),
+  });
+  const inspectionDb = new DatabaseSync(makePaths(tmp).dbFile);
+  inspectionDb.exec(
+    "CREATE TRIGGER fail_transition_event BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'forced event failure'); END;",
+  );
+  throws(
+    () =>
+      store.transitionRun({
+        runId: rollbackRunId,
+        expectedRevision: 1,
+        expectedStatuses: ["running"],
+        meta: { ...store.readMeta(rollbackRunId), status: "blocked", blockedReason: "crashed" },
+        activeRun: null,
+        lease: store.listRepositoryLeases().at(0),
+        event: { at: clock.nowIso(), turn: 0, event: "parked", reason: "crashed" },
+      }),
+    /forced event failure/,
+  );
+  equal(store.readMeta(rollbackRunId).status, "running");
+  equal(store.listActiveRuns().at(0)?.runId, rollbackRunId);
+  strictEqual(store.readJournal(rollbackRunId).length, 0);
+  const lease = inspectionDb
+    .prepare("SELECT run_id FROM repository_leases WHERE run_id = ?")
+    .get(rollbackRunId) as { run_id: string } | undefined;
+  equal(lease?.run_id, rollbackRunId);
+  inspectionDb.close();
+  await cleanTemp(tmp);
+});
+
+test("store: transitionRun rejects mismatched nested run identities", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-transition-identity-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const meta = {
+    runId: "run-a",
+    status: "queued" as const,
+    attempt: 0,
+    repo: "/tmp/repo",
+    base: "main",
+    branch: "meridian/run-a",
+    worktree: join(tmp, "worktree"),
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    promoted: false,
+    pass: 1,
+    updatedAt: clock.nowIso(),
+  };
+  store.writeMeta(meta);
+
+  throws(
+    () =>
+      store.transitionRun({
+        runId: "run-a",
+        expectedRevision: 0,
+        expectedStatuses: ["queued"],
+        meta: { ...meta, runId: "run-b", status: "running" },
+      }),
+    /identity mismatch/,
+  );
+  throws(
+    () =>
+      store.transitionRun({
+        runId: "run-a",
+        expectedRevision: 0,
+        expectedStatuses: ["queued"],
+        meta: { ...meta, status: "running" },
+        activeRun: {
+          runId: "run-b",
+          runDir: "/tmp/run-b",
+          worktree: "/tmp/run-b/worktree",
+          babySessionId: "baby-b",
+          startedAt: clock.nowIso(),
+        },
+      }),
+    /identity mismatch/,
+  );
+
+  equal(store.readMeta("run-a").status, "queued");
+  await cleanTemp(tmp);
+});
+
+test("store: answerRun rejects mismatched nested run identities", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-answer-identity-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const meta = {
+    runId: "run-a",
+    status: "blocked" as const,
+    attempt: 1,
+    repo: "/tmp/repo",
+    base: "main",
+    branch: "meridian/run-a",
+    worktree: join(tmp, "worktree"),
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    promoted: false,
+    pass: 1,
+    updatedAt: clock.nowIso(),
+  };
+  store.writeMeta(meta);
+  const decision = {
+    timestamp: clock.nowIso(),
+    source: "max" as const,
+    questionType: "other",
+    question: "q",
+    status: "proceed",
+    answer: "a",
+    evidence: [],
+    constraints: [],
+  };
+
+  throws(
+    () =>
+      store.answerRun({
+        runId: "run-a",
+        expectedRevision: 0,
+        expectedStatus: "blocked",
+        meta: { ...meta, runId: "run-b", status: "queued" },
+        decision,
+      }),
+    /identity mismatch/,
+  );
+  equal(store.readMeta("run-a").status, "blocked");
+  await cleanTemp(tmp);
+});
+
+test("store: a failed active-run projection does not roll back a committed transition", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-transition-projection-"));
+  const paths = makePaths(tmp);
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), clock);
+  const runId = "20260101-000000-projection";
+  const meta = {
+    runId,
+    status: "running" as const,
+    attempt: 1,
+    repo: "/tmp/repo",
+    base: "main",
+    branch: `meridian/${runId}`,
+    worktree: join(tmp, "runs", runId, "worktree"),
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    promoted: false,
+    pass: 1,
+    updatedAt: clock.nowIso(),
+  };
+  store.writeMeta(meta);
+  mkdirSync(join(paths.root, "active-run.json"), { recursive: true });
+
+  store.transitionRun({
+    runId,
+    expectedRevision: 0,
+    expectedStatuses: ["running"],
+    meta: { ...meta, status: "blocked", blockedReason: "crashed" },
+    activeRun: null,
+  });
+
+  equal(store.readMeta(runId).status, "blocked");
+  equal(store.readMeta(runId).revision, 1);
+  await cleanTemp(tmp);
+});
+
+test("store: a failed active-run activation projection fails closed after the durable transition", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-transition-activation-projection-"));
+  const paths = makePaths(tmp);
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), clock);
+  const runId = "20260101-000000-activation-projection";
+  const meta = {
+    runId,
+    status: "queued" as const,
+    attempt: 1,
+    repo: "/tmp/repo",
+    base: "main",
+    branch: `meridian/${runId}`,
+    worktree: join(tmp, "runs", runId, "worktree"),
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    promoted: false,
+    pass: 1,
+    updatedAt: clock.nowIso(),
+  };
+  store.writeMeta(meta);
+  mkdirSync(join(paths.root, "active-run.json"), { recursive: true });
+
+  throws(
+    () =>
+      store.transitionRun({
+        runId,
+        expectedRevision: 0,
+        expectedStatuses: ["queued"],
+        meta: { ...meta, status: "running" },
+        activeRun: {
+          runId,
+          runDir: paths.runDir(runId),
+          worktree: meta.worktree,
+          babySessionId: "baby",
+          startedAt: clock.nowIso(),
+        },
+      }),
+    /EISDIR/,
+  );
+
+  equal(store.readMeta(runId).status, "running");
+  equal(store.readMeta(runId).revision, 1);
+  equal(store.listActiveRuns().length, 1);
+  await cleanTemp(tmp);
+});
+
+test("store: activateRunStartup rejects a concurrent cancellation before pointer and event writes", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-startup-cas-"));
+  const paths = makePaths(tmp);
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), clock);
+  const runId = "20260101-000000-startup-cas";
+  const meta = {
+    runId,
+    status: "running" as const,
+    attempt: 1,
+    revision: 1,
+    repo: "/tmp/repo",
+    base: "main",
+    branch: `meridian/${runId}`,
+    worktree: join(tmp, "worktree"),
+    babySessionId: "baby",
+    daddySessionId: "planner",
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    promoted: false,
+    pass: 1,
+    updatedAt: clock.nowIso(),
+  };
+  store.writeMeta(meta);
+  const operation = {
+    runId,
+    attempt: 1,
+    phase: "executor_session_created" as const,
+    plannerSessionId: "planner",
+    executorSessionId: "baby",
+    updatedAt: clock.nowIso(),
+  };
+  seedExecutorStartup(store, runId, clock.nowIso());
+  const lease = store.acquireRepositoryLease(meta.repo, "startup-cas", runId, "execute")!;
+  const competing = new DatabaseSync(paths.dbFile);
+  competing
+    .prepare(
+      "UPDATE runs SET meta = json_set(meta, '$.status', 'stopped', '$.revision', 2) WHERE run_id = ?",
+    )
+    .run(runId);
+  competing.close();
+
+  throws(
+    () =>
+      store.activateRunStartup(operation, {
+        runId,
+        expectedRevision: 1,
+        expectedStatuses: ["running"],
+        meta,
+        activeRun: {
+          runId,
+          runDir: paths.runDir(runId),
+          worktree: meta.worktree,
+          babySessionId: "baby",
+          startedAt: clock.nowIso(),
+        },
+        event: { event: "run_started", runId, attempt: 1, at: clock.nowIso() },
+        lease,
+      }),
+    /changed during startup activation/,
+  );
+  deepEqual(store.listActiveRuns(), []);
+  equal(store.readJournal(runId).length, 0);
+  equal(store.readRunStartup(runId, 1)?.phase, "executor_session_created");
+  await cleanTemp(tmp);
+});
+
+test("store: activateRunStartup validates every startup identity and requires one claimed operation", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-startup-identity-"));
+  const paths = makePaths(tmp);
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), clock);
+  const runId = "20260101-000000-startup-identity";
+  const meta = {
+    runId,
+    status: "running" as const,
+    attempt: 1,
+    revision: 1,
+    repo: "/tmp/repo",
+    base: "main",
+    branch: `meridian/${runId}`,
+    worktree: join(tmp, "worktree"),
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    promoted: false,
+    pass: 1,
+    updatedAt: clock.nowIso(),
+  };
+  const operation = {
+    runId,
+    attempt: 1,
+    phase: "executor_session_created" as const,
+    plannerSessionId: "planner",
+    executorSessionId: "baby",
+    updatedAt: clock.nowIso(),
+  };
+  store.writeMeta(meta);
+  seedExecutorStartup(store, runId, clock.nowIso());
+  const lease = store.acquireRepositoryLease(meta.repo, "startup-identity", runId, "execute")!;
+  const transition = {
+    runId,
+    expectedRevision: 1,
+    expectedStatuses: ["running" as const],
+    meta,
+    activeRun: {
+      runId,
+      runDir: paths.runDir(runId),
+      worktree: meta.worktree,
+      babySessionId: "baby",
+      startedAt: clock.nowIso(),
+    },
+    event: { event: "run_started" as const, runId, attempt: 1, at: clock.nowIso() },
+    lease,
+  };
+
+  throws(
+    () =>
+      store.activateRunStartup(operation, {
+        ...transition,
+        lease: { ...lease, epoch: lease.epoch + 1 },
+      }),
+    /repository lease lost/,
+  );
+  throws(
+    () => store.activateRunStartup(operation, { ...transition, meta: { ...meta, runId: "other" } }),
+    /identity mismatch/,
+  );
+  throws(
+    () =>
+      store.activateRunStartup(operation, {
+        ...transition,
+        activeRun: { ...transition.activeRun, runId: "other" },
+      }),
+    /identity mismatch/,
+  );
+  throws(
+    () =>
+      store.activateRunStartup(operation, {
+        ...transition,
+        event: { ...transition.event, attempt: 2 },
+      }),
+    /attempt mismatch/,
+  );
+
+  const db = new DatabaseSync(paths.dbFile);
+  db.prepare("DELETE FROM run_startup_operations WHERE run_id = ? AND attempt = ?").run(runId, 1);
+  db.close();
+  throws(() => store.activateRunStartup(operation, transition), /startup operation changed/);
+  equal(store.readMeta(runId).revision, 1);
+  deepEqual(store.listActiveRuns(), []);
+  equal(store.readJournal(runId).length, 0);
+  await cleanTemp(tmp);
+});
+
+test("store: acceptance operation cannot regress or replace its durable snapshot", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-acceptance-cas-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const runId = "20260101-000000-acceptance-cas";
+  const prepared = {
+    campaignId: runId,
+    phase: "prepared" as const,
+    tipRunId: runId,
+    acceptedInto: `meridian/${runId}`,
+    expectedTipSha: "head",
+    members: [
+      {
+        runId,
+        revision: 0,
+        status: "ready_for_review" as const,
+        repo: "/tmp/repo",
+        branch: `meridian/${runId}`,
+        worktree: "/tmp/worktree",
+        base: "main",
+        pass: 1,
+      },
+    ],
+    cleanedSandboxes: [],
+    cleanedBranches: [],
+    updatedAt: clock.nowIso(),
+  };
+  store.persistAcceptanceOperation(prepared);
+  store.persistAcceptanceOperation({ ...prepared, phase: "fetched" });
+
+  throws(() => store.persistAcceptanceOperation(prepared), /invalid acceptance phase transition/);
+  throws(
+    () =>
+      store.persistAcceptanceOperation({ ...prepared, phase: "fetched", acceptedInto: "other" }),
+    /snapshot changed/,
+  );
+  equal(store.readAcceptanceOperation(runId)?.phase, "fetched");
+  await cleanTemp(tmp);
+});
+
+test("store: startup and convergence operations reject phase regression", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-operation-regression-"));
+  const paths = makePaths(tmp);
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), clock);
+  const runId = "20260101-000000-operation-regression";
+  store.admitQueue(runId, makeTestPacket().raw);
+  const claim = store.claimNextQueuedRun([], "operation-regression")!;
+
+  throws(
+    () =>
+      store.persistRunStartup(
+        { runId, attempt: 1, phase: "sandbox_ready", updatedAt: clock.nowIso() },
+        claim.lease,
+      ),
+    /invalid startup phase transition/,
+  );
+  equal(store.readRunStartup(runId, 1)?.phase, "claimed");
+
+  const entry = makeValidConvergenceEntry({ runId, campaignId: runId });
+  const decided = {
+    runId,
+    attempt: 1,
+    phase: "decided" as const,
+    campaignId: runId,
+    pass: 1,
+    maxPasses: 3,
+    decidedAt: clock.nowIso(),
+    autofixFingerprint: "fingerprint",
+    verification: entry.verification.commands,
+    review: entry.primary,
+    reviewRaw: entry.primaryRaw,
+    decision: entry.decision,
+  };
+  store.persistConvergenceOperation(
+    { runId, attempt: 1, phase: "autofix_started", autofixFingerprint: "fingerprint" },
+    claim.lease,
+  );
+  store.persistConvergenceOperation(
+    { runId, attempt: 1, phase: "autofix_applied", autofixFingerprint: "fingerprint" },
+    claim.lease,
+  );
+  store.persistConvergenceOperation(decided, claim.lease);
+  store.persistConvergenceOperation(
+    {
+      ...decided,
+      phase: "effect_applied",
+      effectiveDecision: decided.decision,
+      amendedCommitSha: null,
+    },
+    claim.lease,
+  );
+  throws(
+    () => store.persistConvergenceOperation(decided, claim.lease),
+    /invalid convergence phase transition/,
+  );
+  equal(store.readConvergenceOperation(runId, 1)?.phase, "effect_applied");
+  await cleanTemp(tmp);
+});
+
+test("store: pending packet projection is unclaimable and recovered on open", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-packet-recovery-"));
+  const paths = makePaths(tmp);
+  const clock = fixedClock();
+  const first = SqliteStoreAdapter.create(paths, fakeRepo(), clock);
+  const runId = "20260101-000000-packet-recovery";
+  const packet = makeTestPacket().raw;
+  const meta = {
+    runId,
+    status: "queued",
+    attempt: 0,
+    repo: "/tmp/test-repo",
+    base: "main",
+    branch: `meridian/${runId}`,
+    worktree: paths.runDir(runId),
+    pass: 1,
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    promoted: false,
+    updatedAt: clock.nowIso(),
+  };
+  const db = new DatabaseSync(paths.dbFile);
+  db.prepare("INSERT INTO runs(run_id, meta) VALUES (?, ?)").run(runId, JSON.stringify(meta));
+  db.prepare("INSERT INTO packet_projections(run_id, content, published) VALUES (?, ?, 0)").run(
+    runId,
+    packet,
+  );
+  db.close();
+
+  equal(first.claimNextQueuedRun([], "before-recovery"), undefined);
+  const recovered = SqliteStoreAdapter.create(paths, fakeRepo(), clock);
+  equal(readFileSync(paths.packetFile(runId), "utf8"), packet);
+  equal(recovered.claimNextQueuedRun([], "after-recovery")?.runId, runId);
+  await cleanTemp(tmp);
+});
+
+test("store: admission keeps a failed packet projection pending instead of failing the commit", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-packet-admission-outbox-"));
+  const paths = makePaths(tmp);
+  const runId = "20260101-000000-admission-outbox";
+  mkdirSync(join(tmp, "runs"), { recursive: true });
+  writeFileSync(paths.runDir(runId), "blocks packet directory");
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+
+  store.admitQueue(runId, makeTestPacket().raw);
+
+  equal(store.readMeta(runId).status, "queued");
+  equal(existsSync(paths.packetFile(runId)), false);
+  equal(store.claimNextQueuedRun([], "pending-admission"), undefined);
+  SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+
+  await rm(paths.runDir(runId), { force: true });
+  const recovered = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  ok(existsSync(paths.packetFile(runId)));
+  equal(recovered.claimNextQueuedRun([], "recovered-admission")?.runId, runId);
+  await cleanTemp(tmp);
+});
+
+test("store: versioned legacy attempt semantics preserve identities on first claim", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-schema-reconciliation-"));
+  const paths = makePaths(tmp);
+  const db = new DatabaseSync(paths.dbFile);
+  db.exec(
+    "CREATE TABLE runs(run_id TEXT PRIMARY KEY, meta TEXT NOT NULL); PRAGMA user_version = 1;",
+  );
+  const base = {
+    status: "queued",
+    attempt: 1,
+    repo: "/tmp/repo",
+    base: "main",
+    branch: "meridian/test",
+    worktree: "/tmp/worktree",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  db.prepare("INSERT INTO runs(run_id, meta) VALUES (?, ?)").run(
+    "fresh",
+    JSON.stringify({ ...base, runId: "fresh" }),
+  );
+  db.prepare("INSERT INTO runs(run_id, meta) VALUES (?, ?)").run(
+    "resumed",
+    JSON.stringify({ ...base, runId: "resumed", babySessionId: "baby-1" }),
+  );
+  db.prepare("INSERT INTO runs(run_id, meta) VALUES (?, ?)").run(
+    "crash-requeued",
+    JSON.stringify({ ...base, runId: "crash-requeued", crashRetries: 1 }),
+  );
+  db.close();
+
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  equal(store.readMeta("fresh").attempt, 1);
+  equal(store.readMeta("resumed").attempt, 1);
+  equal(store.readMeta("crash-requeued").attempt, 1);
+  const migratedDb = new DatabaseSync(paths.dbFile);
+  equal(
+    (
+      migratedDb
+        .prepare("SELECT value FROM store_metadata WHERE key = 'attempt_semantics'")
+        .get() as {
+        value: string;
+      }
+    ).value,
+    "claim_v2",
+  );
+  migratedDb.close();
+  deepEqual(store.listPlans(), []);
+  strictEqual(store.claimNextQueuedRun([])?.runId, "crash-requeued");
+  equal(store.readMeta("crash-requeued").attempt, 1);
+  await cleanTemp(tmp);
+});
+
+test("store: refuses populated unversioned attempt state rather than guessing", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-attempt-ambiguous-"));
+  const paths = makePaths(tmp);
+  const db = new DatabaseSync(paths.dbFile);
+  db.exec("CREATE TABLE runs(run_id TEXT PRIMARY KEY, meta TEXT NOT NULL)");
+  db.prepare("INSERT INTO runs(run_id, meta) VALUES (?, ?)").run(
+    "ambiguous",
+    JSON.stringify({
+      runId: "ambiguous",
+      status: "queued",
+      attempt: 1,
+      repo: "/tmp/repo",
+      base: "main",
+      branch: "meridian/ambiguous",
+      worktree: "/tmp/worktree",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }),
+  );
+  db.close();
+
+  throws(
+    () => SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock()),
+    /cannot determine attempt semantics/,
+  );
+  await cleanTemp(tmp);
+});
+
+test("store: campaign acceptance rolls back every member on one revision conflict", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-accept-campaign-"));
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+  const base = {
+    status: "ready_for_review" as const,
+    attempt: 1,
+    repo: "/tmp/repo",
+    base: "main",
+    branch: "meridian/a",
+    worktree: "/tmp/worktree",
+    pass: 1,
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    promoted: false,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  store.writeMeta({ ...base, runId: "a", revision: 2 });
+  store.writeMeta({ ...base, runId: "b", revision: 4 });
+
+  throws(
+    () =>
+      store.acceptCampaign(
+        [
+          { runId: "a", expectedRevision: 2, expectedStatus: "ready_for_review" },
+          { runId: "b", expectedRevision: 3, expectedStatus: "ready_for_review" },
+        ],
+        "meridian/b",
+      ),
+    /revision conflict/,
+  );
+  equal(store.readMeta("a").status, "ready_for_review");
+  equal(store.readMeta("a").revision, 2);
+  equal(store.readMeta("b").status, "ready_for_review");
+  await cleanTemp(tmp);
+});
+
+test("store: failed SQLite admission removes the published packet", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-admission-rollback-"));
+  const paths = makePaths(tmp);
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  const db = new DatabaseSync(paths.dbFile);
+  db.exec(
+    "CREATE TRIGGER fail_admission BEFORE INSERT ON runs BEGIN SELECT RAISE(ABORT, 'forced admission failure'); END;",
+  );
+  throws(
+    () => store.admitQueue("20260101-000000-rollback", makeTestPacket().raw),
+    /forced admission/,
+  );
+  equal(existsSync(paths.packetFile("20260101-000000-rollback")), false);
+  db.close();
+  await cleanTemp(tmp);
+});
+
+test("store: admission refuses to overwrite an orphan packet", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-admission-orphan-"));
+  const paths = makePaths(tmp);
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  const runId = "20260101-000000-orphan";
+  mkdirSync(paths.runDir(runId), { recursive: true });
+  writeFileSync(paths.packetFile(runId), "original packet");
+
+  throws(() => store.admitQueue(runId, makeTestPacket().raw), /packet already exists/);
+  equal(readFileSync(paths.packetFile(runId), "utf8"), "original packet");
+  equal(store.readMetaIfExists(runId), undefined);
+  await cleanTemp(tmp);
+});
+
+test("store: failed follow-up campaign commit removes the published packet", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-followup-rollback-"));
+  const paths = makePaths(tmp);
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  const runId = "20260101-000000-followup-rollback";
+  const campaign = {
+    campaignId: "campaign-rollback",
+    originalRunId: "original",
+    originalIntent: "test",
+    status: "open" as const,
+    maxPasses: 3,
+    passes: [],
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const db = new DatabaseSync(paths.dbFile);
+  db.exec(
+    "CREATE TRIGGER fail_campaign BEFORE INSERT ON campaigns BEGIN SELECT RAISE(ABORT, 'forced campaign failure'); END;",
+  );
+
+  throws(
+    () => store.admitQueueWithCampaign(runId, makeTestPacket().raw, campaign),
+    /forced campaign/,
+  );
+  equal(store.readMetaIfExists(runId), undefined);
+  equal(existsSync(paths.packetFile(runId)), false);
+  db.close();
+  await cleanTemp(tmp);
+});
+
+test("store: convergence publication rolls back every SQLite write", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-convergence-publication-rollback-"));
+  const paths = makePaths(tmp);
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), clock);
+  const runId = "20260101-000000-publication-rollback";
+  const meta = {
+    runId,
+    status: "ready_for_review" as const,
+    attempt: 1,
+    repo: "/tmp/test-repo",
+    base: "main",
+    branch: `meridian/${runId}`,
+    worktree: join(tmp, "worktree"),
+    pass: 1,
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    promoted: false,
+    updatedAt: clock.nowIso(),
+  };
+  store.writeMeta(meta);
+  const entry = makeValidConvergenceEntry({ runId, campaignId: runId });
+  const operation = {
+    runId,
+    attempt: 1,
+    phase: "effect_applied" as const,
+    campaignId: runId,
+    pass: 1,
+    maxPasses: 3,
+    decidedAt: clock.nowIso(),
+    autofixFingerprint: "fingerprint",
+    verification: entry.verification.commands,
+    review: entry.primary,
+    reviewRaw: entry.primaryRaw,
+    decision: entry.decision,
+    effectiveDecision: entry.decision,
+    amendedCommitSha: null,
+  };
+  const lease = store.acquireRepositoryLease(meta.repo, "convergence", runId, "execute")!;
+  store.persistConvergenceOperation(
+    { runId, attempt: 1, phase: "autofix_started", autofixFingerprint: "fingerprint" },
+    lease,
+  );
+  store.persistConvergenceOperation(
+    { runId, attempt: 1, phase: "autofix_applied", autofixFingerprint: "fingerprint" },
+    lease,
+  );
+  store.persistConvergenceOperation(
+    { ...operation, phase: "decided", effectiveDecision: undefined, amendedCommitSha: undefined },
+    lease,
+  );
+  store.persistConvergenceOperation(operation, lease);
+  const campaign = {
+    campaignId: runId,
+    originalRunId: runId,
+    originalIntent: "test",
+    status: "converged" as const,
+    maxPasses: 3,
+    passes: [
+      {
+        runId,
+        attempt: 1,
+        pass: 1,
+        verdict: "accept" as const,
+        groundedBlockers: 0,
+        atIso: clock.nowIso(),
+      },
+    ],
+    updatedAt: clock.nowIso(),
+  };
+  const db = new DatabaseSync(paths.dbFile);
+  throws(
+    () =>
+      store.publishConvergence({
+        operation: { ...operation, phase: "published" },
+        campaign,
+        entry,
+        event: {
+          at: clock.nowIso(),
+          event: "super_review",
+          pass: 1,
+          verdict: "accept",
+          proposedVerdict: "accept",
+          findings: [],
+        },
+        lease: { ...lease, epoch: lease.epoch + 1 },
+      }),
+    /repository lease lost/,
+  );
+  db.exec(
+    "CREATE TRIGGER fail_convergence_publication BEFORE INSERT ON convergence BEGIN SELECT RAISE(ABORT, 'forced convergence failure'); END;",
+  );
+
+  throws(
+    () =>
+      store.publishConvergence({
+        operation: { ...operation, phase: "published" },
+        campaign,
+        entry,
+        event: {
+          at: clock.nowIso(),
+          event: "super_review",
+          pass: 1,
+          verdict: "accept",
+          proposedVerdict: "accept",
+          findings: [],
+        },
+        nits: "# Notes",
+        lease,
+      }),
+    /forced convergence failure/,
+  );
+
+  equal(store.readCampaign(runId), undefined);
+  equal(store.readJournal(runId).length, 0);
+  equal(store.readConvergence(runId).length, 0);
+  equal(store.readNits(runId), "");
+  equal(store.readConvergenceOperation(runId, 1)?.phase, "effect_applied");
+  db.close();
+  await cleanTemp(tmp);
+});
+
+test("store: failed convergence follow-up admission compensates its packet file", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-convergence-packet-rollback-"));
+  const paths = makePaths(tmp);
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), clock);
+  const runId = "20260101-000000-publication-parent";
+  const followupRunId = "20260101-000001-publication-child";
+  store.writeMeta({
+    runId,
+    status: "ready_for_review",
+    attempt: 1,
+    repo: "/tmp/test-repo",
+    base: "main",
+    branch: `meridian/${runId}`,
+    worktree: join(tmp, "worktree"),
+    pass: 1,
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    promoted: false,
+    updatedAt: clock.nowIso(),
+  });
+  const entry = makeValidConvergenceEntry({
+    runId,
+    campaignId: runId,
+    decision: { action: "author", blockers: [], promote: false },
+  });
+  const operation = {
+    runId,
+    attempt: 1,
+    phase: "effect_applied" as const,
+    campaignId: runId,
+    pass: 1,
+    maxPasses: 3,
+    decidedAt: clock.nowIso(),
+    autofixFingerprint: "fingerprint",
+    verification: entry.verification.commands,
+    review: entry.primary,
+    reviewRaw: entry.primaryRaw,
+    decision: entry.decision,
+    effectiveDecision: entry.decision,
+    amendedCommitSha: null,
+    followup: { runId: followupRunId, packet: makeTestPacket().raw },
+  };
+  const lease = store.acquireRepositoryLease("/tmp/test-repo", "convergence", runId, "execute")!;
+  store.persistConvergenceOperation(
+    { runId, attempt: 1, phase: "autofix_started", autofixFingerprint: "fingerprint" },
+    lease,
+  );
+  store.persistConvergenceOperation(
+    { runId, attempt: 1, phase: "autofix_applied", autofixFingerprint: "fingerprint" },
+    lease,
+  );
+  store.persistConvergenceOperation(
+    { ...operation, phase: "decided", effectiveDecision: undefined, amendedCommitSha: undefined },
+    lease,
+  );
+  store.persistConvergenceOperation(operation, lease);
+  const campaign = {
+    campaignId: runId,
+    originalRunId: runId,
+    originalIntent: "test",
+    status: "open" as const,
+    maxPasses: 3,
+    passes: [],
+    updatedAt: clock.nowIso(),
+  };
+  const db = new DatabaseSync(paths.dbFile);
+  db.exec(
+    `CREATE TRIGGER fail_child_insert BEFORE INSERT ON runs WHEN NEW.run_id = '${followupRunId}' BEGIN SELECT RAISE(ABORT, 'forced child failure'); END;`,
+  );
+
+  throws(
+    () =>
+      store.publishConvergence({
+        operation: { ...operation, phase: "published" },
+        campaign,
+        entry,
+        event: {
+          at: clock.nowIso(),
+          event: "super_review",
+          pass: 1,
+          verdict: "request_changes",
+          proposedVerdict: "accept",
+          findings: [],
+        },
+        followup: { runId: followupRunId, raw: makeTestPacket().raw },
+        lease,
+      }),
+    /forced child failure/,
+  );
+
+  equal(existsSync(paths.packetFile(followupRunId)), false);
+  equal(store.readMetaIfExists(followupRunId), undefined);
+  equal(store.readConvergenceOperation(runId, 1)?.phase, "effect_applied");
+  db.close();
+  await cleanTemp(tmp);
+});
+
+test("store: convergence keeps a failed follow-up packet projection pending and unclaimable", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-convergence-packet-outbox-"));
+  const paths = makePaths(tmp);
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), clock);
+  const runId = "20260101-000000-outbox-parent";
+  const followupRunId = "20260101-000001-outbox-child";
+  store.writeMeta({
+    runId,
+    status: "ready_for_review",
+    attempt: 1,
+    repo: "/tmp/test-repo",
+    base: "main",
+    branch: `meridian/${runId}`,
+    worktree: join(tmp, "worktree"),
+    pass: 1,
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    promoted: false,
+    updatedAt: clock.nowIso(),
+  });
+  const entry = makeValidConvergenceEntry({
+    runId,
+    campaignId: runId,
+    decision: { action: "author", blockers: [], promote: false },
+  });
+  const operation = {
+    runId,
+    attempt: 1,
+    phase: "effect_applied" as const,
+    campaignId: runId,
+    pass: 1,
+    maxPasses: 3,
+    decidedAt: clock.nowIso(),
+    autofixFingerprint: "fingerprint",
+    verification: entry.verification.commands,
+    review: entry.primary,
+    reviewRaw: entry.primaryRaw,
+    decision: entry.decision,
+    effectiveDecision: entry.decision,
+    amendedCommitSha: null,
+    followup: { runId: followupRunId, packet: makeTestPacket().raw },
+  };
+  const lease = store.acquireRepositoryLease("/tmp/test-repo", "convergence", runId, "execute")!;
+  store.persistConvergenceOperation(
+    { runId, attempt: 1, phase: "autofix_started", autofixFingerprint: "fingerprint" },
+    lease,
+  );
+  store.persistConvergenceOperation(
+    { runId, attempt: 1, phase: "autofix_applied", autofixFingerprint: "fingerprint" },
+    lease,
+  );
+  store.persistConvergenceOperation(
+    { ...operation, phase: "decided", effectiveDecision: undefined, amendedCommitSha: undefined },
+    lease,
+  );
+  store.persistConvergenceOperation(operation, lease);
+  const campaign = {
+    campaignId: runId,
+    originalRunId: runId,
+    originalIntent: "test",
+    status: "open" as const,
+    maxPasses: 3,
+    passes: [],
+    updatedAt: clock.nowIso(),
+  };
+  mkdirSync(join(tmp, "runs"), { recursive: true });
+  writeFileSync(paths.runDir(followupRunId), "blocks packet directory");
+
+  store.publishConvergence({
+    operation: { ...operation, phase: "published" },
+    campaign,
+    entry,
+    event: {
+      at: clock.nowIso(),
+      event: "super_review",
+      pass: 1,
+      verdict: "request_changes",
+      proposedVerdict: "request_changes",
+      findings: [],
+    },
+    followup: { runId: followupRunId, raw: makeTestPacket().raw },
+    lease,
+  });
+  store.releaseRepositoryLease(lease);
+
+  equal(store.readConvergenceOperation(runId, 1)?.phase, "published");
+  equal(store.readCampaign(runId)?.status, "open");
+  equal(store.readMeta(followupRunId).status, "queued");
+  equal(existsSync(paths.packetFile(followupRunId)), false);
+  equal(store.claimNextQueuedRun([], "pending-convergence"), undefined);
+
+  await rm(paths.runDir(followupRunId), { force: true });
+  const recovered = SqliteStoreAdapter.create(paths, fakeRepo(), clock);
+  ok(existsSync(paths.packetFile(followupRunId)));
+  equal(recovered.claimNextQueuedRun([], "recovered-convergence")?.runId, followupRunId);
+  await cleanTemp(tmp);
+});
+
+test("store: follow-up admission commits its terminal review event atomically", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-followup-decision-"));
+  const paths = makePaths(tmp);
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  const runId = "20260101-000000-followup-decision";
+  const parentRunId = "20260101-000000-parent";
+  const campaign = {
+    campaignId: "campaign-decision",
+    originalRunId: parentRunId,
+    originalIntent: "test",
+    status: "open" as const,
+    maxPasses: 3,
+    passes: [],
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+
+  store.admitQueueWithCampaign(runId, makeTestPacket().raw, campaign, {
+    runId: parentRunId,
+    event: {
+      at: "2026-01-01T00:00:00.000Z",
+      event: "super_review",
+      pass: 1,
+      verdict: "request_changes",
+      proposedVerdict: "request_changes",
+      findings: [],
+    },
+  });
+
+  equal(store.readMeta(runId).status, "queued");
+  equal(store.readJournal(parentRunId).at(-1)?.event, "super_review");
   await cleanTemp(tmp);
 });
 
@@ -183,7 +1341,7 @@ test("store: listRunIds returns sorted ids", async () => {
   const meta1 = {
     runId: "20260101-000000-z",
     status: "queued" as const,
-    attempt: 1,
+    attempt: 0,
     repo: "/tmp/r",
     base: "main",
     branch: "b",
@@ -191,7 +1349,6 @@ test("store: listRunIds returns sorted ids", async () => {
     stallRetries: 0,
     crashRetries: 0,
     reorientRetries: 0,
-    reviewerUnreachable: 0,
     promoted: false,
     pass: 1,
     updatedAt: clock.nowIso(),
@@ -199,7 +1356,7 @@ test("store: listRunIds returns sorted ids", async () => {
   const meta2 = {
     runId: "20260101-000000-a",
     status: "queued" as const,
-    attempt: 1,
+    attempt: 0,
     repo: "/tmp/r",
     base: "main",
     branch: "b",
@@ -207,7 +1364,6 @@ test("store: listRunIds returns sorted ids", async () => {
     stallRetries: 0,
     crashRetries: 0,
     reorientRetries: 0,
-    reviewerUnreachable: 0,
     promoted: false,
     pass: 1,
     updatedAt: clock.nowIso(),
@@ -517,6 +1673,31 @@ test("store: active run json file is array", async () => {
   await cleanTemp(tmp);
 });
 
+test("store: active run projection stays current across adapter writers and leaves no shared temp file", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-active-cross-writer-"));
+  const paths = makePaths(tmp);
+  const first = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  const second = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  const run = {
+    runId: "run",
+    runDir: join(tmp, "runs/run"),
+    worktree: join(tmp, "worktree"),
+    babySessionId: "baby",
+    startedAt: "now",
+  };
+
+  first.addActiveRun(run);
+  second.removeActiveRun(run.runId);
+  first.syncActiveRunProjection();
+
+  deepEqual(JSON.parse(readFileSync(join(tmp, "active-run.json"), "utf-8")), []);
+  deepEqual(
+    readdirSync(tmp).filter((name) => name.includes("active-run.json.") && name.endsWith(".tmp")),
+    [],
+  );
+  await cleanTemp(tmp);
+});
+
 test("store: active convergence multi-row add/remove/list", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-active-convergence-"));
   const clock = fixedClock();
@@ -619,7 +1800,7 @@ test("store: listQueue returns all queued runs in lexical order", async () => {
   const meta = {
     runId,
     status: "queued" as const,
-    attempt: 1,
+    attempt: 0,
     repo: "/tmp/r",
     base: "main",
     branch: "b",
@@ -627,7 +1808,6 @@ test("store: listQueue returns all queued runs in lexical order", async () => {
     stallRetries: 0,
     crashRetries: 0,
     reorientRetries: 0,
-    reviewerUnreachable: 0,
     promoted: false,
     pass: 1,
     updatedAt: clock.nowIso(),
@@ -651,14 +1831,14 @@ verification:
   store.admitQueue("20260101-000000-fresh", packet);
   const entries = store.listQueue();
   strictEqual(entries.length, 2);
-  // Lexical order: 'f' < 'r' (both attempt=1, so run_id sorts lexically)
+  // Lexical order: 'f' < 'r' (both are fresh, so run_id sorts lexically)
   equal(entries[0]!.runId, "20260101-000000-fresh");
   ok(entries[0]!.admittedAt);
   equal(entries[1]!.runId, runId);
   await cleanTemp(tmp);
 });
 
-test("store: listQueue returns requeued runs (attempt>1) before fresh runs", async () => {
+test("store: listQueue returns requeued runs before fresh runs", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-qlist-requeue-"));
   const clock = fixedClock();
   const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
@@ -677,7 +1857,6 @@ test("store: listQueue returns requeued runs (attempt>1) before fresh runs", asy
     stallRetries: 0,
     crashRetries: 0,
     reorientRetries: 0,
-    reviewerUnreachable: 0,
     promoted: false,
     pass: 1,
     updatedAt: clock.nowIso(),
@@ -731,7 +1910,7 @@ test("store: claimNextQueuedRun skips excluded repos", async () => {
   const metaB = {
     runId: "20260101-000000-run-b",
     status: "queued" as const,
-    attempt: 1,
+    attempt: 0,
     repo: "/tmp/other-repo",
     base: "main",
     branch: "b",
@@ -739,7 +1918,6 @@ test("store: claimNextQueuedRun skips excluded repos", async () => {
     stallRetries: 0,
     crashRetries: 0,
     reorientRetries: 0,
-    reviewerUnreachable: 0,
     promoted: false,
     pass: 1,
     updatedAt: clock.nowIso(),
@@ -753,7 +1931,7 @@ test("store: claimNextQueuedRun skips excluded repos", async () => {
   await cleanTemp(tmp);
 });
 
-test("store: claimNextQueuedRun claims requeued (attempt>1) before fresh", async () => {
+test("store: claimNextQueuedRun claims requeued before fresh", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-claim-prio-"));
   const clock = fixedClock();
   const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
@@ -772,7 +1950,6 @@ test("store: claimNextQueuedRun claims requeued (attempt>1) before fresh", async
     stallRetries: 2,
     crashRetries: 0,
     reorientRetries: 0,
-    reviewerUnreachable: 0,
     promoted: false,
     pass: 1,
     updatedAt: clock.nowIso(),
@@ -789,7 +1966,7 @@ test("store: claimNextQueuedRun claims requeued (attempt>1) before fresh", async
   await cleanTemp(tmp);
 });
 
-test("store: claimNextQueuedRun retries when first candidate loses CAS race", async () => {
+test("store: claimNextQueuedRun holds one lease per repository", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-claim-retry-"));
   const clock = fixedClock();
   const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
@@ -798,7 +1975,7 @@ test("store: claimNextQueuedRun retries when first candidate loses CAS race", as
   const metaB = {
     runId: "20260101-000000-run-b",
     status: "queued" as const,
-    attempt: 1,
+    attempt: 0,
     repo: "/tmp/test-repo",
     base: "main",
     branch: "b",
@@ -806,7 +1983,6 @@ test("store: claimNextQueuedRun retries when first candidate loses CAS race", as
     stallRetries: 0,
     crashRetries: 0,
     reorientRetries: 0,
-    reviewerUnreachable: 0,
     promoted: false,
     pass: 1,
     updatedAt: clock.nowIso(),
@@ -815,32 +1991,245 @@ test("store: claimNextQueuedRun retries when first candidate loses CAS race", as
   store.writeMeta(metaB);
   strictEqual(store.listQueue().length, 2);
 
-  let beforeUpdateCalledWith: string | undefined;
-  const claimed = store.claimNextQueuedRun([], {
-    beforeUpdate: (runId) => {
-      if (beforeUpdateCalledWith === undefined) {
-        beforeUpdateCalledWith = runId;
-      }
-      if (runId !== "20260101-000000-run-a") {
-        return;
-      }
-      // Flip the selected candidate to 'running' so the conditional UPDATE
-      // (WHERE status = 'queued') returns changes === 0, triggering the retry.
-      const m = store.readMeta(runId);
-      store.writeMeta({ ...m, status: "running" as const, updatedAt: clock.nowIso() });
-    },
+  const claimed = store.claimNextQueuedRun([]);
+  ok(claimed);
+  equal(claimed.runId, "20260101-000000-run-a");
+  const lease = store.listRepositoryLeases().at(0)!;
+  equal(lease.repo, "/tmp/test-repo");
+  equal(lease.ownerId, claimed.lease.ownerId);
+  equal(lease.runId, "20260101-000000-run-a");
+  equal(lease.purpose, "execute");
+  equal(lease.epoch, 1);
+  equal(lease.acquiredAt, claimed.admittedAt);
+  strictEqual(store.claimNextQueuedRun([]), undefined);
+
+  store.releaseRepositoryLease(claimed.lease);
+  const next = store.claimNextQueuedRun([]);
+  ok(next);
+  equal(next.runId, "20260101-000000-run-b");
+  await cleanTemp(tmp);
+});
+
+test("store: startup preserves live repository leases", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-lease-cutoff-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const live = store.acquireRepositoryLease("/tmp/live", "live-owner", "live-run", "accept")!;
+  const reopened = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  deepEqual(reopened.listRepositoryLeases(), [live]);
+  strictEqual(
+    reopened.acquireRepositoryLease("/tmp/live", "other", "other-run", "execute"),
+    undefined,
+  );
+  await cleanTemp(tmp);
+});
+
+test("store: repository lease epoch increments after expiry reclaim", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-lease-epoch-"));
+  const paths = makePaths(tmp);
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  const first = store.acquireRepositoryLease("/tmp/repo", "owner-a", "run-a", "execute")!;
+  const db = new DatabaseSync(paths.dbFile);
+  db.prepare("UPDATE repository_leases SET expires_at = ? WHERE repo = ?").run(
+    "2000-01-01T00:00:00.000Z",
+    first.repo,
+  );
+  db.prepare("UPDATE repository_lease_owners SET pid = 2147483647 WHERE owner_id = ?").run(
+    first.ownerId,
+  );
+  db.close();
+
+  const second = store.acquireRepositoryLease("/tmp/repo", "owner-b", "run-b", "execute")!;
+  equal(second.epoch, first.epoch + 1);
+  equal(second.ownerId, "owner-b");
+  await cleanTemp(tmp);
+});
+
+test("store: an expired lease held by a live process cannot be reclaimed during a synchronous effect", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-lease-live-owner-"));
+  const paths = makePaths(tmp);
+  const first = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  const second = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  const lease = first.acquireRepositoryLease("/tmp/repo", "owner-a", "run-a", "execute")!;
+  const db = new DatabaseSync(paths.dbFile);
+  db.prepare("UPDATE repository_leases SET expires_at = ? WHERE repo = ?").run(
+    "2000-01-01T00:00:00.000Z",
+    lease.repo,
+  );
+  db.close();
+
+  strictEqual(second.acquireRepositoryLease(lease.repo, "owner-b", "run-b", "execute"), undefined);
+  equal(first.heartbeatRepositoryLease(lease)?.epoch, lease.epoch);
+  await cleanTemp(tmp);
+});
+
+test("store: an expired lease from another process instance is reclaimable despite PID reuse", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-lease-pid-reuse-"));
+  const paths = makePaths(tmp);
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  const stale = store.acquireRepositoryLease("/tmp/repo", "owner-a", "run-a", "execute")!;
+  const db = new DatabaseSync(paths.dbFile);
+  db.prepare("UPDATE repository_leases SET expires_at = ? WHERE repo = ?").run(
+    "2000-01-01T00:00:00.000Z",
+    stale.repo,
+  );
+  db.prepare(
+    "UPDATE repository_lease_owners SET process_instance_token = ? WHERE owner_id = ?",
+  ).run("prior-process-instance", stale.ownerId);
+  db.close();
+
+  const current = store.acquireRepositoryLease(stale.repo, "owner-b", "run-b", "execute")!;
+  equal(current.epoch, stale.epoch + 1);
+  equal(current.ownerId, "owner-b");
+  await cleanTemp(tmp);
+});
+
+test("store: stale release cannot delete a newer repository lease", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-lease-release-cas-"));
+  const paths = makePaths(tmp);
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  const stale = store.acquireRepositoryLease("/tmp/repo", "owner-a", "run-a", "execute")!;
+  const db = new DatabaseSync(paths.dbFile);
+  db.prepare("UPDATE repository_leases SET expires_at = ? WHERE repo = ?").run(
+    "2000-01-01T00:00:00.000Z",
+    stale.repo,
+  );
+  db.prepare("UPDATE repository_lease_owners SET pid = 2147483647 WHERE owner_id = ?").run(
+    stale.ownerId,
+  );
+  db.close();
+  const current = store.acquireRepositoryLease("/tmp/repo", "owner-b", "run-b", "execute")!;
+
+  equal(store.releaseRepositoryLease(stale), false);
+  equal(store.listRepositoryLeases().at(0)?.epoch, current.epoch);
+  await cleanTemp(tmp);
+});
+
+test("store: stale heartbeat cannot renew a newer repository lease", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-lease-heartbeat-cas-"));
+  const paths = makePaths(tmp);
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  const stale = store.acquireRepositoryLease("/tmp/repo", "owner-a", "run-a", "execute")!;
+  const db = new DatabaseSync(paths.dbFile);
+  db.prepare("UPDATE repository_leases SET expires_at = ? WHERE repo = ?").run(
+    "2000-01-01T00:00:00.000Z",
+    stale.repo,
+  );
+  db.prepare("UPDATE repository_lease_owners SET pid = 2147483647 WHERE owner_id = ?").run(
+    stale.ownerId,
+  );
+  db.close();
+  const current = store.acquireRepositoryLease("/tmp/repo", "owner-b", "run-b", "execute")!;
+
+  strictEqual(store.heartbeatRepositoryLease(stale), undefined);
+  equal(store.listRepositoryLeases().at(0)?.epoch, current.epoch);
+  await cleanTemp(tmp);
+});
+
+test("store: queue claim commits run transition and lease atomically", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-claim-atomic-"));
+  const paths = makePaths(tmp);
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  const runId = "20260101-000000-atomic";
+  store.admitQueue(runId, makeTestPacket().raw);
+  const db = new DatabaseSync(paths.dbFile);
+  db.exec(
+    "CREATE TRIGGER fail_lease BEFORE INSERT ON repository_leases BEGIN SELECT RAISE(ABORT, 'lease failed'); END;",
+  );
+
+  throws(() => store.claimNextQueuedRun([], "worker-a"), /lease failed/);
+  equal(store.readMeta(runId).status, "queued");
+  deepEqual(store.listRepositoryLeases(), []);
+  db.close();
+  await cleanTemp(tmp);
+});
+
+test("store: acceptance owners are isolated by repository lease", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-accept-owner-"));
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+  const first = store.acquireRepositoryLease("/tmp/repo", "accept-a", "run-a", "accept")!;
+
+  strictEqual(store.acquireRepositoryLease("/tmp/repo", "accept-b", "run-b", "accept"), undefined);
+  equal(store.releaseRepositoryLease({ ...first, ownerId: "accept-b" }), false);
+  equal(store.listRepositoryLeases().at(0)?.ownerId, "accept-a");
+  await cleanTemp(tmp);
+});
+
+test("store: an expired lease cannot be stolen while its child process owner is alive", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-live-process-lease-"));
+  const paths = makePaths(tmp);
+  const store = SqliteStoreAdapter.create(paths, fakeRepo(), fixedClock());
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+  });
+  ok(child.pid);
+  const startedAt = execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(child.pid)], {
+    encoding: "utf8",
+  }).trim();
+  ok(startedAt);
+
+  const db = new DatabaseSync(paths.dbFile);
+  db.prepare(
+    "INSERT INTO repository_lease_owners(owner_id, pid, process_instance_token) VALUES (?, ?, ?)",
+  ).run("child-owner", child.pid, `${child.pid}:${startedAt}`);
+  db.prepare(
+    "INSERT INTO repository_leases(repo, owner_id, run_id, purpose, epoch, acquired_at, heartbeat_at, expires_at) VALUES (?, ?, ?, 'execute', 1, ?, ?, ?)",
+  ).run(
+    "/tmp/repo",
+    "child-owner",
+    "child-run",
+    "2025-01-01T00:00:00.000Z",
+    "2025-01-01T00:00:00.000Z",
+    "2025-01-01T00:00:01.000Z",
+  );
+  db.close();
+
+  try {
+    strictEqual(
+      store.acquireRepositoryLease("/tmp/repo", "contender", "other-run", "execute"),
+      undefined,
+    );
+    equal(store.listRepositoryLeases().at(0)?.ownerId, "child-owner");
+  } finally {
+    child.kill("SIGTERM");
+    await once(child, "exit");
+  }
+
+  const expiredDb = new DatabaseSync(paths.dbFile);
+  expiredDb
+    .prepare("UPDATE repository_leases SET expires_at = ? WHERE repo = ?")
+    .run("2025-01-01T00:00:01.000Z", "/tmp/repo");
+  expiredDb.close();
+  ok(store.acquireRepositoryLease("/tmp/repo", "contender", "other-run", "execute"));
+  await cleanTemp(tmp);
+});
+
+test("store: queued cancellation cannot overwrite a claim won by another connection", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-cancel-claim-race-"));
+  const paths = makePaths(tmp);
+  const clock = fixedClock();
+  const cancelling = SqliteStoreAdapter.create(paths, fakeRepo(), clock);
+  const claiming = SqliteStoreAdapter.create(paths, fakeRepo(), clock);
+  const runId = "20260101-000000-cancel-race";
+  cancelling.writeMeta({
+    runId,
+    status: "queued",
+    attempt: 0,
+    repo: "/tmp/repo",
+    base: "main",
+    branch: `meridian/${runId}`,
+    worktree: join(tmp, "runs", runId, "worktree"),
+    stallRetries: 0,
+    crashRetries: 0,
+    reorientRetries: 0,
+    promoted: false,
+    pass: 1,
+    updatedAt: clock.nowIso(),
   });
 
-  ok(claimed, "should claim a run after retry");
-  equal(claimed!.runId, "20260101-000000-run-b", "should return the second run after CAS loss");
-  equal(
-    beforeUpdateCalledWith,
-    "20260101-000000-run-a",
-    "should have called beforeUpdate for the first candidate that lost the race",
-  );
-  // run-a remains 'running', run-b is now 'running'.
-  equal(store.readMeta("20260101-000000-run-a").status, "running");
-  equal(store.readMeta("20260101-000000-run-b").status, "running");
+  equal(claiming.claimNextQueuedRun([])?.runId, runId);
+  await rejects(async () => cancelling.archiveQueue(runId), /status conflict/);
+  equal(cancelling.readMeta(runId).status, "running");
   await cleanTemp(tmp);
 });
 
@@ -897,6 +2286,23 @@ verification:
   strictEqual(repo.headBranchCallCount, 0, "headBranch should not be called when base is explicit");
   const admittedRaw = store.readQueuePacket("20260101-000000-test");
   match(admittedRaw!, /base: stable-branch/);
+  await cleanTemp(tmp);
+});
+
+test("store: duplicate admission cannot replace run metadata or packet", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "store-adm-duplicate-"));
+  const clock = fixedClock();
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
+  const runId = "20260101-000000-duplicate";
+  const original = makeTestPacket().raw;
+  store.admitQueue(runId, original);
+  ok(store.claimNextQueuedRun([]));
+
+  const replacement = original.replace("test summary", "replacement summary");
+  await rejects(async () => store.admitQueue(runId, replacement), /run already exists/);
+  equal(store.readMeta(runId).status, "running");
+  equal(store.readMeta(runId).attempt, 1);
+  equal(store.readQueuePacket(runId), original);
   await cleanTemp(tmp);
 });
 
@@ -1106,58 +2512,6 @@ verification:
   await cleanTemp(tmp);
 });
 
-test("store: initMetaFromQueue stamps promoted:true from frontmatter", async () => {
-  const tmp = await mkdtemp(join(tmpdir(), "store-meta-promoted-"));
-  const clock = fixedClock();
-  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-  const packet = `---
-repo: /tmp/test-repo
-base: main
-compare_commit: main
-promoted: true
-summary: promoted packet
-outcomes:
-  - id: o1
-    description: outcome 1
-expected_surface:
-  - src/index.ts
-verification:
-  - command: echo ok
----
-`;
-  store.admitQueue("20260101-000000-meta-promo", packet);
-  const meta = store.initMetaFromQueue("20260101-000000-meta-promo");
-  ok(meta, "initMetaFromQueue should produce a RunMeta");
-  strictEqual(meta!.promoted, true, "promoted should be true from frontmatter");
-  await cleanTemp(tmp);
-});
-
-test("store: initMetaFromQueue stamps babyModel from frontmatter", async () => {
-  const tmp = await mkdtemp(join(tmpdir(), "store-meta-babymodel-"));
-  const clock = fixedClock();
-  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), clock);
-  const packet = `---
-repo: /tmp/test-repo
-base: main
-compare_commit: main
-baby_model: codestral-latest
-summary: baby model packet
-outcomes:
-  - id: o1
-    description: outcome 1
-expected_surface:
-  - src/index.ts
-verification:
-  - command: echo ok
----
-`;
-  store.admitQueue("20260101-000000-meta-babymodel", packet);
-  const meta = store.initMetaFromQueue("20260101-000000-meta-babymodel");
-  ok(meta, "initMetaFromQueue should produce a RunMeta");
-  strictEqual(meta!.babyModel, "codestral-latest", "babyModel should be set from frontmatter");
-  await cleanTemp(tmp);
-});
-
 test("store: archiveQueue marks run stopped in SQLite", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "store-arch-"));
   const clock = fixedClock();
@@ -1271,7 +2625,7 @@ const runContractTests = async (
     const meta = {
       runId: "20260101-000000-meta",
       status: "queued" as const,
-      attempt: 1,
+      attempt: 0,
       repo: "/tmp/repo",
       base: "main",
       branch: "meridian/20260101-000000-meta",
@@ -1279,7 +2633,6 @@ const runContractTests = async (
       stallRetries: 0,
       crashRetries: 0,
       reorientRetries: 0,
-      reviewerUnreachable: 0,
       promoted: false,
       pass: 1,
       updatedAt: clock.nowIso(),
@@ -1288,7 +2641,7 @@ const runContractTests = async (
     const read = store.readMeta(meta.runId);
     equal(read.runId, meta.runId);
     equal(read.status, "queued");
-    equal(read.attempt, 1);
+    equal(read.attempt, 0);
     await cleanTemp(tmp);
   }
 
@@ -1567,7 +2920,7 @@ verification:
     const zMeta = {
       runId: "20260101-000000-z",
       status: "queued" as const,
-      attempt: 1,
+      attempt: 0,
       repo: "/tmp/r",
       base: "main",
       branch: "b",
@@ -1575,7 +2928,6 @@ verification:
       stallRetries: 0,
       crashRetries: 0,
       reorientRetries: 0,
-      reviewerUnreachable: 0,
       promoted: false,
       pass: 1,
       updatedAt: clock.nowIso(),
@@ -1583,7 +2935,7 @@ verification:
     const aMeta = {
       runId: "20260101-000000-a",
       status: "queued" as const,
-      attempt: 1,
+      attempt: 0,
       repo: "/tmp/r",
       base: "main",
       branch: "b",
@@ -1591,7 +2943,6 @@ verification:
       stallRetries: 0,
       crashRetries: 0,
       reorientRetries: 0,
-      reviewerUnreachable: 0,
       promoted: false,
       pass: 1,
       updatedAt: clock.nowIso(),
@@ -1599,7 +2950,7 @@ verification:
     const bMeta = {
       runId: "20260101-000000-b",
       status: "queued" as const,
-      attempt: 1,
+      attempt: 0,
       repo: "/tmp/r",
       base: "main",
       branch: "b",
@@ -1607,7 +2958,6 @@ verification:
       stallRetries: 0,
       crashRetries: 0,
       reorientRetries: 0,
-      reviewerUnreachable: 0,
       promoted: false,
       pass: 1,
       updatedAt: clock.nowIso(),

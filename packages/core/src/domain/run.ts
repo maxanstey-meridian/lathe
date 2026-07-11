@@ -6,7 +6,6 @@ import { z } from "zod";
 export const RunStatus = z.enum([
   "queued",
   "running",
-  "interrupted",
   "ready_for_review",
   "blocked",
   "failed",
@@ -20,8 +19,7 @@ export const BlockedReason = z.enum([
   "scope_expansion",
   "stop_condition",
   // A harness-detected stall: ladder, rotation bounce, consecutive turn
-  // failures, or the run watchdog (§5 R10). Recoverable — auto-requeued up to
-  // `maxStallRetries` before escalating to Max.
+  // failures, or the run watchdog (§5 R10). Parked for explicit operator action.
   "wedged",
   // A driver-level failure: executeRun itself threw (worktree/server/IO). NOT
   // auto-retried — a systemic fault would hot-loop on the same packet (§5 R10).
@@ -32,7 +30,9 @@ export type BlockedReason = z.infer<typeof BlockedReason>;
 export const RunMeta = z.object({
   runId: z.string(),
   status: RunStatus,
-  attempt: z.number().int().min(1),
+  revision: z.number().int().min(0).optional(),
+  // Zero while freshly admitted; incremented atomically when an execution is claimed.
+  attempt: z.number().int().min(0),
   repo: z.string(),
   base: z.string(),
   branch: z.string(),
@@ -66,7 +66,7 @@ export const RunMeta = z.object({
   // P6: count of automatic post-stall requeues spent on this run (§5 R10).
   // Carried across resumes; reset to 0 when Max answers a park (a human looked).
   stallRetries: z.number().int().min(0).default(0),
-  // Count of automatic crash recoveries spent on this run (§5 R10 sibling).
+  // Legacy crash recovery count retained for persisted-state compatibility.
   // Carried across resumes; reset to 0 when Max answers a park (a human
   // looked). Mirrors stallRetries but for the crashed branch.
   crashRetries: z.number().int().min(0).default(0),
@@ -75,12 +75,6 @@ export const RunMeta = z.object({
   // any accepted consult (the reseeded Baby recovered); at maxReorientRetries the
   // driver stops rotating and parks for Max.
   reorientRetries: z.number().int().min(0).default(0),
-  // Count of CONSECUTIVE convergence attempts where super-daddy was UNREACHABLE
-  // (a transport drop, not a verdict). A non-result is never recorded as a pass,
-  // so the run stays retryable; this counter is the only memory of the drops.
-  // Reset to 0 on any reviewed outcome. At thresholds.maxReviewerUnreachable the
-  // driver stops self-retrying and parks for Max (Codex durably down/misconfig).
-  reviewerUnreachable: z.number().int().min(0).default(0),
   // Whether baby's inference has been promoted to the strong (daddy-class) model
   // for this run — the last-ditch "one more set of retries on a bigger model"
   // before a retry cap escalates to Max (§5 R10 + promote-at-cap). Persisted so

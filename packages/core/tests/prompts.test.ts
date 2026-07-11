@@ -1,14 +1,10 @@
 import { doesNotMatch, match, strictEqual } from "node:assert";
 import { describe, it } from "node:test";
-import type {
-  Packet,
-  OutcomeLedger,
-  Checkpoint,
-  ReviewState,
-  Decision,
-  PlannerResponse,
-  SubmitReport,
-} from "../src/domain/index.js";
+import type { Packet } from "../src/domain/packet.js";
+import type { OutcomeLedger, Checkpoint } from "../src/domain/outcomes.js";
+import type { ReviewState, Decision } from "../src/domain/run.js";
+import type { PlannerResponse } from "../src/domain/review.js";
+import type { SubmitReport } from "../src/domain/report.js";
 import {
   q1InitialSeed,
   q2RotationSeed,

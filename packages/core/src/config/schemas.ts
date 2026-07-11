@@ -117,11 +117,6 @@ export const Config = z.object({
       // Opus has a large window; give it more of the diff inline than daddy's
       // 64KB.
       diffCapBytes: z.number().int().default(131_072),
-      // In-adapter immediate retries on a TRANSIENT transport drop (socket hang
-      // up, 5xx, reset) before giving up and returning an unreachable outcome.
-      // The Codex backend drops sockets often enough that one extra attempt
-      // usually lands; a fatal error (auth/400) is never retried.
-      transportRetries: z.number().int().min(0).default(2),
     })
     .default({}),
   thresholds: z
@@ -158,28 +153,11 @@ export const Config = z.object({
       // Super-daddy circuit breaker: max convergence passes before a stalled
       // campaign is forced to escalate to Max.
       maxPasses: z.number().int().min(1).default(3),
-      // Convergence-level budget for CONSECUTIVE unreachable (transport-dropped)
-      // super-daddy attempts. Below it the run self-retries (stays ready, no pass
-      // recorded); at it the run parks for Max as a real "Codex durably down".
-      // Distinct from maxPasses, which counts real verdicts.
-      maxReviewerUnreachable: z.number().int().min(1).default(3),
       // When daddy's final review rejects baby's report reportRejectionParkAt
       // times, swap baby's model to baby.promoteTo for one more set of retries
       // before failing the run. false disables the swap — baby just fails at the
       // rejection cap as if promoteTo were absent.
       promoteAtCap: z.boolean().default(true),
-      // P6 liveness. maxStallRetries: automatic post-stall requeues before a
-      // `wedged` run escalates to Max. maxRunMs:
-      // wall-clock backstop on a single attempt — the livelock watchdog the
-      // per-turn ladder can't catch (productive-looking turns that never
-      // converge). Default 6h.
-      maxStallRetries: z.number().int().min(0).default(2),
-      // Bounded crash retry: auto-requeue a `blocked/crashed` run up to
-      // maxCrashRetries (front of the line) before escalating to Max. A
-      // transient crash (cold proxy, momentary IO blip) retriers; a
-      // deterministic crash parks for Max after the cap. Mirrors
-      // maxStallRetries for wedged stalls.
-      maxCrashRetries: z.number().int().min(0).default(2),
       // P6 sibling for hallucination recovery: max consecutive reorients before
       // the driver stops rotating and parks for Max. 0 disables reorient.
       maxReorientRetries: z.number().int().min(0).default(2),

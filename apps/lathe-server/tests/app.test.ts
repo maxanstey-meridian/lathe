@@ -4,9 +4,10 @@ import { test } from "node:test";
 import { Config } from "@lathe/core";
 import type { RunMeta } from "@lathe/core";
 import type { Supervisor } from "../src/supervisor.js";
-import { createApp, createEventBus, createTailEventBus } from "../src/app.js";
+import { createApp } from "../src/app.js";
+import { createEventBus, createTailEventBus } from "../src/server-host.js";
 import type { LatheEvent, TailEvent, TailSnapshotDto, SettingsDto, DecisionDto, OutcomeLedgerDto, ConvergenceLogEntryDto } from "@lathe/contract";
-import { RunNotAnswerableError, RunNotFoundError, NonChainTipError } from "../src/supervisor.js";
+import { RunCancellationConflictError, RunLifecycleConflictError, RunNotAnswerableError, RunNotFoundError, NonChainTipError } from "../src/supervisor.js";
 import type { ValidatePacketResult } from "@lathe/core";
 
 // ---------------------------------------------------------------------------
@@ -49,6 +50,7 @@ const tailSnapshot = (runId: string): TailSnapshotDto => ({
     daddy: [],
     super: [],
   },
+  acceptanceReviewLines: [],
   driverCommands: [],
   journal: [
     {
@@ -65,10 +67,14 @@ const tailSnapshot = (runId: string): TailSnapshotDto => ({
 const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
   const metaStore = new Map<string, RunMeta>();
   const stagedEntries: Array<{ runId: string; parentRunId: string }> = [];
+  let currentConfig = overrides?.config ?? defaultConfig;
+  const startupConfig = currentConfig;
 
   const base = {
     stop: async () => {},
-    config: defaultConfig,
+    get config() { return currentConfig; },
+    get settings() { return currentConfig; },
+    get restartRequired() { return JSON.stringify(currentConfig) !== JSON.stringify(startupConfig); },
     appDeps: {
       bus: createEventBus(),
       readEventsSince: (_seq: number): { seq: number; event: LatheEvent }[] => [],
@@ -101,10 +107,11 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
 
     getRun: (runId: string): RunMeta | undefined => metaStore.get(runId),
 
-    stopRun: (runId: string): void => {
+    stopRun: (runId: string): "stopped" => {
       const meta = metaStore.get(runId);
       if (!meta) throw new RunNotFoundError(runId);
       metaStore.set(runId, { ...meta, status: "stopped" as const, updatedAt: new Date().toISOString() });
+      return "stopped";
     },
 
     answerRun: (runId: string, _answer: string): void => {
@@ -207,6 +214,13 @@ const makeFakeSupervisor = (overrides?: Partial<Supervisor>): Supervisor => {
   // with overridden getRun/isChainTip, we use a proxy pattern — the base CRUD
   // methods are re-bound to the final merged object.
   const merged = { ...base, ...overrides };
+  Object.defineProperty(merged, "config", { get: () => currentConfig });
+  Object.defineProperty(merged, "settings", { get: () => currentConfig });
+  Object.defineProperty(merged, "restartRequired", { get: () => JSON.stringify(currentConfig) !== JSON.stringify(startupConfig) });
+  merged.writeConfig = (raw: unknown) => {
+    currentConfig = Config.parse(raw);
+    return currentConfig;
+  };
 
   // Re-bind CRUD methods that need access to the merged getRun/isChainTip
   merged.stopRun = (runId: string) => {
@@ -281,6 +295,8 @@ const makeAcceptSupervisor = (meta: RunMeta, currentBranch: string, isDirty = fa
   return {
     stop: async () => {},
     config: defaultConfig,
+    settings: defaultConfig,
+    restartRequired: false,
     appDeps: {
       bus: createEventBus(),
       readEventsSince: (_seq: number): { seq: number; event: LatheEvent }[] => [],
@@ -289,7 +305,7 @@ const makeAcceptSupervisor = (meta: RunMeta, currentBranch: string, isDirty = fa
     enqueueChain: (_chainDir: string): void => {},
     listRuns: (): RunMeta[] => Array.from(metaStore.values()),
     getRun: (runId: string): RunMeta | undefined => metaStore.get(runId),
-    stopRun: (_runId: string): void => {},
+    stopRun: (_runId: string): "stopped" => "stopped",
     acceptRun: (runId: string): number => {
       const current = metaStore.get(runId);
       if (!current) throw new RunNotFoundError(runId);
@@ -713,6 +729,86 @@ test("StopRun for unknown runId returns 404", async () => {
   equal(res.status, 404);
 });
 
+test("StopRun maps an ownerless running cancellation conflict to 409", async () => {
+  const supervisor = makeFakeSupervisor({
+    stopRun: (runId) => { throw new RunCancellationConflictError(runId); },
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request(new Request("http://localhost/runs/ownerless/stop", { method: "POST" }));
+  equal(res.status, 409);
+  deepStrictEqual(await res.json(), {
+    code: "cancellation_conflict",
+    message: "run ownerless is running without an active cancellation owner",
+  });
+});
+
+test("unhealthy supervisor gates driver mutations but leaves diagnostics and restart reachable", async () => {
+  let restartCalled = false;
+  let queuedStopCalled = false;
+  const supervisor = makeFakeSupervisor({
+    health: () => ({ healthy: false, detail: "driver exploded" }),
+    config: Config.parse({
+      idleTimeoutMs: false,
+      baby: {
+        models: {
+          large: {
+            providerId: "omlx",
+            modelId: "large-model",
+            baseUrl: "http://localhost:8000/v1",
+            contextWindow: 200_000,
+          },
+        },
+      },
+      superdaddy: { baseUrl: null, headerTimeoutMs: false },
+      repos: {
+        repo: {
+          setup: { commands: [{ command: "pnpm install", dir: "." }] },
+        },
+      },
+    }),
+    getRun: (runId) => runId === "queued" ? ({ runId, status: "queued" } as RunMeta) : undefined,
+    stopRun: (runId) => { queuedStopCalled = runId === "queued"; return "stopped"; },
+  });
+  const app = createApp(supervisor.appDeps, supervisor, {
+    onRestart: () => { restartCalled = true; },
+  });
+
+  const mutation = await app.request(new Request("http://localhost/runs/content", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content: "packet", filename: "packet.md" }),
+  }));
+  equal(mutation.status, 503);
+  deepStrictEqual(await mutation.json(), {
+    code: "supervisor_unhealthy",
+    message: "run driver unavailable: driver exploded",
+  });
+
+  const queuedStop = await app.request(new Request("http://localhost/runs/queued/stop", { method: "POST" }));
+  equal(queuedStop.status, 202);
+  equal(queuedStopCalled, true);
+
+  const ownedStop = await app.request(new Request("http://localhost/runs/running/stop", { method: "POST" }));
+  equal(ownedStop.status, 503);
+
+  const status = await app.request(new Request("http://localhost/status"));
+  equal(status.status, 200);
+
+  const settings = await app.request(new Request("http://localhost/settings"));
+  equal(settings.status, 200);
+  const settingsBody = await settings.json() as { settings: SettingsDto };
+  equal(settingsBody.settings.idleTimeoutMs, false);
+  equal(settingsBody.settings.superdaddy.baseUrl, null);
+  equal(settingsBody.settings.superdaddy.headerTimeoutMs, false);
+  equal(settingsBody.settings.baby.models.large?.modelId, "large-model");
+  deepStrictEqual(settingsBody.settings.repos.repo?.setup.commands, [{ command: "pnpm install", dir: "." }]);
+
+  const restart = await app.request(new Request("http://localhost/restart", { method: "POST" }));
+  equal(restart.status, 200);
+  equal(restartCalled, true);
+});
+
 test("StopRun for a running run returns updated summary", async () => {
   const runId = "stop-running";
   const meta = {
@@ -737,6 +833,7 @@ test("StopRun for a running run returns updated summary", async () => {
     stopRun: (id: string) => {
       if (id !== runId) throw new RunNotFoundError(id);
       meta.status = "stopped" as const;
+      return "cancellation_requested";
     },
     isChainTip: () => true,
   });
@@ -744,10 +841,11 @@ test("StopRun for a running run returns updated summary", async () => {
 
   const req = new Request(`http://localhost/runs/${runId}/stop`, { method: "POST" });
   const res = await app.request(req);
-  equal(res.status, 201);
-  const body = await res.json() as { runId: string; status: string };
+  equal(res.status, 202);
+  const body = await res.json() as { runId: string; status: string; cancellationRequested: boolean };
   equal(body.runId, runId);
-  ok(["blocked", "stopped"].includes(body.status));
+  equal(body.status, "cancellation_requested");
+  equal(body.cancellationRequested, true);
 });
 
 test("AnswerRun returns updated queued summary", async () => {
@@ -818,13 +916,13 @@ test("StopRun for a queue-only run returns success without meta", async () => {
   const runId = "stop-queued";
   const supervisor = makeFakeSupervisor({
     getRun: () => undefined,
-    stopRun: () => {},
+    stopRun: () => "stopped",
   });
   const app = createApp(supervisor.appDeps, supervisor);
 
   const req = new Request(`http://localhost/runs/${runId}/stop`, { method: "POST" });
   const res = await app.request(req);
-  equal(res.status, 201);
+  equal(res.status, 202);
   const body = await res.json() as { runId: string; status: string };
   equal(body.runId, runId);
   equal(body.status, "stopped");
@@ -864,6 +962,39 @@ test("AnswerRun for a non-blocked run returns 409", async () => {
   const body = await res.json() as { code: string; message: string };
   equal(body.code, "not_answerable");
   ok(body.message.includes("not answerable"));
+});
+
+test("AnswerRun maps a lifecycle CAS conflict to 409", async () => {
+  const supervisor = makeFakeSupervisor({
+    getRun: (runId) => ({
+      runId,
+      status: "blocked",
+      attempt: 1,
+      repo: "/tmp/test",
+      base: "main",
+      branch: `meridian/${runId}`,
+      worktree: `/tmp/w/${runId}`,
+      stallRetries: 0,
+      crashRetries: 0,
+      reorientRetries: 0,
+      promoted: false,
+      updatedAt: new Date().toISOString(),
+    }),
+    answerRun: () => {
+      throw new RunLifecycleConflictError("run changed during answer");
+    },
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+  const response = await app.request("http://localhost/runs/test-run/answer", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ answer: "continue" }),
+  });
+  equal(response.status, 409);
+  deepStrictEqual(await response.json(), {
+    code: "lifecycle_conflict",
+    message: "run changed during answer",
+  });
 });
 
 test("AcceptRun on chain tip returns 200", async () => {
@@ -978,6 +1109,42 @@ test("RejectRun for a queue-only run returns success without meta", async () => 
   const body = await res.json() as { runId: string; status: string };
   equal(body.runId, runId);
   equal(body.status, "blocked");
+});
+
+test("RejectRun maps a lifecycle CAS conflict to 409", async () => {
+  const runId = "reject-conflict";
+  const supervisor = makeFakeSupervisor({
+    rejectRun: () => {
+      throw new RunLifecycleConflictError("run changed during transition");
+    },
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request(new Request(`http://localhost/runs/${runId}/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason: "wrong scope" }),
+  }));
+
+  equal(res.status, 409);
+  equal((await res.json() as { code: string }).code, "lifecycle_conflict");
+});
+
+test("RequeueRun maps a lifecycle CAS conflict to 409", async () => {
+  const runId = "requeue-conflict";
+  const supervisor = makeFakeSupervisor({
+    requeueRun: () => {
+      throw new RunLifecycleConflictError("run changed during transition");
+    },
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request(new Request(`http://localhost/runs/${runId}/requeue`, {
+    method: "POST",
+  }));
+
+  equal(res.status, 409);
+  equal((await res.json() as { code: string }).code, "lifecycle_conflict");
 });
 
 test("GetTail returns daemon-owned snapshot for a run", async () => {
@@ -1465,6 +1632,7 @@ expected_surface:
   - src/app.ts
 verification:
   - command: echo test
+baby_model: openai/gpt-5.6
 ---
 Body text
 `;
@@ -1474,7 +1642,7 @@ Body text
       baseInFm: "main",
       headBranch: "main",
       stamped: validContent,
-      shape: { ok: true, packet: { runId: "", frontmatter: { repo: "/tmp/test", base: "main", compare_commit: "abc123", summary: "test packet", outcomes: [{ id: "test-outcome", description: "Test outcome" }], expected_surface: ["src/app.ts"], suspicious_surface: [], verification: [{ command: "echo test" }], constraints: [], autofix_commands: [], campaign_id: undefined, parent_run_id: undefined, pass: 1, regression_outcomes: [], promoted: false }, body: "Body text", raw: validContent } },
+      shape: { ok: true, packet: { runId: "", frontmatter: { repo: "/tmp/test", base: "main", compare_commit: "abc123", summary: "test packet", outcomes: [{ id: "test-outcome", description: "Test outcome" }], expected_surface: ["src/app.ts"], suspicious_surface: [], verification: [{ command: "echo test" }], constraints: [], autofix_commands: [], campaign_id: undefined, parent_run_id: undefined, pass: 1, regression_outcomes: [], promoted: false, baby_model: "openai/gpt-5.6" }, body: "Body text", raw: validContent } },
       repoValid: true,
       baseExists: true,
       base: "main",
@@ -1494,6 +1662,7 @@ Body text
   ok(body.frontmatter !== null);
   strictEqual((body.frontmatter as any).repo, "/tmp/test");
   strictEqual((body.frontmatter as any).base, "main");
+  strictEqual((body.frontmatter as any).baby_model, "openai/gpt-5.6");
   strictEqual(body.body, "Body text");
   deepStrictEqual(body.problems, []);
 });
@@ -1687,7 +1856,6 @@ test("status mapping handles all domain values", async () => {
 
   strictEqual(mapStatus("queued"), "queued");
   strictEqual(mapStatus("running"), "running");
-  strictEqual(mapStatus("interrupted"), "interrupted");
   strictEqual(mapStatus("ready_for_review"), "ready_for_review");
   strictEqual(mapStatus("blocked"), "blocked");
   strictEqual(mapStatus("failed"), "failed");
@@ -1699,32 +1867,101 @@ test("status mapping handles all domain values", async () => {
 // Settings & restart sidecar routes
 // ---------------------------------------------------------------------------
 
-test("GET /settings returns full config as JSON", async () => {
+test("GET /settings redacts configured API keys", async () => {
   const supervisor = makeFakeSupervisor();
   const app = createApp(supervisor.appDeps, supervisor);
 
   const res = await app.request("http://localhost/settings");
   equal(res.status, 200);
-  const body = await res.json() as SettingsDto;
-  ok(typeof body.baby === "object");
-  ok(typeof body.daddy === "object");
-  ok(typeof body.superdaddy === "object");
-  ok(typeof body.thresholds === "object");
+  const body = await res.json() as { settings: SettingsDto; restartRequired: boolean };
+  ok(typeof body.settings.baby === "object");
+  ok(typeof body.settings.daddy === "object");
+  ok(typeof body.settings.superdaddy === "object");
+  ok(typeof body.settings.thresholds === "object");
+  equal(body.settings.baby.apiKey, "");
+  equal(body.settings.superdaddy.apiKey, undefined);
+  equal(body.restartRequired, false);
 });
 
-test("PUT /settings validates body and returns parsed config", async () => {
+test("PUT /settings updates the subsequent GET snapshot", async () => {
   const supervisor = makeFakeSupervisor();
   const app = createApp(supervisor.appDeps, supervisor);
 
-  const body = { baby: { modelId: "new-model" } };
+  const currentSettings = Config.parse(supervisor.settings);
+  const body = { ...currentSettings, baby: { ...currentSettings.baby, modelId: "new-model" } };
   const res = await app.request("http://localhost/settings", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   equal(res.status, 200);
-  const parsed = await res.json() as SettingsDto;
-  equal(parsed.baby.modelId, "new-model");
+  const parsed = await res.json() as { settings: SettingsDto; restartRequired: boolean };
+  equal(parsed.settings.baby.modelId, "new-model");
+  equal(parsed.restartRequired, true);
+
+  const get = await app.request("http://localhost/settings");
+  equal(get.status, 200);
+  const current = await get.json() as { settings: SettingsDto; restartRequired: boolean };
+  equal(current.settings.baby.modelId, "new-model");
+  equal(current.settings.baby.apiKey, "");
+  equal(current.restartRequired, true);
+  equal(supervisor.config.baby.apiKey, "api-key");
+});
+
+test("PUT /settings accepts disabled timeout settings", async () => {
+  const supervisor = makeFakeSupervisor();
+  const app = createApp(supervisor.appDeps, supervisor);
+  const current = Config.parse(supervisor.settings);
+  const res = await app.request("http://localhost/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...current,
+      idleTimeoutMs: false,
+      superdaddy: { ...current.superdaddy, headerTimeoutMs: false },
+    }),
+  });
+
+  equal(res.status, 200);
+  const parsed = await res.json() as { settings: SettingsDto };
+  equal(parsed.settings.idleTimeoutMs, false);
+  equal(parsed.settings.superdaddy.headerTimeoutMs, false);
+});
+
+test("PUT /settings deletes omitted named models and restores secrets only for retained models", async () => {
+  const supervisor = makeFakeSupervisor({
+    config: Config.parse({
+      ...defaultConfig,
+      baby: {
+        ...defaultConfig.baby,
+        models: {
+          retained: { providerId: "omlx", modelId: "retained", baseUrl: "http://retained", contextWindow: 10_000, apiKey: "retained-secret" },
+          deleted: { providerId: "omlx", modelId: "deleted", baseUrl: "http://deleted", contextWindow: 20_000, apiKey: "deleted-secret" },
+        },
+      },
+    }),
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+  const submitted = {
+    ...supervisor.settings,
+    baby: {
+      ...supervisor.settings.baby,
+      apiKey: "",
+      models: {
+        retained: { ...supervisor.settings.baby.models.retained!, apiKey: "" },
+      },
+    },
+  };
+
+  const res = await app.request("http://localhost/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(submitted),
+  });
+
+  equal(res.status, 200);
+  deepStrictEqual(Object.keys(supervisor.settings.baby.models), ["retained"]);
+  equal(supervisor.settings.baby.models.retained?.apiKey, "retained-secret");
 });
 
 test("PUT /settings returns 400 for invalid body", async () => {

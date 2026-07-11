@@ -57,8 +57,10 @@ import {
 import type { SubmitReport } from "../../domain/report.js";
 import { ACCEPTED_STATUSES } from "../../domain/review.js";
 import type { FinalReview, PlannerResponse } from "../../domain/review.js";
+import type { RunMeta } from "../../domain/run.js";
 import { evaluateTurn } from "../../domain/turn.js";
 import type { ModelConfig } from "../ports/executor.js";
+import type { RepositoryLease } from "../ports/store.js";
 import { rotateSession } from "./rotation.js";
 import {
   journal,
@@ -128,6 +130,7 @@ const syncPendingMaxDecisionsToDaddy = async (
   runId: string,
   worktree: string,
   turn: number,
+  signal?: AbortSignal,
 ): Promise<void> => {
   if (!ports.planner.syncMaxDecisions) {
     return;
@@ -143,7 +146,10 @@ const syncPendingMaxDecisionsToDaddy = async (
     return;
   }
 
-  await ports.planner.syncMaxDecisions(pending);
+  await ports.planner.syncMaxDecisions(pending, signal);
+  if (signal?.aborted) {
+    return;
+  }
   const last = pending.at(-1);
   if (!last) {
     return;
@@ -458,12 +464,21 @@ export const turnLoop = async (
   seed: Seed,
   deadlineMs: number,
   signal?: AbortSignal,
+  lease?: RepositoryLease,
 ): Promise<TurnLoopResult> => {
-  // Snapshot config for this run — configSource is refreshed by PUT /settings,
-  // so each run sees the latest repos[*].seed, thresholds, etc.
+  // Runtime config is the daemon startup snapshot; persisted settings take
+  // effect after the explicit restart reported by PUT /settings.
   const config = ports.configSource.get();
   const { store, repo, executor, planner, clock } = ports;
   const runId = packet.runId;
+  const updateMeta = (current: RunMeta, update: Partial<RunMeta>): RunMeta =>
+    store.transitionRun({
+      runId,
+      expectedRevision: current.revision ?? 0,
+      expectedStatuses: [current.status],
+      meta: { ...current, ...update, updatedAt: clock.nowIso() },
+      ...(lease ? { lease } : {}),
+    });
   // Run Baby's harness on Daddy's model from turn 1 — same task, stronger engine —
   // when this run is already promoted. Two persisted sources: a promoted follow-up
   // packet (the convergence cap escape hatch, in frontmatter) OR a stall-cap/
@@ -628,6 +643,7 @@ export const turnLoop = async (
           sessionId,
           turn,
           needsReconciliation,
+          lease,
         );
         next = reseed;
         if (handoffInjected) {
@@ -756,7 +772,7 @@ export const turnLoop = async (
         channel.reportRejectionCount = 0;
         const pm = store.readMetaIfExists(runId);
         if (pm) {
-          store.writeMeta({ ...pm, promoted: true, updatedAt: clock.nowIso() });
+          updateMeta(pm, { promoted: true });
         }
         journal(ports, runId, turn, {
           event: "model_promoted",
@@ -775,6 +791,7 @@ export const turnLoop = async (
           sessionId,
           turn,
           needsReconciliation,
+          lease,
         );
         next = reseed;
         if (handoffInjected) {
@@ -797,7 +814,10 @@ export const turnLoop = async (
         let reconciliationReused = false;
         let plannerResponse: PlannerResponse;
         try {
-          await syncPendingMaxDecisionsToDaddy(ports, runId, worktree, turn);
+          await syncPendingMaxDecisionsToDaddy(ports, runId, worktree, turn, signal);
+          if (signal?.aborted) {
+            return finish({ status: "stopped" });
+          }
           if (submission.questionType === "reconciliation") {
             reconciliation = buildDriverReconciliation(ports, packet, worktree);
             const prior = lastAcceptedReconciliation(store.readDecisions(runId));
@@ -827,15 +847,20 @@ export const turnLoop = async (
               plannerResponse = await planner.consult(
                 effectiveSubmission,
                 buildPlannerConsultContext(ports, runId),
+                signal,
               );
             }
           } else {
             plannerResponse = await planner.consult(
               effectiveSubmission,
               buildPlannerConsultContext(ports, runId),
+              signal,
             );
           }
         } catch (err) {
+          if (signal?.aborted) {
+            return finish({ status: "stopped" });
+          }
           const detail = err instanceof Error ? err.message : String(err);
           journal(ports, runId, turn, {
             event: "driver_note",
@@ -843,6 +868,9 @@ export const turnLoop = async (
           });
           next = { name: "Qp-fail", text: qPlannerUnavailable(detail) };
           continue;
+        }
+        if (signal?.aborted) {
+          return finish({ status: "stopped" });
         }
 
         // Persist BEFORE acting (S2); an answered consult is progress, so the
@@ -892,6 +920,9 @@ export const turnLoop = async (
         toolCallsSinceDecision = 0;
 
         if (ACCEPTED_STATUSES.some((s) => s === plannerResponse.status)) {
+          if (signal?.aborted) {
+            return finish({ status: "stopped" });
+          }
           store.replaceObligations(runId, plannerResponse.constraints);
           const g = store.readGateState(runId);
           store.writeGateState(
@@ -901,7 +932,7 @@ export const turnLoop = async (
           journal(ports, runId, turn, { event: "gate_cleared", decisionAt: clock.nowIso() });
           const meta = store.readMeta(runId);
           if ((meta.reorientRetries ?? 0) > 0) {
-            store.writeMeta({ ...meta, reorientRetries: 0, updatedAt: clock.nowIso() });
+            updateMeta(meta, { reorientRetries: 0 });
           }
           next = { name: "Qp", text: qPlannerDecision(plannerResponse) };
           continue;
@@ -920,13 +951,13 @@ export const turnLoop = async (
           promoted = true;
           const prevBabyModel = babyModel;
           babyModel = promotedModelConfig(config);
-          store.writeMeta({ ...meta, promoted: true, updatedAt: clock.nowIso() });
+          updateMeta(meta, { promoted: true });
           journal(ports, runId, turn, {
             event: "model_promoted",
             from: modelLabel(prevBabyModel),
             to: promotedModelLabel(config),
           });
-          sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, false);
+          sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, false, lease);
           next = { name: "Qp-promote", text: qPlannerDecision(plannerResponse) };
           continue;
         }
@@ -941,13 +972,13 @@ export const turnLoop = async (
               question: `Baby derailed and was reoriented ${used}× but kept drifting — needs Max. Last fix offered: ${plannerResponse.safe_next_action}`,
             });
           }
-          store.writeMeta({ ...meta, reorientRetries: used + 1, updatedAt: clock.nowIso() });
+          updateMeta(meta, { reorientRetries: used + 1 });
           journal(ports, runId, turn, {
             event: "reorient",
             attempt: used + 1,
             fix: plannerResponse.safe_next_action,
           });
-          sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, false);
+          sessionId = await rotateSession(ports, packet, worktree, sessionId, turn, false, lease);
           const ledger = store.readLedger(runId);
           const review = store.readReviewState(runId);
           const decisions = store.readDecisions(runId);
@@ -1033,9 +1064,15 @@ export const turnLoop = async (
         const ledger = store.readLedger(runId);
         let review: FinalReview;
         try {
-          await syncPendingMaxDecisionsToDaddy(ports, runId, worktree, turn);
-          review = await planner.finalReview(packet, ledger, fullReport);
+          await syncPendingMaxDecisionsToDaddy(ports, runId, worktree, turn, signal);
+          if (signal?.aborted) {
+            return finish({ status: "stopped" });
+          }
+          review = await planner.finalReview(packet, ledger, fullReport, signal);
         } catch (err) {
+          if (signal?.aborted) {
+            return finish({ status: "stopped" });
+          }
           const detail = err instanceof Error ? err.message : String(err);
           review = {
             verdict: "request_changes",
@@ -1043,6 +1080,9 @@ export const turnLoop = async (
             notes: "planner unreachable",
             human_decision_needed: null,
           };
+        }
+        if (signal?.aborted) {
+          return finish({ status: "stopped" });
         }
         store.appendDecision(runId, {
           timestamp: clock.nowIso(),
@@ -1088,7 +1128,7 @@ export const turnLoop = async (
               // subsequent stall escalates instead of re-promoting (one per run).
               const pm = store.readMetaIfExists(runId);
               if (pm) {
-                store.writeMeta({ ...pm, promoted: true, updatedAt: clock.nowIso() });
+                updateMeta(pm, { promoted: true });
               }
               journal(ports, runId, turn, {
                 event: "model_promoted",
@@ -1107,6 +1147,7 @@ export const turnLoop = async (
                 sessionId,
                 turn,
                 needsReconciliation,
+                lease,
               );
               next = reseed;
               if (handoffInjected) {
@@ -1165,6 +1206,7 @@ export const turnLoop = async (
           sessionId,
           turn,
           needsReconciliation,
+          lease,
         );
         next = reseed;
         if (handoffInjected) {
@@ -1196,7 +1238,7 @@ export const turnLoop = async (
             consecutiveContextOverflows = 0;
             const pm = store.readMetaIfExists(runId);
             if (pm) {
-              store.writeMeta({ ...pm, promoted: true, updatedAt: clock.nowIso() });
+              updateMeta(pm, { promoted: true });
             }
             journal(ports, runId, turn, {
               event: "model_promoted",
@@ -1225,6 +1267,7 @@ export const turnLoop = async (
           sessionId,
           turn,
           needsReconciliation,
+          lease,
         );
         next = reseed;
         if (handoffInjected) {

@@ -31,9 +31,9 @@ export type TailPaneProjection = {
   project(runId: string, event: OpencodeEvent): void;
   mergeHistory(runId: string, speaker: TailSpeaker, sessionId: string, messages: OpencodeMessage[]): void;
   panes(runId: string): TailAgentPanesDto;
+  acceptanceReviewLines(runId: string): string[];
   driverCommands(runId: string): TailDriverCommandDto[];
   projectDriver(event: Extract<TailEvent, { kind: "tail.driver.command" | "tail.driver.delta" }>): void;
-  projectVerdict(runId: string, lines: string[]): void;
   mergeVerdict(runId: string, lines: string[]): void;
   clearRun(runId: string): void;
 };
@@ -188,9 +188,11 @@ export const createTailPaneProjection = (
     panes.baby = panes.baby.slice(-MAX_LINES);
     panes.daddy = panes.daddy.slice(-MAX_LINES);
     panes.super = panes.super.slice(-MAX_LINES);
-    panes.super = [...panes.super, ...(verdictLines.get(runId) ?? [])].slice(-MAX_LINES);
     return panes;
   };
+
+  const acceptanceReviewLines = (runId: string): string[] =>
+    (verdictLines.get(runId) ?? []).map((line) => line.text).slice(-MAX_LINES);
 
   const renderDriverCommands = (runId: string): TailDriverCommandDto[] =>
     [...(driverCommands.get(runId)?.entries() ?? [])]
@@ -205,7 +207,12 @@ export const createTailPaneProjection = (
       }));
 
   const replace = (runId: string): void => {
-    publish({ kind: "tail.agent.panes.replaced", runId, panes: render(runId) });
+    publish({
+      kind: "tail.agent.panes.replaced",
+      runId,
+      panes: render(runId),
+      acceptanceReviewLines: acceptanceReviewLines(runId),
+    });
   };
 
   const projectDriver = (event: Extract<TailEvent, { kind: "tail.driver.command" | "tail.driver.delta" }>): void => {
@@ -275,13 +282,8 @@ export const createTailPaneProjection = (
     publish(event);
   };
 
-  const projectVerdict = (runId: string, lines: string[]): void => {
-    verdictLines.set(runId, lines.map((text) => ({ text: text.slice(0, MAX_LINE_LENGTH), style: "tool" })));
-    replace(runId);
-  };
-
   const mergeVerdict = (runId: string, lines: string[]): void => {
-    verdictLines.set(runId, lines.map((text) => ({ text: text.slice(0, MAX_LINE_LENGTH), style: "tool" })));
+    verdictLines.set(runId, lines.map((text) => ({ text: text.slice(-MAX_LINE_LENGTH), style: "tool" })));
   };
 
   const project = (runId: string, event: OpencodeEvent): void => {
@@ -438,5 +440,5 @@ export const createTailPaneProjection = (
     verdictLines.delete(runId);
   };
 
-  return { project, mergeHistory, panes: render, driverCommands: renderDriverCommands, projectDriver, projectVerdict, mergeVerdict, clearRun };
+  return { project, mergeHistory, panes: render, acceptanceReviewLines, driverCommands: renderDriverCommands, projectDriver, mergeVerdict, clearRun };
 };

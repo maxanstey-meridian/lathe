@@ -44,6 +44,20 @@ export type DaemonDeps = {
   closeServer: (server: Server) => Promise<void>;
   onSignal: (signal: SignalName, handler: () => Promise<void>) => void;
   exit: (code: number) => never;
+  scheduleRestart?: (task: () => Promise<void>) => void;
+  launchReplacement?: () => void;
+};
+
+const launchReplacement = (): void => {
+  const [bin, ...args] = process.argv;
+  const escapedCommand = [bin, ...args]
+    .filter((a): a is string => a !== undefined)
+    .map((a) => `'${a.replace(/'/g, "'\\''")}'`)
+    .join(" ");
+  spawn("sh", ["-c", `sleep 1; exec ${escapedCommand}`], {
+    detached: true,
+    stdio: "ignore",
+  }).unref();
 };
 
 export const startDaemon = async (deps?: DaemonDeps, userPort?: number): Promise<void> => {
@@ -65,33 +79,8 @@ export const startDaemon = async (deps?: DaemonDeps, userPort?: number): Promise
   const supervisor = deps?.createSupervisor ?? createSupervisor;
   const sup = supervisor(config, paths);
 
-  // 3. Build the Hono app: use supervisor's own bus (journal tail publishes here) + readEventsSince.
-  const appFactory = deps?.createApp ?? createApp;
-  const app = appFactory(sup.appDeps, sup, {
-    logger: true,
-    cors: true,
-    onRestart: () => {
-      const [bin, ...args] = process.argv;
-      const escapedCommand = [bin, ...args].filter((a): a is string => a !== undefined).map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
-      spawn("sh", ["-c", `sleep 1; exec ${escapedCommand}`], {
-        detached: true,
-        stdio: "ignore",
-      }).unref();
-      setTimeout(() => {
-        releaseLock();
-        process.exit(0);
-      }, 200);
-    },
-  });
-
-  // 4. Attach the request listener to the already-bound held server.
-  server.on("request", getRequestListener(app.fetch, { hostname: host }));
-
-  console.log(`lathe daemon listening on http://${host}:${port}`);
-
-  // 5. Graceful shutdown.
   let shuttingDown = false;
-  const shutdown = async (): Promise<void> => {
+  const terminate = async (restart: boolean): Promise<void> => {
     if (shuttingDown) {
       (deps?.exit ?? process.exit)(1);
     }
@@ -105,10 +94,29 @@ export const startDaemon = async (deps?: DaemonDeps, userPort?: number): Promise
       /* supervisor stop timeout — proceed anyway */
     }
     releaseLock();
+    if (restart) {
+      (deps?.launchReplacement ?? launchReplacement)();
+    }
     (deps?.exit ?? process.exit)(0);
   };
 
+  // 3. Build the Hono app: use supervisor's own bus (journal tail publishes here) + readEventsSince.
+  const appFactory = deps?.createApp ?? createApp;
+  const app = appFactory(sup.appDeps, sup, {
+    logger: true,
+    cors: true,
+    onRestart: () => {
+      const schedule = deps?.scheduleRestart ?? ((task) => setTimeout(() => void task(), 0));
+      schedule(() => terminate(true));
+    },
+  });
+
+  // 4. Attach the request listener to the already-bound held server.
+  server.on("request", getRequestListener(app.fetch, { hostname: host }));
+
+  console.log(`lathe daemon listening on http://${host}:${port}`);
+
   const onSignal = deps?.onSignal ?? ((signal, handler) => process.on(signal, handler));
-  onSignal("SIGINT", shutdown);
-  onSignal("SIGTERM", shutdown);
+  onSignal("SIGINT", () => terminate(false));
+  onSignal("SIGTERM", () => terminate(false));
 };

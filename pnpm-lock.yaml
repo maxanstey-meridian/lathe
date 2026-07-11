@@ -127,8 +127,8 @@ importers:
         specifier: ^4.6.0
         version: 4.12.25
       rivet-ts:
-        specifier: github:maxanstey-meridian/rivet-ts#v0.11.1
-        version: https://codeload.github.com/maxanstey-meridian/rivet-ts/tar.gz/eeb5af5ae5a66f560343bd561569316f59a4aac5(hono@4.12.25)(vite@7.3.6(@types/node@22.19.21)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
+        specifier: github:maxanstey-meridian/rivet-ts#v0.12.0
+        version: https://codeload.github.com/maxanstey-meridian/rivet-ts/tar.gz/129718b25202eac7c5d67a2290301bd7f7df3cec(hono@4.12.25)(vite@7.3.6(@types/node@22.19.21)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
     devDependencies:
       '@types/node':
         specifier: ^22.10.0
@@ -153,8 +153,8 @@ importers:
         specifier: ^22.10.0
         version: 22.19.21
       rivet-ts:
-        specifier: github:maxanstey-meridian/rivet-ts#v0.11.1
-        version: https://codeload.github.com/maxanstey-meridian/rivet-ts/tar.gz/eeb5af5ae5a66f560343bd561569316f59a4aac5(hono@4.12.25)(vite@7.3.6(@types/node@22.19.21)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
+        specifier: github:maxanstey-meridian/rivet-ts#v0.12.0
+        version: https://codeload.github.com/maxanstey-meridian/rivet-ts/tar.gz/129718b25202eac7c5d67a2290301bd7f7df3cec(hono@4.12.25)(vite@7.3.6(@types/node@22.19.21)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -5555,9 +5555,9 @@ packages:
     resolution: {integrity: sha512-g6QUff04oZpHs0eG5p83rFLhHeV00ug/Yf9nZM6fLeUrPguBTkTQOdpAWWspMh55TZfVQDPaN3NQJfbVRAxdIw==}
     engines: {iojs: '>=1.0.0', node: '>=0.10.0'}
 
-  rivet-ts@https://codeload.github.com/maxanstey-meridian/rivet-ts/tar.gz/eeb5af5ae5a66f560343bd561569316f59a4aac5:
-    resolution: {gitHosted: true, integrity: sha512-o3ilbmzXACzAxKXj76eAq3DMlE7LtSK489keET7m+EsaEbihOqULrVkHZfotU/G0OouYcH/ceTDaLve9EO4g5Q==, tarball: https://codeload.github.com/maxanstey-meridian/rivet-ts/tar.gz/eeb5af5ae5a66f560343bd561569316f59a4aac5}
-    version: 0.11.1
+  rivet-ts@https://codeload.github.com/maxanstey-meridian/rivet-ts/tar.gz/129718b25202eac7c5d67a2290301bd7f7df3cec:
+    resolution: {gitHosted: true, integrity: sha512-GuvLdxkKdj8rZ47CKvmPCdd9BgQ+6T2S2F4ssnnag4duxdvFNV/CYaIkNP3/K+AS9rlX6hOFJc25PBXstzJDXA==, tarball: https://codeload.github.com/maxanstey-meridian/rivet-ts/tar.gz/129718b25202eac7c5d67a2290301bd7f7df3cec}
+    version: 0.12.0
     hasBin: true
     peerDependencies:
       hono: ^4.0.0
@@ -6624,7 +6624,7 @@ snapshots:
       '@babel/code-frame': 7.29.7
       '@babel/generator': 7.29.7
       '@babel/helper-compilation-targets': 7.29.7
-      '@babel/helper-module-transforms': 7.29.7(@babel/core@7.29.7(supports-color@10.2.2))
+      '@babel/helper-module-transforms': 7.29.7(@babel/core@7.29.7)
       '@babel/helpers': 7.29.7
       '@babel/parser': 7.29.7
       '@babel/template': 7.29.7
@@ -6697,7 +6697,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@babel/helper-module-transforms@7.29.7(@babel/core@7.29.7(supports-color@10.2.2))':
+  '@babel/helper-module-transforms@7.29.7(@babel/core@7.29.7)':
     dependencies:
       '@babel/core': 7.29.7(supports-color@10.2.2)
       '@babel/helper-module-imports': 7.29.7
@@ -12256,7 +12256,7 @@ snapshots:
 
   reusify@1.1.0: {}
 
-  rivet-ts@https://codeload.github.com/maxanstey-meridian/rivet-ts/tar.gz/eeb5af5ae5a66f560343bd561569316f59a4aac5(hono@4.12.25)(vite@7.3.6(@types/node@22.19.21)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0)):
+  rivet-ts@https://codeload.github.com/maxanstey-meridian/rivet-ts/tar.gz/129718b25202eac7c5d67a2290301bd7f7df3cec(hono@4.12.25)(vite@7.3.6(@types/node@22.19.21)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0)):
     dependencies:
       openapi-fetch: 0.17.0
       openapi-typescript: 7.13.0(typescript@6.0.3)

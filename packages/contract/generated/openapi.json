@@ -58,6 +58,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "run driver unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -133,6 +143,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "run driver unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -165,6 +185,16 @@
                   "items": {
                     "$ref": "#/components/schemas/RunSummaryDto"
                   }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "run driver unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -309,12 +339,12 @@
           }
         ],
         "responses": {
-          "201": {
-            "description": "Created",
+          "202": {
+            "description": "Status 202",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RunSummaryDto"
+                  "$ref": "#/components/schemas/StopRunResponseDto"
                 }
               }
             }
@@ -330,7 +360,17 @@
             }
           },
           "409": {
-            "description": "run is terminal",
+            "description": "run is terminal or has no active cancellation owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "run driver unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -381,6 +421,16 @@
               }
             }
           },
+          "400": {
+            "description": "invalid answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "404": {
             "description": "run not found",
             "content": {
@@ -393,6 +443,16 @@
           },
           "409": {
             "description": "run is not answerable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "run driver unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -445,6 +505,16 @@
           },
           "409": {
             "description": "not a chain tip or accept refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "run driver unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -514,6 +584,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "run driver unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -559,6 +639,16 @@
           },
           "409": {
             "description": "run is terminal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "run driver unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -677,7 +767,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SettingsDto"
+                  "$ref": "#/components/schemas/SettingsResponseDto"
                 }
               }
             }
@@ -707,7 +797,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SettingsDto"
+                  "$ref": "#/components/schemas/SettingsResponseDto"
                 }
               }
             }
@@ -1166,6 +1256,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "run driver unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1256,21 +1356,76 @@
         }
       },
       "ConvergenceLogEntryDto": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/ConvergenceLogEntryDto_Reviewed"
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "reviewed"
+            ]
           },
-          {
-            "$ref": "#/components/schemas/ConvergenceLogEntryDto_Unreachable"
+          "at": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "campaignId": {
+            "type": "string"
+          },
+          "pass": {
+            "type": "number"
+          },
+          "maxPasses": {
+            "type": "number"
+          },
+          "verification": {
+            "type": "object",
+            "properties": {
+              "green": {
+                "type": "boolean"
+              },
+              "commands": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/VerificationResultDto"
+                }
+              }
+            },
+            "required": [
+              "green",
+              "commands"
+            ]
+          },
+          "decision": {
+            "$ref": "#/components/schemas/ConvergeDecisionDto"
+          },
+          "amendedCommitSha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "primary": {
+            "$ref": "#/components/schemas/SuperReviewDto"
+          },
+          "primaryRaw": {
+            "type": "string"
           }
-        ],
-        "discriminator": {
-          "propertyName": "kind",
-          "mapping": {
-            "reviewed": "#/components/schemas/ConvergenceLogEntryDto_Reviewed",
-            "unreachable": "#/components/schemas/ConvergenceLogEntryDto_Unreachable"
-          }
-        }
+        },
+        "required": [
+          "kind",
+          "at",
+          "runId",
+          "campaignId",
+          "pass",
+          "maxPasses",
+          "verification",
+          "decision",
+          "amendedCommitSha",
+          "primary",
+          "primaryRaw"
+        ]
       },
       "ConvergenceSignalDto": {
         "type": "object",
@@ -2019,6 +2174,12 @@
           },
           "promoteTo": {
             "$ref": "#/components/schemas/SettingsBabyPromoteToDto"
+          },
+          "models": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SettingsBabyModelDto"
+            }
           }
         },
         "required": [
@@ -2031,6 +2192,45 @@
           "timeoutMs",
           "turnSteps",
           "thinkingMode",
+          "thinkingBudget",
+          "models"
+        ]
+      },
+      "SettingsBabyModelDto": {
+        "type": "object",
+        "properties": {
+          "providerId": {
+            "type": "string"
+          },
+          "modelId": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "contextWindow": {
+            "type": "number"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "number"
+          },
+          "thinkingBudget": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "providerId",
+          "modelId",
+          "baseUrl",
+          "contextWindow",
+          "apiKey",
+          "timeoutMs",
           "thinkingBudget"
         ]
       },
@@ -2120,7 +2320,14 @@
             "$ref": "#/components/schemas/SettingsThresholdsDto"
           },
           "idleTimeoutMs": {
-            "type": "number"
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "const": false
+              }
+            ]
           },
           "concurrency": {
             "$ref": "#/components/schemas/SettingsConcurrencyDto"
@@ -2183,10 +2390,37 @@
         "properties": {
           "seed": {
             "$ref": "#/components/schemas/SettingsRepoSeedDto"
+          },
+          "setup": {
+            "type": "object",
+            "properties": {
+              "commands": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string"
+                    },
+                    "dir": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "command",
+                    "dir"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "commands"
+            ]
           }
         },
         "required": [
-          "seed"
+          "seed",
+          "setup"
         ]
       },
       "SettingsRepoSeedDto": {
@@ -2210,6 +2444,21 @@
           "writes"
         ]
       },
+      "SettingsResponseDto": {
+        "type": "object",
+        "properties": {
+          "settings": {
+            "$ref": "#/components/schemas/SettingsDto"
+          },
+          "restartRequired": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "settings",
+          "restartRequired"
+        ]
+      },
       "SettingsSuperdaddyDto": {
         "type": "object",
         "properties": {
@@ -2226,10 +2475,20 @@
             "type": "number"
           },
           "baseUrl": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "headerTimeoutMs": {
-            "type": "number"
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "const": false
+              }
+            ]
           },
           "apiKey": {
             "type": "string"
@@ -2245,9 +2504,6 @@
           },
           "diffCapBytes": {
             "type": "number"
-          },
-          "transportRetries": {
-            "type": "number"
           }
         },
         "required": [
@@ -2260,8 +2516,7 @@
           "turnSteps",
           "skillPath",
           "packetSkillPath",
-          "diffCapBytes",
-          "transportRetries"
+          "diffCapBytes"
         ]
       },
       "SettingsThresholdsDto": {
@@ -2300,17 +2555,8 @@
           "maxPasses": {
             "type": "number"
           },
-          "maxReviewerUnreachable": {
-            "type": "number"
-          },
           "promoteAtCap": {
             "type": "boolean"
-          },
-          "maxStallRetries": {
-            "type": "number"
-          },
-          "maxCrashRetries": {
-            "type": "number"
           },
           "maxReorientRetries": {
             "type": "number"
@@ -2334,10 +2580,7 @@
           "checkpointBounceLimit",
           "verificationTimeoutMs",
           "maxPasses",
-          "maxReviewerUnreachable",
           "promoteAtCap",
-          "maxStallRetries",
-          "maxCrashRetries",
           "maxReorientRetries",
           "maxRunMs",
           "contextTokensFloor"
@@ -2550,6 +2793,29 @@
         "required": [
           "runId",
           "status"
+        ]
+      },
+      "StopRunResponseDto": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "stopped",
+              "cancellation_requested"
+            ]
+          },
+          "cancellationRequested": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "runId",
+          "status",
+          "cancellationRequested"
         ]
       },
       "SuperReviewDto": {
@@ -2839,6 +3105,12 @@
           "panes": {
             "$ref": "#/components/schemas/TailAgentPanesDto"
           },
+          "acceptanceReviewLines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "driverCommands": {
             "type": "array",
             "items": {
@@ -2871,6 +3143,7 @@
           "turn",
           "rotations",
           "panes",
+          "acceptanceReviewLines",
           "driverCommands",
           "journal",
           "lastSeq"
@@ -2998,6 +3271,9 @@
           },
           "promoted": {
             "type": "boolean"
+          },
+          "baby_model": {
+            "type": "string"
           }
         },
         "required": [
@@ -3106,7 +3382,6 @@
         "enum": [
           "queued",
           "running",
-          "interrupted",
           "ready_for_review",
           "blocked",
           "accepted",
@@ -3119,7 +3394,6 @@
         "enum": [
           "queued",
           "running",
-          "interrupted",
           "ready_for_review",
           "blocked",
           "failed",
@@ -3190,142 +3464,6 @@
         "required": [
           "action",
           "reason"
-        ]
-      },
-      "ConvergenceLogEntryDto_Reviewed": {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "type": "string",
-            "enum": [
-              "reviewed"
-            ]
-          },
-          "at": {
-            "type": "string"
-          },
-          "runId": {
-            "type": "string"
-          },
-          "campaignId": {
-            "type": "string"
-          },
-          "pass": {
-            "type": "number"
-          },
-          "maxPasses": {
-            "type": "number"
-          },
-          "verification": {
-            "type": "object",
-            "properties": {
-              "green": {
-                "type": "boolean"
-              },
-              "commands": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/VerificationResultDto"
-                }
-              }
-            },
-            "required": [
-              "green",
-              "commands"
-            ]
-          },
-          "decision": {
-            "$ref": "#/components/schemas/ConvergeDecisionDto"
-          },
-          "amendedCommitSha": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "primary": {
-            "$ref": "#/components/schemas/SuperReviewDto"
-          },
-          "primaryRaw": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind",
-          "at",
-          "runId",
-          "campaignId",
-          "pass",
-          "maxPasses",
-          "verification",
-          "decision",
-          "primary",
-          "primaryRaw"
-        ]
-      },
-      "ConvergenceLogEntryDto_Unreachable": {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "type": "string",
-            "enum": [
-              "unreachable"
-            ]
-          },
-          "at": {
-            "type": "string"
-          },
-          "runId": {
-            "type": "string"
-          },
-          "campaignId": {
-            "type": "string"
-          },
-          "pass": {
-            "type": "number"
-          },
-          "maxPasses": {
-            "type": "number"
-          },
-          "verification": {
-            "type": "object",
-            "properties": {
-              "green": {
-                "type": "boolean"
-              },
-              "commands": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/VerificationResultDto"
-                }
-              }
-            },
-            "required": [
-              "green",
-              "commands"
-            ]
-          },
-          "detail": {
-            "type": "string"
-          },
-          "attempt": {
-            "type": "number"
-          },
-          "budget": {
-            "type": "number"
-          }
-        },
-        "required": [
-          "kind",
-          "at",
-          "runId",
-          "campaignId",
-          "pass",
-          "maxPasses",
-          "verification",
-          "detail",
-          "attempt",
-          "budget"
         ]
       }
     }

@@ -25,6 +25,7 @@ import { parsePacketShape, type Packet } from "../src/domain/packet.js";
 import { buildReconciliationEvidence } from "../src/domain/reconciliation.js";
 import { SubmitReport } from "../src/domain/report.js";
 import type { AskPlannerInput, PlannerResponse, FinalReview } from "../src/domain/review.js";
+import type { RunMeta } from "../src/domain/run.js";
 import type { BridgeIntent } from "../src/domain/turn.js";
 import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 
@@ -222,7 +223,6 @@ const seedRun = (
     stallRetries: 0,
     crashRetries: 0,
     reorientRetries: 0,
-    reviewerUnreachable: 0,
     promoted: false,
     pass: 1,
     updatedAt: "2026-01-01T00:00:00.000Z",
@@ -246,6 +246,16 @@ const seedRun = (
     ),
   );
   void gateDiff;
+};
+
+const replaceMeta = (store: Store, meta: RunMeta): void => {
+  const current = store.readMeta(meta.runId);
+  store.transitionRun({
+    runId: meta.runId,
+    expectedRevision: current.revision ?? 0,
+    expectedStatuses: [current.status],
+    meta,
+  });
 };
 
 const markLedgerDone = (store: Store): void => {
@@ -411,7 +421,7 @@ test("turnLoop: syncs Max answers to Daddy once before later planner work", () =
     const packet = parseFixture();
     seedRun(store, packet);
     const meta = store.readMeta(RUN_ID);
-    store.writeMeta({ ...meta, worktree: join(tmp, "worktree") });
+    replaceMeta(store, { ...meta, worktree: join(tmp, "worktree") });
     store.appendDecision(RUN_ID, {
       timestamp: "2026-01-01T00:00:10.000Z",
       source: "max",
@@ -472,6 +482,90 @@ test("turnLoop: syncs Max answers to Daddy once before later planner work", () =
     equal(syncState.lastSyncedMaxDecisionAt, "2026-01-01T00:00:10.000Z");
     await cleanTemp(tmp);
   })();
+});
+
+test("turnLoop: abort after planner consult prevents durable decision writes", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "tl-consult-cancel-"));
+  try {
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+    const channel = emptyChannel();
+    const controller = new AbortController();
+    const executor = scriptedExecutor(channel, [
+      {
+        intents: [{ kind: "consult-requested" }],
+        pendingConsult: {
+          questionType: "other",
+          currentSlice: "cancel",
+          question: "continue?",
+          approach: "ask",
+          evidence: [],
+        },
+      },
+    ]);
+    const planner = fakePlanner({
+      consult: async () => {
+        controller.abort();
+        return PROCEED;
+      },
+    });
+
+    const result = await turnLoop(
+      makePorts(store, fakeRepo(), executor, planner),
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+      controller.signal,
+    );
+
+    equal(result.outcome.status, "stopped");
+    equal(store.readDecisions(RUN_ID).length, 0);
+  } finally {
+    await cleanTemp(tmp);
+  }
+});
+
+test("turnLoop: abort after final review prevents durable review writes", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "tl-review-cancel-"));
+  try {
+    const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+    const packet = parseFixture();
+    seedRun(store, packet);
+    const channel = emptyChannel();
+    const controller = new AbortController();
+    const executor = scriptedExecutor(channel, [
+      {
+        intents: [{ kind: "final-review-requested" }],
+        pendingFinalReview: aSubmitReport(),
+      },
+    ]);
+    const planner = fakePlanner({
+      finalReview: async () => {
+        controller.abort();
+        return ACCEPT_REVIEW;
+      },
+    });
+
+    const result = await turnLoop(
+      makePorts(store, fakeRepo(), executor, planner),
+      packet,
+      "/tmp/worktree",
+      "baby-0",
+      channel,
+      { name: "Q1", text: "go" },
+      FAR_FUTURE,
+      controller.signal,
+    );
+
+    equal(result.outcome.status, "stopped");
+    equal(store.readDecisions(RUN_ID).length, 0);
+  } finally {
+    await cleanTemp(tmp);
+  }
 });
 
 test("turnLoop: submit_report aborts the active opencode message before final review", () => {
@@ -660,7 +754,7 @@ test("turnLoop: registry override drives runtime send and promotion label", () =
 
     const overrideKey = "registry-fast";
     const overrideLabel = "alt-provider/alt-model";
-    store.writeMeta({
+    replaceMeta(store, {
       ...store.readMeta(RUN_ID),
       babyModel: overrideKey,
       updatedAt: "2026-01-01T00:00:00.000Z",
@@ -748,7 +842,7 @@ test("turnLoop: missing registry override falls back to default and warns", () =
     const packet = parseFixture();
     seedRun(store, packet);
 
-    store.writeMeta({
+    replaceMeta(store, {
       ...store.readMeta(RUN_ID),
       babyModel: "missing-key",
       updatedAt: "2026-01-01T00:00:00.000Z",
@@ -1003,7 +1097,7 @@ test("turnLoop: promoted model context-overflow loop parks wedged", () => {
     const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
     const packet = parseFixture();
     seedRun(store, packet);
-    store.writeMeta({ ...store.readMeta(RUN_ID), promoted: true });
+    replaceMeta(store, { ...store.readMeta(RUN_ID), promoted: true });
 
     const channel = emptyChannel();
     const executor = scriptedExecutor(
@@ -1716,7 +1810,7 @@ test("turnLoop: report rejected at cap after promotion → terminal failed", () 
     // Latch promoted in meta so the run already has its promotion.
     const meta = store.readMetaIfExists(RUN_ID);
     if (meta) {
-      store.writeMeta({ ...meta, promoted: true, updatedAt: fixedClock().nowIso() });
+      replaceMeta(store, { ...meta, promoted: true, updatedAt: fixedClock().nowIso() });
     }
 
     const channel = emptyChannel();

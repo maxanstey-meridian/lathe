@@ -24,6 +24,7 @@ const snapshot = (): TailSnapshotDto => ({
   turn: 0,
   rotations: 0,
   panes: { baby: [], daddy: [], super: [] },
+  acceptanceReviewLines: [],
   driverCommands: [],
   journal: [],
   lastSeq: 0,
@@ -205,6 +206,230 @@ test("stopped is a terminal tail status", () => {
   equal(isTerminalTailStatus("running"), false);
 });
 
+test("super status detail remains accepted by the shared reducer", () => {
+  const state = applyTailEvent(
+    tailStateFromSnapshot(snapshot()),
+    {
+      kind: "tail.super.status",
+      runId: "run",
+      seq: 1,
+      at: "2026-07-10T18:00:00.000Z",
+      status: "failed",
+      pass: 1,
+      detail: "reviewer crashed",
+      lines: ["acceptance review failed: reviewer crashed"],
+    },
+    1,
+  );
+
+  deepStrictEqual(visiblePaneLines(state.panes.super), [
+    { text: "acceptance review failed: reviewer crashed", style: "tool" },
+  ]);
+});
+
+test("a new acceptance-review state removes prior findings", () => {
+  let state = applyTailEvent(
+    tailStateFromSnapshot(snapshot()),
+    {
+      kind: "tail.super.verdict",
+      runId: "run",
+      seq: 1,
+      at: "2026-07-10T18:00:00.000Z",
+      verdict: "request_changes",
+      pass: 1,
+      findings: ["[P1] stale finding"],
+      lines: ["acceptance review: verdict request_changes (pass 1)", "  [P1] stale finding"],
+    },
+    1,
+  );
+  state = applyTailEvent(
+    state,
+    {
+      kind: "tail.super.status",
+      runId: "run",
+      seq: 2,
+      at: "2026-07-10T18:01:00.000Z",
+      status: "started",
+      pass: 2,
+      lines: ["acceptance review: reviewing pass 2"],
+    },
+    2,
+  );
+
+  deepStrictEqual(visiblePaneLines(state.panes.super), [
+    { text: "acceptance review: reviewing pass 2", style: "tool" },
+  ]);
+});
+
+test("a new acceptance-review state removes findings without severity prefixes", () => {
+  let state = applyTailEvent(
+    tailStateFromSnapshot(snapshot()),
+    {
+      kind: "tail.super.verdict",
+      runId: "run",
+      seq: 1,
+      at: "2026-07-10T18:00:00.000Z",
+      verdict: "request_changes",
+      pass: 1,
+      findings: ["stale finding"],
+      lines: ["acceptance review: verdict request_changes (pass 1)", "  stale finding"],
+    },
+    1,
+  );
+  state = applyTailEvent(
+    state,
+    {
+      kind: "tail.super.status",
+      runId: "run",
+      seq: 2,
+      at: "2026-07-10T18:01:00.000Z",
+      status: "started",
+      pass: 2,
+      lines: ["acceptance review: reviewing pass 2"],
+    },
+    2,
+  );
+
+  deepStrictEqual(visiblePaneLines(state.panes.super), [
+    { text: "acceptance review: reviewing pass 2", style: "tool" },
+  ]);
+});
+
+test("acceptance-review replacement uses typed snapshot ownership, not display prefixes", () => {
+  const initial = snapshot();
+  initial.acceptanceReviewLines = ["review failed unexpectedly", "  stale finding"];
+  initial.panes.super = [{ text: "unrelated tool output", style: "tool" }];
+  const state = applyTailEvent(
+    tailStateFromSnapshot(initial),
+    {
+      kind: "tail.super.status",
+      runId: "run",
+      seq: 2,
+      at: "2026-07-10T18:01:00.000Z",
+      status: "started",
+      pass: 2,
+      lines: ["renamed review presentation"],
+    },
+    2,
+  );
+
+  deepStrictEqual(visiblePaneLines(state.panes.super), [
+    { text: "unrelated tool output", style: "tool" },
+    { text: "renamed review presentation", style: "tool" },
+  ]);
+});
+
+test("acceptance-review replacement preserves duplicate transcript lines", () => {
+  const initial = snapshot();
+  initial.acceptanceReviewLines = ["duplicate"];
+  initial.panes.super = [
+    { text: "duplicate", style: "tool" },
+    { text: "unrelated", style: "tool" },
+    { text: "duplicate", style: "tool" },
+  ];
+  const state = applyTailEvent(
+    tailStateFromSnapshot(initial),
+    {
+      kind: "tail.super.status",
+      runId: "run",
+      seq: 2,
+      at: "2026-07-10T18:01:00.000Z",
+      status: "started",
+      pass: 2,
+      lines: ["replacement"],
+    },
+    2,
+  );
+
+  deepStrictEqual(
+    visiblePaneLines(state.panes.super).map((line) => line.text),
+    ["duplicate", "unrelated", "duplicate", "replacement"],
+  );
+});
+
+test("acceptance-review replacement preserves a later duplicate tool line by range", () => {
+  let state = applyTailEvent(
+    tailStateFromSnapshot(snapshot()),
+    {
+      kind: "tail.super.status",
+      runId: "run",
+      seq: 1,
+      at: "2026-07-10T18:00:00.000Z",
+      status: "started",
+      pass: 1,
+      lines: [". duplicate"],
+    },
+    1,
+  );
+  state = applyTailEvent(
+    state,
+    {
+      kind: "tail.pane.tool",
+      runId: "run",
+      speaker: "super",
+      status: "completed",
+      tool: "duplicate",
+      detail: "",
+      input: "unrelated attachment",
+    },
+    2,
+  );
+  state = applyTailEvent(
+    state,
+    {
+      kind: "tail.super.status",
+      runId: "run",
+      seq: 2,
+      at: "2026-07-10T18:01:00.000Z",
+      status: "started",
+      pass: 2,
+      lines: ["replacement"],
+    },
+    3,
+  );
+
+  deepStrictEqual(visiblePaneLines(state.panes.super), [
+    { text: ". duplicate", style: "tool", attachment: "unrelated attachment" },
+    { text: "replacement", style: "tool" },
+  ]);
+});
+
+test("oversized acceptance-review lines are replaced using their bounded identity", () => {
+  const stale = `stale-${"a".repeat(10_000)}`;
+  const replacement = `replacement-${"b".repeat(10_000)}`;
+  let state = applyTailEvent(
+    tailStateFromSnapshot(snapshot()),
+    {
+      kind: "tail.super.status",
+      runId: "run",
+      seq: 1,
+      at: "2026-07-10T18:00:00.000Z",
+      status: "started",
+      pass: 1,
+      lines: [stale],
+    },
+    1,
+  );
+  state = applyTailEvent(
+    state,
+    {
+      kind: "tail.super.status",
+      runId: "run",
+      seq: 2,
+      at: "2026-07-10T18:01:00.000Z",
+      status: "started",
+      pass: 2,
+      lines: [replacement],
+    },
+    2,
+  );
+
+  equal(state.panes.super.lines.length, 1);
+  equal(state.panes.super.lines[0]?.text, replacement.slice(-8_000));
+  deepStrictEqual(state.acceptanceReviewLines, [replacement.slice(-8_000)]);
+  deepStrictEqual(state.snapshot?.acceptanceReviewLines, [replacement.slice(-8_000)]);
+});
+
 test("live agent deltas bound completed and partial lines", () => {
   let state = tailStateFromSnapshot(snapshot());
   state = applyTailEvent(
@@ -240,6 +465,7 @@ test("hydrated, replacement, and tool lines use the same character bounds", () =
         daddy: [],
         super: [],
       },
+      acceptanceReviewLines: [],
     },
     1,
   );
@@ -266,6 +492,157 @@ test("hydrated, replacement, and tool lines use the same character bounds", () =
     truncated: true,
     preview: "d".repeat(4_000),
   });
+});
+
+test("authoritative pane replacement preserves review ownership", () => {
+  let state = tailStateFromSnapshot(snapshot());
+  state = applyTailEvent(
+    state,
+    {
+      kind: "tail.super.verdict",
+      runId: "run",
+      seq: 1,
+      at: "2026-07-10T18:00:00.000Z",
+      verdict: "accept",
+      pass: 1,
+      findings: [],
+      lines: ["review one"],
+    },
+    1,
+  );
+  state = applyTailEvent(
+    state,
+    {
+      kind: "tail.agent.panes.replaced",
+      runId: "run",
+      panes: {
+        baby: [],
+        daddy: [],
+        super: [{ text: "unrelated", style: "tool" }],
+      },
+      acceptanceReviewLines: ["review one"],
+    },
+    2,
+  );
+  state = applyTailEvent(
+    state,
+    {
+      kind: "tail.super.verdict",
+      runId: "run",
+      seq: 2,
+      at: "2026-07-10T18:01:00.000Z",
+      verdict: "accept",
+      pass: 1,
+      findings: [],
+      lines: ["review two"],
+    },
+    3,
+  );
+
+  deepStrictEqual(
+    state.panes.super.lines.map((line) => line.text),
+    ["unrelated", "review two"],
+  );
+});
+
+test("authoritative replacement carries changed review line counts without stale ownership", () => {
+  let state = applyTailEvent(
+    tailStateFromSnapshot(snapshot()),
+    {
+      kind: "tail.agent.panes.replaced",
+      runId: "run",
+      panes: {
+        baby: [],
+        daddy: [],
+        super: [{ text: "transcript", style: "text" }],
+      },
+      acceptanceReviewLines: ["old status", "old finding one", "old finding two"],
+    },
+    1,
+  );
+  state = applyTailEvent(
+    state,
+    {
+      kind: "tail.agent.panes.replaced",
+      runId: "run",
+      panes: {
+        baby: [],
+        daddy: [],
+        super: [{ text: "transcript", style: "text" }],
+      },
+      acceptanceReviewLines: ["new status"],
+    },
+    2,
+  );
+
+  deepStrictEqual(
+    state.panes.super.lines.map((line) => line.text),
+    ["transcript", "new status"],
+  );
+});
+
+test("semantic review follows an unfinished Super transcript delta", () => {
+  let state = applyTailEvent(
+    tailStateFromSnapshot(snapshot()),
+    {
+      kind: "tail.pane.delta",
+      runId: "run",
+      speaker: "super",
+      style: "text",
+      text: "unfinished review transcript",
+    },
+    1,
+  );
+  state = applyTailEvent(
+    state,
+    {
+      kind: "tail.super.status",
+      runId: "run",
+      seq: 1,
+      at: "2026-07-10T18:01:00.000Z",
+      status: "failed",
+      pass: 1,
+      lines: ["review failed"],
+    },
+    2,
+  );
+
+  deepStrictEqual(
+    visiblePaneLines(state.panes.super).map((line) => line.text),
+    ["unfinished review transcript", "review failed"],
+  );
+});
+
+test("transcript and semantic review compose correctly after 300-line trimming", () => {
+  const initial = snapshot();
+  initial.panes.super = Array.from({ length: 305 }, (_, index) => ({
+    text: `transcript-${index}`,
+    style: "text" as const,
+  }));
+  initial.acceptanceReviewLines = ["old status", "old finding"];
+  let state = tailStateFromSnapshot(initial);
+
+  state = applyTailEvent(
+    state,
+    {
+      kind: "tail.super.status",
+      runId: "run",
+      seq: 2,
+      at: "2026-07-10T18:01:00.000Z",
+      status: "started",
+      pass: 2,
+      lines: ["new status"],
+    },
+    2,
+  );
+
+  equal(state.panes.super.lines.length, 300);
+  equal(state.panes.super.lines[0]?.text, "transcript-6");
+  equal(state.panes.super.lines.at(-1)?.text, "new status");
+  equal(
+    state.panes.super.lines.some((line) => line.text === "old finding"),
+    false,
+  );
 });
 
 test("live and authoritative oversized lines retain the same newest text", () => {

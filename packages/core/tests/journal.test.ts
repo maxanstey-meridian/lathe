@@ -1,7 +1,6 @@
 import { equal, match } from "node:assert";
 import { describe, it } from "node:test";
-import type { JournalEvent } from "../src/domain/index.js";
-import { renderJournalEvent, isDriverEvent } from "../src/domain/journal.js";
+import { renderJournalEvent, isDriverEvent, type JournalEvent } from "../src/domain/journal.js";
 
 describe("journal-render — renderJournalEvent", () => {
   it("renders run_started with attempt number", () => {
@@ -102,5 +101,36 @@ describe("journal-render — isDriverEvent", () => {
       reason: "latch",
     };
     equal(isDriverEvent(event), true);
+  });
+
+  it("keeps Daddy and acceptance reviews out of driver verification", () => {
+    equal(
+      isDriverEvent({
+        at: "2026-06-18T12:00:00.000Z",
+        event: "final_review",
+        verdict: "accept",
+        findings: [],
+      }),
+      false,
+    );
+    equal(
+      isDriverEvent({
+        at: "2026-06-18T12:00:00.000Z",
+        event: "super_review_status",
+        pass: 1,
+        status: "started",
+      }),
+      false,
+    );
+    equal(
+      isDriverEvent({
+        at: "2026-06-18T12:00:00.000Z",
+        event: "super_review",
+        pass: 1,
+        verdict: "accept",
+        findings: [],
+      }),
+      false,
+    );
   });
 });

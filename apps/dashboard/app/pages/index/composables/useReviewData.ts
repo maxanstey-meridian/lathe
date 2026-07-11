@@ -6,8 +6,6 @@ import type { LatheStatus } from "../ports/lathe-status";
 
 import { fetchReviewRuns } from "./fetchReviewRuns";
 
-export { fetchReviewRuns } from "./fetchReviewRuns";
-
 type ReviewRun = components["schemas"]["ReviewRunDto"];
 
 export const useReviewData = (status?: LatheStatus, loadReviewRuns: typeof fetchReviewRuns = fetchReviewRuns) => {

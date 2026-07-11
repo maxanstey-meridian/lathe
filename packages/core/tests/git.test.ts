@@ -3,10 +3,22 @@
 
 import assert from "node:assert";
 import { execSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync } from "node:fs";
+import {
+  mkdtempSync,
+  writeFileSync,
+  mkdirSync,
+  rmSync,
+  existsSync,
+  statSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import type { OutcomeLedger } from "../src/domain/outcomes.ts";
+import type { Packet } from "../src/domain/packet.ts";
+import { buildReconciliationFingerprint } from "../src/domain/reconciliation.ts";
+import type { ReviewState } from "../src/domain/run.ts";
 import {
   createSandbox,
   fetchBranchFromClone,
@@ -19,6 +31,7 @@ import {
   readDiffStats,
   reviewableDiff,
   reviewableDiffAgainst,
+  reconciliationGitState,
   headBranch,
   branchExists,
   repoValid,
@@ -57,6 +70,14 @@ const initBareRepo = (root: string) => {
   g("commit -qm base");
   return { repo };
 };
+
+const reconciliationFingerprint = (repo: string): string =>
+  buildReconciliationFingerprint(
+    reconciliationGitState(repo),
+    { frontmatter: { expected_surface: [], suspicious_surface: [] } } as unknown as Packet,
+    { outcomes: [] } as unknown as OutcomeLedger,
+    { obligations: [] } as unknown as ReviewState,
+  ).value;
 
 // ===========================================================================
 // R2: self-rooted sandbox
@@ -360,6 +381,55 @@ test("readDiffStats: excludes binary files (>1MB or NUL byte)", () => {
   }
 });
 
+test("reconciliationGitState: same-path large untracked content changes its hash", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "meridian-reconciliation-large-"));
+  try {
+    const { repo } = initSourceRepo(tmp);
+    const path = join(repo, "large.dat");
+    writeFileSync(path, Buffer.alloc(1024 * 1024 + 1, 0x61));
+    const before = reconciliationFingerprint(repo);
+
+    writeFileSync(path, Buffer.alloc(1024 * 1024 + 1, 0x62));
+    const after = reconciliationFingerprint(repo);
+
+    assert.notEqual(before, after);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("reconciliationGitState: same-path binary untracked content changes its hash", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "meridian-reconciliation-binary-"));
+  try {
+    const { repo } = initSourceRepo(tmp);
+    const path = join(repo, "binary.dat");
+    writeFileSync(path, Buffer.from([0x00, 0x01, 0x02, 0x03]));
+    const before = reconciliationFingerprint(repo);
+
+    writeFileSync(path, Buffer.from([0x00, 0x01, 0x02, 0x04]));
+    const after = reconciliationFingerprint(repo);
+
+    assert.notEqual(before, after);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("reconciliationGitState: rejects non-regular untracked paths", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "meridian-reconciliation-symlink-"));
+  try {
+    const { repo } = initSourceRepo(tmp);
+    symlinkSync("a.txt", join(repo, "link.txt"));
+
+    assert.throws(
+      () => reconciliationGitState(repo),
+      /cannot fingerprint untracked path link\.txt/,
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 // ===========================================================================
 // V7: reviewableDiff — tracked + untracked, capped
 // ===========================================================================
@@ -537,9 +607,13 @@ test("fetchBranchFromClone: pulls a branch from a clone into source repo refs", 
     execSync("git checkout -q -b feature", { cwd: clonePath, stdio: "ignore" });
     writeFileSync(join(clonePath, "feature.txt"), "feat\n");
     execSync("git add -A && git commit -qm feature", { cwd: clonePath, stdio: "ignore" });
+    const cloneSha = execSync("git rev-parse feature", {
+      cwd: clonePath,
+      encoding: "utf-8",
+    }).trim();
 
     // Fetch the branch from the clone into the source repo.
-    fetchBranchFromClone(source, clonePath, "feature");
+    fetchBranchFromClone(source, clonePath, "feature", null, cloneSha);
 
     // Source repo should now have the branch.
     assert.ok(branchExists(source, "feature"), "source repo should have fetched branch");
@@ -548,7 +622,7 @@ test("fetchBranchFromClone: pulls a branch from a clone into source repo refs", 
   }
 });
 
-test("fetchBranchFromClone: skips fetch when branch already exists in repo", () => {
+test("fetchBranchFromClone: rejects a stale expected old ref", () => {
   const tmp = mkdtempSync(join(tmpdir(), "meridian-fetch-skip-"));
   try {
     const { repo: source } = initSourceRepo(tmp);
@@ -564,7 +638,11 @@ test("fetchBranchFromClone: skips fetch when branch already exists in repo", () 
     execSync("git add -A && git commit -qm feature", { cwd: clonePath, stdio: "ignore" });
 
     // First fetch brings the branch into source.
-    fetchBranchFromClone(source, clonePath, "feature");
+    const cloneSha = execSync("git rev-parse feature", {
+      cwd: clonePath,
+      encoding: "utf-8",
+    }).trim();
+    fetchBranchFromClone(source, clonePath, "feature", null, cloneSha);
     const originalSha = execSync("git rev-parse feature", {
       cwd: source,
       encoding: "utf-8",
@@ -578,9 +656,13 @@ test("fetchBranchFromClone: skips fetch when branch already exists in repo", () 
       cwd: source,
       encoding: "utf-8",
     }).trim();
+    execSync("git checkout -q main", { cwd: source, stdio: "ignore" });
 
-    // Second fetch should skip (branch exists) — source branch must not regress.
-    fetchBranchFromClone(source, clonePath, "feature");
+    // A stale expected-old snapshot must not regress the externally advanced ref.
+    assert.throws(
+      () => fetchBranchFromClone(source, clonePath, "feature", originalSha, cloneSha),
+      /cannot lock ref|is at .* but expected/,
+    );
     const afterSha = execSync("git rev-parse feature", { cwd: source, encoding: "utf-8" }).trim();
 
     assert.notEqual(afterSha, originalSha, "should not regress to clone's stale ref");
@@ -590,7 +672,7 @@ test("fetchBranchFromClone: skips fetch when branch already exists in repo", () 
   }
 });
 
-test("fetchBranchFromClone: force=true overwrites a stale local ref", () => {
+test("fetchBranchFromClone: replaces the exact observed old ref", () => {
   const tmp = mkdtempSync(join(tmpdir(), "meridian-fetch-force-"));
   try {
     const { repo: source } = initSourceRepo(tmp);
@@ -611,20 +693,109 @@ test("fetchBranchFromClone: force=true overwrites a stale local ref", () => {
 
     // Bring the branch into source, then advance source past it (e.g. a
     // checkout created a local ref that diverged from the clone's).
-    fetchBranchFromClone(source, clonePath, "feature");
+    fetchBranchFromClone(source, clonePath, "feature", null, cloneSha);
     execSync("git checkout -q feature", { cwd: source, stdio: "ignore" });
     writeFileSync(join(source, "extra.txt"), "extra\n");
     execSync("git add -A && git commit -qm diverged", { cwd: source, stdio: "ignore" });
+    const divergedSha = execSync("git rev-parse feature", {
+      cwd: source,
+      encoding: "utf-8",
+    }).trim();
     execSync("git checkout -q main", { cwd: source, stdio: "ignore" });
 
-    // force=true must overwrite the diverged local ref with the clone's ref.
-    fetchBranchFromClone(source, clonePath, "feature", true);
+    // CAS may replace exactly the diverged ref observed by the caller.
+    fetchBranchFromClone(source, clonePath, "feature", divergedSha, cloneSha);
     const afterSha = execSync("git rev-parse feature", {
       cwd: source,
       encoding: "utf-8",
     }).trim();
 
     assert.strictEqual(afterSha, cloneSha, "force fetch should reset to clone's ref");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("fetchBranchFromClone: guarded publication rejects a stale expected old ref", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "meridian-fetch-cas-"));
+  try {
+    const { repo: source } = initSourceRepo(tmp);
+    const clonePath = join(tmp, "clone");
+    mkdirSync(clonePath);
+    execSync(`git clone --local ${source} ${clonePath}`, { stdio: "ignore" });
+    execSync("git config user.email t@t.t", { cwd: clonePath, stdio: "ignore" });
+    execSync("git config user.name t", { cwd: clonePath, stdio: "ignore" });
+    execSync("git checkout -q -b feature", { cwd: clonePath, stdio: "ignore" });
+    writeFileSync(join(clonePath, "feature.txt"), "feat\n");
+    execSync("git add -A && git commit -qm feature", { cwd: clonePath, stdio: "ignore" });
+    const cloneSha = execSync("git rev-parse feature", {
+      cwd: clonePath,
+      encoding: "utf-8",
+    }).trim();
+
+    fetchBranchFromClone(source, clonePath, "feature", null, cloneSha);
+    const expectedOld = execSync("git rev-parse feature", {
+      cwd: source,
+      encoding: "utf-8",
+    }).trim();
+    execSync("git checkout -q feature", { cwd: source, stdio: "ignore" });
+    writeFileSync(join(source, "raced.txt"), "raced\n");
+    execSync("git add -A && git commit -qm raced", { cwd: source, stdio: "ignore" });
+    execSync("git checkout -q main", { cwd: source, stdio: "ignore" });
+    const racedSha = execSync("git rev-parse feature", { cwd: source, encoding: "utf-8" }).trim();
+
+    assert.throws(
+      () => fetchBranchFromClone(source, clonePath, "feature", expectedOld, cloneSha),
+      /cannot lock ref|is at .* but expected/,
+    );
+    assert.strictEqual(
+      execSync("git rev-parse feature", { cwd: source, encoding: "utf-8" }).trim(),
+      racedSha,
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("fetchBranchFromClone: refuses to move a branch checked out in a linked source worktree", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "meridian-fetch-checked-out-"));
+  try {
+    const { repo: source } = initSourceRepo(tmp);
+    const clonePath = join(tmp, "clone");
+    mkdirSync(clonePath);
+    execSync(`git clone --local ${source} ${clonePath}`, { stdio: "ignore" });
+    execSync("git config user.email t@t.t", { cwd: clonePath, stdio: "ignore" });
+    execSync("git config user.name t", { cwd: clonePath, stdio: "ignore" });
+    execSync("git checkout -q -b feature", { cwd: clonePath, stdio: "ignore" });
+    writeFileSync(join(clonePath, "feature.txt"), "one\n");
+    execSync("git add -A && git commit -qm feature-one", { cwd: clonePath, stdio: "ignore" });
+    const firstSha = execSync("git rev-parse feature", {
+      cwd: clonePath,
+      encoding: "utf-8",
+    }).trim();
+    fetchBranchFromClone(source, clonePath, "feature", null, firstSha);
+
+    const linked = join(tmp, "linked");
+    execSync(`git worktree add ${linked} feature`, { cwd: source, stdio: "ignore" });
+    writeFileSync(join(clonePath, "feature.txt"), "two\n");
+    execSync("git add -A && git commit -qm feature-two", { cwd: clonePath, stdio: "ignore" });
+    const secondSha = execSync("git rev-parse feature", {
+      cwd: clonePath,
+      encoding: "utf-8",
+    }).trim();
+
+    assert.throws(
+      () => fetchBranchFromClone(source, clonePath, "feature", firstSha, secondSha),
+      /checked out in source worktree/,
+    );
+    assert.strictEqual(
+      execSync("git rev-parse feature", { cwd: source, encoding: "utf-8" }).trim(),
+      firstSha,
+    );
+    assert.strictEqual(
+      execSync("git status --porcelain", { cwd: linked, encoding: "utf-8" }).trim(),
+      "",
+    );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -663,6 +834,19 @@ test("deleteBranch: swallows error for non-existent branch", () => {
     // Deleting a branch that never existed should not throw.
     deleteBranch(repo, "nonexistent-branch");
     // No assertion — the test passes if no exception is thrown.
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("deleteBranch: propagates deletion failure while the branch still exists", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "meridian-delete-checked-out-"));
+  try {
+    const { repo } = initSourceRepo(tmp);
+    execSync("git checkout -q -b checked-out", { cwd: repo, stdio: "ignore" });
+
+    assert.throws(() => deleteBranch(repo, "checked-out"));
+    assert.ok(branchExists(repo, "checked-out"));
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

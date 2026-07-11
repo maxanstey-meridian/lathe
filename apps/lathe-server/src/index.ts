@@ -6,10 +6,12 @@
 // the supervisor (P02) and SSE feed (P04) build on.
 // ---------------------------------------------------------------------------
 
-export { createApp, createEventBus } from "./app.js";
+export { createApp } from "./app.js";
+export { createEventBus } from "./server-host.js";
 export { createSupervisor } from "./supervisor.js";
 export type { Supervisor, NonChainTipError, TerminalRunError, RunNotFoundError } from "./supervisor.js";
-export type { AppDeps, CreateAppOptions, EventBus } from "./app.js";
+export type { CreateAppOptions } from "./app.js";
+export type { AppDeps, EventBus } from "./server-host.js";
 export type { SupervisorOptions } from "./supervisor.js";
 export { acquireSingleInstanceLock, DaemonAlreadyRunningError } from "./single-instance-lock.js";
 export { projectJournalEvent } from "./event-projection.js";

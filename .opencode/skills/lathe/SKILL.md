@@ -40,11 +40,11 @@ Lathe's lifecycle is owned by domain/application use cases and persisted state. 
 - The queue is a SQLite query: runs with `status: "queued"` in the runs table. There is no `queue/` directory.
 - Requeued runs are existing run rows with `status: "queued"`.
 - Queue order is requeued runs first, then fresh runs sorted by run id.
-- A fresh queued run may not have full meta yet; `initMetaFromQueue` derives initial run meta from the admitted packet.
+- Admission writes the queued run metadata directly from the validated packet.
 
 ## Run Invariants
 
-- Run statuses are `queued`, `running`, `interrupted`, `ready_for_review`, `blocked`, `failed`, `accepted`, and `stopped`.
+- Run statuses are `queued`, `running`, `ready_for_review`, `blocked`, `failed`, `accepted`, and `stopped`.
 - A run branch is `meridian/<runId>`.
 - A run sandbox is a self-rooted local clone, not a git worktree.
 - The Executor works inside the sandbox clone.

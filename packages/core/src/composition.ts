@@ -9,29 +9,29 @@
 
 import { type ChildProcess } from "node:child_process";
 import type { Server } from "node:http";
-import type { BridgePort } from "../../application/ports/bridge.js";
-import { noopDriverOutput, type DriverOutput } from "../../application/ports/driver-output.js";
-import type { ModelConfig } from "../../application/ports/executor.js";
-import type { Repo } from "../../application/ports/repo.js";
-import type { Store } from "../../application/ports/store.js";
-import { convergeRun } from "../../application/use-cases/converge-run.js";
-import { makeExecuteRun, type BridgeBinding } from "../../application/use-cases/execute-run.js";
+import type { BridgePort } from "./application/ports/bridge.js";
+import { noopDriverOutput, type DriverOutput } from "./application/ports/driver-output.js";
+import type { ModelConfig } from "./application/ports/executor.js";
+import type { Repo } from "./application/ports/repo.js";
+import type { Store } from "./application/ports/store.js";
+import { convergeRun } from "./application/use-cases/converge-run.js";
+import { makeExecuteRun, type BridgeBinding } from "./application/use-cases/execute-run.js";
 import {
   runLoop,
   type WaitForWorkCallback,
   type RunLoopSeams,
-} from "../../application/use-cases/run-loop.js";
-import type { RunPorts, ConfigSource } from "../../application/use-cases/run-runtime.js";
-import type { Paths } from "../../config/paths.js";
-import type { Config } from "../../config/schemas.js";
+} from "./application/use-cases/run-loop.js";
+import type { RunPorts, ConfigSource } from "./application/use-cases/run-runtime.js";
+import type { Paths } from "./config/paths.js";
+import type { Config } from "./config/schemas.js";
 import {
   startBridgeServer,
   listenBridge,
   type RunRef,
   type ActiveRunRef,
-} from "../../infrastructure/bridge.js";
-import { createCaffeinate } from "../../infrastructure/caffeinate.js";
-import { systemClock } from "../../infrastructure/clock.js";
+} from "./infrastructure/bridge.js";
+import { createCaffeinate } from "./infrastructure/caffeinate.js";
+import { systemClock } from "./infrastructure/clock.js";
 import {
   createSandbox,
   wipCommit,
@@ -42,24 +42,25 @@ import {
   reviewableDiff,
   reviewableDiffAgainst,
   reconciliationGitState,
+  resolveRevision,
   fetchBranchFromClone,
   removeSandbox,
   headBranch,
   branchExists,
   deleteBranch,
   repoValid,
-} from "../../infrastructure/git.js";
+} from "./infrastructure/git.js";
 import {
   writeOpencodeConfig,
   spawnOpencodeServer,
   warnOnVersionDrift,
   waitForServer,
   pluginPath,
-} from "../../infrastructure/opencode/config.js";
-import { createOpencodeClient } from "../../infrastructure/opencode/executor.js";
-import { createPlanner } from "../../infrastructure/opencode/planner.js";
-import { createReviewer } from "../../infrastructure/opencode/reviewer.js";
-import { createVerify } from "../../infrastructure/verify.js";
+} from "./infrastructure/opencode/config.js";
+import { createOpencodeClient } from "./infrastructure/opencode/executor.js";
+import { createPlanner } from "./infrastructure/opencode/planner.js";
+import { createReviewer } from "./infrastructure/opencode/reviewer.js";
+import { createVerify } from "./infrastructure/verify.js";
 
 // ---------------------------------------------------------------------------
 // Adapter assembly
@@ -76,6 +77,7 @@ export const buildRepo = (): Repo => ({
   reviewableDiff,
   reviewableDiffAgainst,
   reconciliationGitState,
+  resolveRevision,
   fetchBranchFromClone,
   removeSandbox,
   headBranch,
@@ -147,7 +149,6 @@ export const runDriver = async (
     executor,
     modelOf(config.superdaddy),
     config.superdaddy.timeoutMs,
-    config.superdaddy.transportRetries,
   );
   const verify = createVerify();
   const caffeinate = createCaffeinate();
@@ -228,7 +229,6 @@ export const runDriver = async (
     driverOutput,
     clock,
     config,
-    paths,
   });
 
   await runLoop(

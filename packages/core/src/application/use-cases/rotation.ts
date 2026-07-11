@@ -11,6 +11,7 @@
 import { dirname } from "node:path";
 import { rotationGateState } from "../../domain/gate-decisions.js";
 import type { Packet } from "../../domain/packet.js";
+import type { RepositoryLease } from "../ports/store.js";
 import { journal, type RunPorts } from "./run-runtime.js";
 
 // Replace the Baby session and return the new session id (the loop tracks it as
@@ -24,22 +25,38 @@ export const rotateSession = async (
   oldSessionId: string,
   turn: number,
   needsReconciliation: boolean,
+  lease?: RepositoryLease,
 ): Promise<string> => {
   const runId = packet.runId;
 
-  await ports.executor.deleteSession(oldSessionId);
   const newSessionId = await ports.executor.createSession(`baby:${runId}:r${turn}`, worktree);
-  journal(ports, runId, turn, { event: "rotation", phase: "session_replaced", newSessionId });
+  try {
+    const meta = ports.store.readMeta(runId);
+    ports.store.transitionRun({
+      runId,
+      expectedRevision: meta.revision ?? 0,
+      expectedStatuses: [meta.status],
+      meta: { ...meta, babySessionId: newSessionId, updatedAt: ports.clock.nowIso() },
+      activeRun: {
+        runId,
+        runDir: dirname(worktree),
+        worktree,
+        babySessionId: newSessionId,
+        startedAt: ports.clock.nowIso(),
+      },
+      ...(lease ? { lease } : {}),
+    });
+  } catch (error) {
+    try {
+      await ports.executor.deleteSession(newSessionId);
+    } catch {}
+    throw error;
+  }
 
-  const meta = ports.store.readMeta(runId);
-  ports.store.writeMeta({ ...meta, babySessionId: newSessionId, updatedAt: ports.clock.nowIso() });
-  ports.store.addActiveRun({
-    runId,
-    runDir: dirname(worktree),
-    worktree,
-    babySessionId: newSessionId,
-    startedAt: ports.clock.nowIso(),
-  });
+  journal(ports, runId, turn, { event: "rotation", phase: "session_replaced", newSessionId });
+  try {
+    await ports.executor.deleteSession(oldSessionId);
+  } catch {}
 
   const gate = ports.store.readGateState(runId);
   const { next, reason } = rotationGateState(gate, needsReconciliation);

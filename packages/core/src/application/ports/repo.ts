@@ -14,7 +14,14 @@ export type Repo = {
   reviewableDiff(worktree: string, maxBytes: number): string;
   reviewableDiffAgainst(worktree: string, base: string, maxBytes: number): string;
   reconciliationGitState(worktree: string): ReconciliationGitState;
-  fetchBranchFromClone(repo: string, clone: string, branch: string, force?: boolean): void;
+  resolveRevision?(worktree: string, ref: string): string;
+  fetchBranchFromClone(
+    repo: string,
+    clone: string,
+    branch: string,
+    expectedOldSha: string | null,
+    expectedNewSha: string,
+  ): void;
   removeSandbox(sandboxPath: string, runsDir: string): void;
   headBranch(worktree: string): string;
   branchExists(worktree: string, branch: string): boolean;

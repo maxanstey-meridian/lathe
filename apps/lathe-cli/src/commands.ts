@@ -189,10 +189,10 @@ export const cmdStop = (env: CliEnv, runId: string): Promise<number> => {
     return Promise.resolve(1);
   }
 
-  return runDaemon<PathJsonResponse<"/runs/{runId}/stop", "post", 201>>(
+  return runDaemon<PathJsonResponse<"/runs/{runId}/stop", "post", 202>>(
     env,
     (client) => client.POST("/runs/{runId}/stop", { params: { path: { runId } } }),
-    (data) => env.log(`cancelled: ${data.runId} (${data.status})`),
+    (data) => env.log(`${data.cancellationRequested ? "cancellation requested" : "cancelled"}: ${data.runId} (${data.status})`),
     (status) => {
       if (status === 404) {
         env.err(`run ${runId} not found`);
@@ -570,6 +570,8 @@ const printTailSnapshot = (env: CliEnv, snapshot: TailSnapshotDto): void => {
 const printTailEvent = (env: CliEnv, event: TailEvent): void => {
   if (event.kind === "tail.journal") {
     env.log(event.line);
+  } else if (event.kind === "tail.run.changed" && event.snapshot) {
+    printTailSnapshot(env, event.snapshot);
   }
 };
 
@@ -588,9 +590,16 @@ const fetchTailSnapshot = async (
   return response.ok ? data ?? null : undefined;
 };
 
-const followTailSnapshot = async (env: CliEnv, deps: TailDeps, snapshot: TailSnapshotDto): Promise<void> => {
+const followTailSnapshot = async (
+  env: CliEnv,
+  deps: TailDeps,
+  snapshot: TailSnapshotDto,
+  autoAdvance: boolean,
+): Promise<void> => {
   try {
-    await deps.streamTailEvents(snapshot.runId, snapshot.lastSeq, (event) => printTailEvent(env, event));
+    await deps.streamTailEvents(autoAdvance ? "active" : snapshot.runId, snapshot.lastSeq, (event) =>
+      printTailEvent(env, event),
+    );
   } catch (err) {
     env.err(err instanceof Error ? err.message : String(err));
   }
@@ -648,7 +657,7 @@ const daemonPlainTail = async (
             cancelPoll();
             env.log(`run ${next.runId} became active — tailing…`);
             printTailSnapshot(env, next);
-            void followTailSnapshot(env, deps, next);
+            void followTailSnapshot(env, deps, next, true);
           }
         })
         .finally(() => {
@@ -664,7 +673,7 @@ const daemonPlainTail = async (
 
   printTailSnapshot(env, snapshot);
   if (follow) {
-    await followTailSnapshot(env, deps, snapshot);
+    await followTailSnapshot(env, deps, snapshot, runId === undefined);
   }
 };
 

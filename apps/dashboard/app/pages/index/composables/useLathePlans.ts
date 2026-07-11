@@ -1,6 +1,6 @@
 import type { LathePlans } from "../ports/lathe-plans";
 import type { RivetClient } from "@lathe/contract";
-import type { PlanDto } from "../ports/lathe-plans";
+import type { PlanSummary } from "../ports/lathe-plans";
 import { computed, ref } from "vue";
 
 import { client } from "@lathe/contract";
@@ -16,7 +16,7 @@ const fuzzyMatch = (query: string, target: string): boolean => {
   return qi === q.length;
 };
 
-const planMatches = (plan: PlanDto, query: string): boolean => {
+const planMatches = (plan: PlanSummary, query: string): boolean => {
   if (!query) return true;
   if (fuzzyMatch(query, plan.title)) return true;
   if (fuzzyMatch(query, plan.planId)) return true;
@@ -24,7 +24,7 @@ const planMatches = (plan: PlanDto, query: string): boolean => {
 };
 
 export const useLathePlans = (c: RivetClient = client): LathePlans => {
-  const plans = ref<PlanDto[]>([]);
+  const plans = ref<PlanSummary[]>([]);
   const selectedPlan = ref<LathePlans["selectedPlan"]["value"]>(null);
   const selectedPlanId = ref<string | null>(null);
   const isLoading = ref(false);

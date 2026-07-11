@@ -3,13 +3,13 @@ import type { ComputedRef, Ref } from "vue";
 
 import { useProvideInject } from "~/composables/useProvideInject";
 
-export type PlanDto = components["schemas"]["PlanDto"];
-export type PlanDetailDto = components["schemas"]["PlanDetailDto"];
+export type PlanSummary = components["schemas"]["PlanDto"];
+export type PlanDetail = components["schemas"]["PlanDetailDto"];
 
 export interface LathePlans {
-  readonly plans: Ref<PlanDto[]>;
-  readonly filteredPlans: ComputedRef<PlanDto[]>;
-  readonly selectedPlan: Ref<PlanDetailDto | null>;
+  readonly plans: Ref<PlanSummary[]>;
+  readonly filteredPlans: ComputedRef<PlanSummary[]>;
+  readonly selectedPlan: Ref<PlanDetail | null>;
   readonly selectedPlanId: Ref<string | null>;
   readonly isLoading: Ref<boolean>;
   readonly errorMessage: Ref<string | null>;

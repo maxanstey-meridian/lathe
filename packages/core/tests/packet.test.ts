@@ -6,7 +6,7 @@ import {
   parsePacketShape,
   redactPacketInfra,
   stampBase,
-} from "../src/domain/index.ts";
+} from "../src/domain/packet.ts";
 
 // ---- parsePacketShape ----
 

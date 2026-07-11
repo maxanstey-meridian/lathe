@@ -278,21 +278,24 @@ export const writeOpencodeConfig = (
 // ---------------------------------------------------------------------------
 // Server supervision
 
-export const spawnOpencodeServer = (config: Config, paths: Paths): ChildProcess => {
+export const spawnOpencodeServer = (
+  config: Config,
+  paths: Paths,
+): ChildProcess => {
   const child = spawn(
-    config.opencode.binary,
-    ["serve", "--hostname", "127.0.0.1", "--port", String(config.opencode.port), "--print-logs"],
+    "env",
+    [
+      `XDG_CONFIG_HOME=${paths.xdgConfigHome}`,
+      `OPENCODE_CONFIG=${paths.opencodeConfigFile}`,
+      config.opencode.binary,
+      "serve",
+      "--hostname",
+      "127.0.0.1",
+      "--port",
+      String(config.opencode.port),
+      "--print-logs",
+    ],
     {
-      env: {
-        ...process.env,
-        // Isolated config home: opencode MERGES every config location it
-        // finds, so pointing XDG_CONFIG_HOME at our own dir is the only way
-        // to keep the global ~/.config/opencode (v1 watchdog, v1 bridge,
-        // extra MCPs) out of the serve instance. Auth stays global via
-        // XDG_DATA_HOME, untouched.
-        XDG_CONFIG_HOME: paths.xdgConfigHome,
-        OPENCODE_CONFIG: paths.opencodeConfigFile,
-      },
       stdio: ["ignore", "ignore", "pipe"],
     },
   );

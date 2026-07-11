@@ -1,6 +1,7 @@
 import { match } from "node:assert";
 import { describe, it } from "node:test";
-import type { SubmitReport, FinalReview } from "../src/domain/index.js";
+import type { SubmitReport } from "../src/domain/report.js";
+import type { FinalReview } from "../src/domain/review.js";
 import { renderReportMarkdown } from "../src/domain/report.js";
 
 const minReport = (): SubmitReport => ({

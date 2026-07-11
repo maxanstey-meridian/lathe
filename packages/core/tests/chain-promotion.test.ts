@@ -28,6 +28,10 @@ const fakeRepo = (opts?: {
   fetchBranchFromCloneRepo?: string;
   fetchBranchFromCloneFrom?: string;
   fetchBranchFromCloneBranch?: string;
+  fetchBranchFromCloneCalls?: number;
+  sourceSha?: string | null;
+  sandboxSha?: string;
+  raceOnFetch?: boolean;
 }): Repo => ({
   createSandbox: () => {
     throw new Error("unimplemented");
@@ -46,12 +50,30 @@ const fakeRepo = (opts?: {
     untracked: [],
     changedFiles: [],
   }),
-  fetchBranchFromClone: () => {
+  resolveRevision: (path: string) => {
+    if (path === "/tmp/repo") {
+      if (opts?.sourceSha === undefined || opts.sourceSha === null) {
+        throw new Error("missing ref");
+      }
+      return opts.sourceSha;
+    }
+    return opts?.sandboxSha ?? "tip-sha";
+  },
+  fetchBranchFromClone: (_repo, _clone, _branch, expectedOld, expectedNew) => {
     if (opts) {
       opts.fetchBranchFromCloneCalled = true;
+      opts.fetchBranchFromCloneCalls = (opts.fetchBranchFromCloneCalls ?? 0) + 1;
       opts.fetchBranchFromCloneRepo = "repo";
       opts.fetchBranchFromCloneFrom = "from";
       opts.fetchBranchFromCloneBranch = "branch";
+      if (opts.raceOnFetch) {
+        opts.sourceSha = "external-race";
+        throw new Error("CAS lost");
+      }
+      if ((opts.sourceSha ?? null) !== expectedOld) {
+        throw new Error("CAS lost");
+      }
+      opts.sourceSha = expectedNew;
     }
     return undefined;
   },
@@ -78,7 +100,6 @@ const makeMeta = (overrides: Partial<RunMeta> = {}): RunMeta => ({
   stallRetries: 0,
   crashRetries: 0,
   reorientRetries: 0,
-  reviewerUnreachable: 0,
   promoted: false,
   updatedAt: "2026-01-01T00:00:00.000Z",
   ...overrides,
@@ -182,7 +203,7 @@ test("promoteStaged: no parent → promote-now", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "chain-promo-pnow-"));
     const clock = fixedClock();
-    const repo = fakeRepo();
+    const repo = fakeRepo({ sourceSha: null });
     const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
     store.writeStaged("20260101-000000-child", stagedChildPacket);
@@ -197,6 +218,24 @@ test("promoteStaged: no parent → promote-now", () => {
   })();
 });
 
+test("promoteStaged: leaves staged work untouched while the repository lease is held", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "chain-promo-leased-"));
+  const clock = fixedClock();
+  const repo = fakeRepo({ sourceSha: null });
+  const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
+  const runId = "20260101-000000-child";
+  store.writeStaged(runId, stagedChildPacket);
+  const lease = store.acquireRepositoryLease("/tmp/repo", "other-owner", "other-run", "execute");
+  ok(lease);
+
+  promoteStaged(store, repo);
+
+  equal(store.listQueue().length, 0);
+  ok(store.readStaged(runId));
+  store.releaseRepositoryLease(lease);
+  await cleanTemp(tmp);
+});
+
 // ---------------------------------------------------------------------------
 // promoteStaged — promote-with-base (parent converged)
 
@@ -204,7 +243,7 @@ test("promoteStaged: parent converged → promote-with-base", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "chain-promo-pbase-"));
     const clock = fixedClock();
-    const fetchOpts = { fetchBranchFromCloneCalled: false };
+    const fetchOpts = { fetchBranchFromCloneCalled: false, sourceSha: null as string | null };
     const repo = fakeRepo(fetchOpts);
     const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
@@ -246,6 +285,33 @@ body
   })();
 });
 
+test("promoteStaged: existing matching parent ref is CAS-proved before admission", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "chain-promo-existing-base-"));
+    const repoState = {
+      fetchBranchFromCloneCalled: false,
+      sourceSha: "tip-sha" as string | null,
+      sandboxSha: "tip-sha",
+    };
+    const repo = fakeRepo(repoState);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, fixedClock());
+    const childPacket = stagedChildPacket.replace(
+      "compare_commit: main",
+      "compare_commit: main\nparent_run_id: 20260101-000000-parent",
+    );
+    store.writeStaged("20260101-000000-child", childPacket);
+    store.writeCampaign(parentCampaignConverged(tipRunMeta.runId));
+    store.writeMeta(tipRunMeta);
+
+    promoteStaged(store, repo);
+
+    equal(store.listQueue().length, 1);
+    equal(repoState.fetchBranchFromCloneCalled, true);
+    strictEqual(store.readStaged("20260101-000000-child"), undefined);
+    await cleanTemp(tmp);
+  })();
+});
+
 // ---------------------------------------------------------------------------
 // promoteStaged — accepted tip: base off acceptedInto, no fetch (regression for
 // the strand where an accepted tip's deleted sandbox branch failed every sweep).
@@ -254,7 +320,7 @@ test("promoteStaged: tip already accepted → base off acceptedInto, no fetch", 
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "chain-promo-accepted-"));
     const clock = fixedClock();
-    const fetchOpts = { fetchBranchFromCloneCalled: false };
+    const fetchOpts = { fetchBranchFromCloneCalled: false, sourceSha: "tip-sha" as string | null };
     const repo = fakeRepo(fetchOpts);
     const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
@@ -277,6 +343,28 @@ body
     store.writeStaged("20260101-000000-child", childPacket);
     store.writeCampaign(parentCampaignConverged("20260101-000000-tip"));
     store.writeMeta(tipRunMetaAccepted);
+    store.readAcceptanceOperation = () => ({
+      campaignId: "20260101-000000-parent",
+      phase: "cleaned",
+      tipRunId: tipRunMetaAccepted.runId,
+      acceptedInto: "main",
+      expectedTipSha: "tip-sha",
+      members: [
+        {
+          runId: tipRunMetaAccepted.runId,
+          revision: tipRunMetaAccepted.revision ?? 0,
+          status: "accepted",
+          repo: tipRunMetaAccepted.repo,
+          branch: tipRunMetaAccepted.branch,
+          worktree: tipRunMetaAccepted.worktree,
+          base: tipRunMetaAccepted.base,
+          pass: tipRunMetaAccepted.pass ?? 1,
+        },
+      ],
+      cleanedSandboxes: [tipRunMetaAccepted.runId],
+      cleanedBranches: [],
+      updatedAt: tipRunMetaAccepted.updatedAt,
+    });
 
     promoteStaged(store, repo);
 
@@ -294,6 +382,64 @@ body
       store.readQueuePacket("20260101-000000-child")?.includes("base: main"),
       "child should be based on the branch the tip was accepted into",
     );
+    await cleanTemp(tmp);
+  })();
+});
+
+test("promoteStaged: differing existing parent ref leaves child staged", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "chain-promo-stale-ref-"));
+    const repoState = {
+      fetchBranchFromCloneCalled: false,
+      sourceSha: "external-sha" as string | null,
+      sandboxSha: "tip-sha",
+    };
+    const repo = fakeRepo(repoState);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, fixedClock());
+    const childPacket = stagedChildPacket.replace(
+      "compare_commit: main",
+      "compare_commit: main\nparent_run_id: 20260101-000000-parent",
+    );
+    store.writeStaged("20260101-000000-child", childPacket);
+    store.writeCampaign(parentCampaignConverged(tipRunMeta.runId));
+    store.writeMeta(tipRunMeta);
+
+    promoteStaged(store, repo);
+
+    equal(store.listQueue().length, 0);
+    equal(store.readStaged("20260101-000000-child"), childPacket);
+    equal(repoState.fetchBranchFromCloneCalled, false);
+    await cleanTemp(tmp);
+  })();
+});
+
+test("promoteStaged: parent ref CAS race leaves child staged on every replay", () => {
+  return (async () => {
+    const tmp = await mkdtempP(join(tmpdir(), "chain-promo-ref-race-"));
+    const repoState = {
+      fetchBranchFromCloneCalled: false,
+      fetchBranchFromCloneCalls: 0,
+      sourceSha: null as string | null,
+      sandboxSha: "tip-sha",
+      raceOnFetch: true,
+    };
+    const repo = fakeRepo(repoState);
+    const store = SqliteStoreAdapter.create(makePaths(tmp), repo, fixedClock());
+    const childPacket = stagedChildPacket.replace(
+      "compare_commit: main",
+      "compare_commit: main\nparent_run_id: 20260101-000000-parent",
+    );
+    store.writeStaged("20260101-000000-child", childPacket);
+    store.writeCampaign(parentCampaignConverged(tipRunMeta.runId));
+    store.writeMeta(tipRunMeta);
+
+    promoteStaged(store, repo);
+    promoteStaged(store, repo);
+
+    equal(store.listQueue().length, 0);
+    equal(store.readStaged("20260101-000000-child"), childPacket);
+    equal(repoState.fetchBranchFromCloneCalls, 1);
+    equal(repoState.sourceSha, "external-race");
     await cleanTemp(tmp);
   })();
 });
@@ -435,7 +581,7 @@ test("promoteStaged: multiple staged → mixed decisions", () => {
   return (async () => {
     const tmp = await mkdtempP(join(tmpdir(), "chain-promo-multi-"));
     const clock = fixedClock();
-    const repo = fakeRepo();
+    const repo = fakeRepo({ sourceSha: null });
     const store = SqliteStoreAdapter.create(makePaths(tmp), repo, clock);
 
     // Child without parent → promote-now

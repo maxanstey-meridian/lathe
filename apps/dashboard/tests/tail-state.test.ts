@@ -30,6 +30,7 @@ const snapshot = (runId = "20260701-180000-dashboard-spa"): TailSnapshotDto => (
     daddy: [{ text: "restored daddy", style: "think" }],
     super: [],
   },
+  acceptanceReviewLines: [],
   driverCommands: [],
   journal: [
     { seq: 1, at: "2026-07-01T18:00:01.000Z", line: "driver booted", event: "log", driver: true },
@@ -121,8 +122,9 @@ test("pane replacement is authoritative and terminal stats preserve content", ()
     panes: {
       baby: [{ text: "hydrated", style: "text" }],
       daddy: [],
-      super: [],
+      super: [{ text: "review transcript", style: "text" }],
     },
+    acceptanceReviewLines: ["acceptance review: reviewing pass 1"],
   }, 100);
   const terminal = applyTailEvent(replaced, {
     kind: "tail.stats",
@@ -139,6 +141,10 @@ test("pane replacement is authoritative and terminal stats preserve content", ()
   }, 200);
 
   assert.deepEqual(visiblePaneLines(terminal.panes.baby), [{ text: "hydrated", style: "text" }]);
+  assert.deepEqual(visiblePaneLines(terminal.panes.super).map((line) => line.text), [
+    "review transcript",
+    "acceptance review: reviewing pass 1",
+  ]);
 });
 
 test("driver verification renders output before its result and includes driver journal events", () => {
@@ -187,5 +193,54 @@ test("driver verification renders output before its result and includes driver j
     { text: "warning", style: "think" },
     { text: "✓ [report] $ task check (exit 0 · 0m05s)", style: "tool" },
     { text: "driver booted", style: "tool" },
+  ]);
+});
+
+test("acceptance-review lifecycle and verdict events replace semantic state without duplication", () => {
+  let state = tailStateFromSnapshot(snapshot());
+  const started = {
+    kind: "tail.super.status" as const,
+    runId: snapshot().runId,
+    seq: 3,
+    at: "2026-07-01T18:00:03.000Z",
+    status: "started" as const,
+    pass: 1,
+    lines: ["acceptance review: reviewing pass 1"],
+  };
+  state = applyTailEvent(state, started, 100);
+  state = applyTailEvent(state, started, 200);
+  assert.deepEqual(visiblePaneLines(state.panes.super), [
+    { text: "acceptance review: reviewing pass 1", style: "tool" },
+  ]);
+
+  state = applyTailEvent(state, {
+    kind: "tail.super.verdict",
+    runId: snapshot().runId,
+    seq: 4,
+    at: "2026-07-01T18:00:04.000Z",
+    verdict: "accept",
+    pass: 1,
+    findings: ["clean"],
+    lines: ["acceptance review: verdict accept (pass 1)", "  clean"],
+  }, 300);
+  assert.deepEqual(visiblePaneLines(state.panes.super), [
+    { text: "acceptance review: verdict accept (pass 1)", style: "tool" },
+    { text: "  clean", style: "tool" },
+  ]);
+});
+
+test("acceptance-review failure remains visible without reviewer transcript", () => {
+  const state = applyTailEvent(tailStateFromSnapshot(snapshot()), {
+    kind: "tail.super.status",
+    runId: snapshot().runId,
+    seq: 3,
+    at: "2026-07-01T18:00:03.000Z",
+    status: "failed",
+    pass: 1,
+    detail: "connection dropped",
+    lines: ["acceptance review: pass 1 failed: connection dropped"],
+  }, 100);
+  assert.deepEqual(visiblePaneLines(state.panes.super), [
+    { text: "acceptance review: pass 1 failed: connection dropped", style: "tool" },
   ]);
 });

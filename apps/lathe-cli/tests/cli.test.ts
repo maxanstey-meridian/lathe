@@ -134,6 +134,9 @@ const tailSnapshot = (runId: string) => ({
   contextTokens: 0,
   turn: 0,
   rotations: 0,
+  panes: { baby: [], daddy: [], super: [] },
+  acceptanceReviewLines: [],
+  driverCommands: [],
   journal: [{ seq: 1, at: "2026-01-01T00:00:01Z", line: "00:00:01 ▶ run started", event: "run_started", driver: true }],
   lastSeq: 1,
 });
@@ -626,6 +629,39 @@ test("tail: --plain fetches daemon snapshot and follows tail SSE", async () => {
   ok(h.logs.some((l) => l.includes("00:00:02 next")), h.logs.join("|"));
 });
 
+test("tail: implicit --plain follows active SSE and renders the next run snapshot", async () => {
+  const h = harness((req) => {
+    if (new URL(req.url).pathname === "/tail/active") {
+      return jsonResponse(200, tailSnapshot("run-1"));
+    }
+    return jsonResponse(200, {});
+  });
+  const streamed: Array<{ target: string; lastSeq: number }> = [];
+
+  await cmdTail(h.env, ["--plain"], tailDeps({
+    streamTailEvents: async (target, lastSeq, onEvent) => {
+      streamed.push({ target, lastSeq });
+      const next = tailSnapshot("run-2");
+      next.journal = [{ ...next.journal[0]!, line: "00:00:01 run-2 started" }];
+      onEvent({ kind: "tail.run.changed", runId: "run-2", snapshot: next });
+    },
+  }));
+
+  deepEqual(streamed, [{ target: "active", lastSeq: 1 }]);
+  ok(h.logs.some((line) => line.includes("run-2 started")), h.logs.join("|"));
+});
+
+test("tail: explicit --plain remains pinned to the requested run", async () => {
+  const h = harness((req) => jsonResponse(200, tailSnapshot("run-1")));
+  const targets: string[] = [];
+
+  await cmdTail(h.env, ["--plain", "run-1"], tailDeps({
+    streamTailEvents: async (target) => { targets.push(target); },
+  }));
+
+  deepEqual(targets, ["run-1"]);
+});
+
 test("tail: no active run waits and then opens TTY tail from daemon active snapshot", async () => {
   let active = false;
   const h = harness((req) => {
@@ -781,6 +817,68 @@ test("startDaemon: shutdown fires server.close → supervisor.stop → releaseLo
   ok(exited, "process.exit was called");
 });
 
+test("startDaemon: restart gracefully stops before launching the replacement", async () => {
+  const port = 43125;
+  const dir = mkdtempSync(join(tmpdir(), "lathe-restart-"));
+  const server = createServer();
+  const order: string[] = [];
+  let restart: (() => void) | undefined;
+  let restartTask: (() => Promise<void>) | undefined;
+
+  try {
+    const { startDaemon } = await import("../src/serve.js");
+    await startDaemon({
+      loadConfig: () => ({
+        config: { ...ConfigSchema.parse({}), daemon: { port, host: "127.0.0.1" } },
+        paths: makePaths(dir),
+      }),
+      acquireSingleInstanceLock: async () => ({
+        server,
+        release: () => order.push("releaseLock"),
+      }),
+      createSupervisor: (config) => fakeSupervisor(order, config),
+      createApp: (_appDeps, _supervisor, options) => {
+        restart = options?.onRestart;
+        return { fetch: () => new Response() };
+      },
+      closeServer: async () => {
+        order.push("server.close");
+      },
+      onSignal: () => {},
+      exit: (code) => {
+        order.push(`exit(${code})`);
+        throw new ExitCalled(code);
+      },
+      scheduleRestart: (task) => {
+        restartTask = task;
+      },
+      launchReplacement: () => order.push("launchReplacement"),
+    });
+
+    ok(restart, "restart callback registered");
+    restart();
+    deepEqual(order, [], "HTTP callback only schedules shutdown");
+    ok(restartTask, "restart lifecycle scheduled");
+
+    try {
+      await restartTask();
+    } catch (err) {
+      if (!(err instanceof ExitCalled)) throw err;
+      equal(err.code, 0);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  deepEqual(order, [
+    "server.close",
+    "supervisor.stop",
+    "releaseLock",
+    "launchReplacement",
+    "exit(0)",
+  ]);
+});
+
 test("startDaemon: threads configured host into the held lock and shuts down on SIGTERM", async () => {
   const port = 43124;
   const dir = mkdtempSync(join(tmpdir(), "lathe-serve-host-"));
@@ -852,18 +950,17 @@ test("startDaemon: threads configured host into the held lock and shuts down on 
 // lathe db v3 active-state reader regression (multi-row schema)
 // ---------------------------------------------------------------------------
 
-test("db-v3: resolveRunId query (ORDER BY run_id LIMIT 1) works against v3 schema", () => {
+test("lathe db events defaults to the newest active run or convergence", () => {
   const dir = mkdtempSync(join(tmpdir(), "lathe-db-v3-"));
+  const homeBack = process.env.HOME;
+  process.env.HOME = dir;
   try {
+    const configPath = join(dir, ".meridian", "v3", "config.json");
+    mkdirSync(join(dir, ".meridian", "v3"), { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ stateRoot: dir }));
     const db = new DatabaseSync(join(dir, "lathe.db"));
     db.exec("PRAGMA journal_mode=WAL;");
-
-    // V3 schema: active_run uses run_id TEXT PRIMARY KEY, not key
     db.exec(`
-      CREATE TABLE IF NOT EXISTS runs(
-        run_id TEXT PRIMARY KEY,
-        meta TEXT NOT NULL
-      );
       CREATE TABLE IF NOT EXISTS active_run(
         run_id TEXT PRIMARY KEY,
         run TEXT NOT NULL
@@ -872,56 +969,40 @@ test("db-v3: resolveRunId query (ORDER BY run_id LIMIT 1) works against v3 schem
         run_id TEXT PRIMARY KEY,
         convergence TEXT NOT NULL
       );
-    `);
-
-    // Insert an active run (V3 format)
-    const activeRun = JSON.stringify({ runId: "20260101-000000-z", worktree: "/tmp/z", babySessionId: "sess-z" });
-    db.prepare("INSERT OR REPLACE INTO active_run (run_id, run) VALUES (?, ?)").run("20260101-000000-z", activeRun);
-
-    // Insert an older active run (deterministic ORDER BY run_id picks 'z')
-    const activeRunB = JSON.stringify({ runId: "20260101-000000-a", worktree: "/tmp/a", babySessionId: "sess-a" });
-    db.prepare("INSERT OR REPLACE INTO active_run (run_id, run) VALUES (?, ?)").run("20260101-000000-a", activeRunB);
-
-    // This is the exact query used by resolveRunId — must work against v3 schema
-    const row = db.prepare("SELECT run FROM active_run ORDER BY run_id LIMIT 1").get() as
-      | { run: string }
-      | undefined;
-    ok(row, "should return a row from active_run with v3 schema");
-    const parsed = JSON.parse(row!.run);
-    equal(parsed.runId, "20260101-000000-a", "ORDER BY run_id LIMIT 1 picks first run_id");
-
-    // Test empty case — no rows
-    db.prepare("DELETE FROM active_run").run();
-    const emptyRow = db.prepare("SELECT run FROM active_run ORDER BY run_id LIMIT 1").get() as
-      | { run: string }
-      | undefined;
-    equal(emptyRow, undefined, "no rows returns undefined");
-
-    db.close();
-
-    // Same pattern for active_convergence
-    const convDb = new DatabaseSync(join(dir, "lathe.db"));
-    convDb.exec("PRAGMA journal_mode=WAL;");
-    convDb.exec(`
-      CREATE TABLE IF NOT EXISTS active_convergence(
-        run_id TEXT PRIMARY KEY,
-        convergence TEXT NOT NULL
+      CREATE TABLE IF NOT EXISTS events(
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL,
+        event TEXT NOT NULL
       );
     `);
+    db.prepare("INSERT INTO active_run (run_id, run) VALUES (?, ?)").run(
+      "run-a",
+      JSON.stringify({ runId: "run-a", startedAt: "2026-01-01T00:00:00.000Z" }),
+    );
+    db.prepare("INSERT INTO active_convergence (run_id, convergence) VALUES (?, ?)").run(
+      "run-z",
+      JSON.stringify({ runId: "run-z", startedAt: "2026-01-02T00:00:00.000Z" }),
+    );
+    db.prepare("INSERT INTO events (run_id, event) VALUES (?, ?)").run(
+      "run-z",
+      JSON.stringify({ at: "2026-01-02T00:00:00.000Z", turn: 0, event: "driver_note", note: "selected convergence" }),
+    );
+    db.close();
 
-    const activeConv = JSON.stringify({ runId: "20260101-000000-x" });
-    convDb.prepare("INSERT OR REPLACE INTO active_convergence (run_id, convergence) VALUES (?, ?)").run("20260101-000000-x", activeConv);
+    const logs: string[] = [];
+    const errs: string[] = [];
+    const code = cmdDb({
+      client: stubClient(() => jsonResponse(200, {})),
+      isDaemonUp: () => Promise.resolve(false),
+      log: (line) => logs.push(line),
+      err: (line) => errs.push(line),
+    }, ["events"]);
 
-    // This is the exact query used by dbActive — must work against v3 schema
-    const convRow = convDb.prepare("SELECT convergence FROM active_convergence ORDER BY run_id LIMIT 1").get() as
-      | { convergence: string }
-      | undefined;
-    ok(convRow, "should return a row from active_convergence with v3 schema");
-    const convParsed = JSON.parse(convRow!.convergence);
-    equal(convParsed.runId, "20260101-000000-x");
-
-    convDb.close();
+    equal(code, 0);
+    ok(logs.some((line) => line.includes("selected convergence")));
+    equal(errs.length, 0);
   } finally {
+    process.env.HOME = homeBack;
     rmSync(dir, { recursive: true, force: true });
   }
 });

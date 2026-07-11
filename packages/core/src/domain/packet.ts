@@ -300,7 +300,7 @@ export const stampBase = (raw: string, headBranch: string): string => {
 
 // ---------------------------------------------------------------------------
 // YAML frontmatter field extractors — pure string ops, shared by admission
-// (store.ts) and queue meta construction (initMetaFromQueue).
+// (store.ts) and queue admission metadata construction.
 // ---------------------------------------------------------------------------
 
 export const extractRepoFromYaml = (raw: string): string | undefined => {

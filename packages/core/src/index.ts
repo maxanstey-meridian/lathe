@@ -6,7 +6,7 @@
 // Grows as P01–P05 promote internals (store ports, supervisor) to public API.
 // ---------------------------------------------------------------------------
 
-export { JournalEvent, renderJournalEvent } from "./domain/journal.js";
+export { JournalEvent, renderJournalEvent, isDriverEvent } from "./domain/journal.js";
 export { Config } from "./config/schemas.js";
 export { loadConfig } from "./config/config.js";
 export { makePaths, expandHome } from "./config/paths.js";
@@ -18,6 +18,7 @@ export type { Paths } from "./config/paths.js";
 
 export type { Clock } from "./application/ports/clock.js";
 export type { Repo } from "./application/ports/repo.js";
+export { RunTransitionConflictError } from "./application/errors/run-transition-conflict.js";
 export type { Store } from "./application/ports/store.js";
 export { noopDriverOutput } from "./application/ports/driver-output.js";
 export type {
@@ -44,10 +45,10 @@ export type {
 } from "./application/ports/events.js";
 
 // ---------------------------------------------------------------------------
-// CLI composition root (buildRepo + runDriver — the server hosts these)
+// Composition root (buildRepo + runDriver — the server hosts these)
 // ---------------------------------------------------------------------------
 
-export { buildRepo, runDriver } from "./interfaces/cli/composition.js";
+export { buildRepo, runDriver } from "./composition.js";
 
 // ---------------------------------------------------------------------------
 // Use cases (lifecycle methods delegate to these)
@@ -56,18 +57,19 @@ export { buildRepo, runDriver } from "./interfaces/cli/composition.js";
 export { admitPacket } from "./application/use-cases/admit-packet.js";
 export { validatePacket } from "./application/use-cases/validate-packet.js";
 export { acceptRun } from "./application/use-cases/accept-run.js";
+export { recoverAcceptedCleanup } from "./application/use-cases/recover-acceptance-cleanup.js";
 export { answerRun } from "./application/use-cases/answer-run.js";
 export { promoteStaged } from "./application/use-cases/chain-promotion.js";
 export {
   runLoop,
-  recoverOrphanedRuns,
+  parkOrphanedRuns,
   recoverStaleActiveRuns,
-  recoverStalledRunsAtStartup,
 } from "./application/use-cases/run-loop.js";
 export type {
   ExecuteRunCallback,
   ConvergeCallback,
   WaitForWorkCallback,
+  RunAbort,
   RunLoopSeams,
 } from "./application/use-cases/run-loop.js";
 export { createConfigSource } from "./application/use-cases/run-runtime.js";

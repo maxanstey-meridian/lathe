@@ -45,7 +45,6 @@ const makeTestConfig = (): Config =>
       skillPath: "~/.config/opencode/skills/meridian/SKILL.md",
       packetSkillPath: "~/.config/opencode/skills/packet/SKILL.md",
       diffCapBytes: 131_072,
-      transportRetries: 2,
     },
     thresholds: {
       rotationFraction: 0.65,
@@ -59,7 +58,6 @@ const makeTestConfig = (): Config =>
       checkpointBounceLimit: 1,
       verificationTimeoutMs: 600_000,
       maxPasses: 3,
-      maxStallRetries: 2,
       maxReorientRetries: 2,
       maxRunMs: 21_600_000,
       contextTokensFloor: 128,

@@ -1,13 +1,14 @@
 export type FieldType =
   | "text"
   | "number"
+  | "numberOrFalse"
   | "select"
   | "boolean"
   | "json"
   | "masked";
 
 export type FieldDef =
-  | { name: string; label: string; section: string; type: "text" | "number" | "select" | "boolean" | "masked"; description: string; keyPath?: string; options?: { label: string; value: string | boolean | number | null | undefined }[] }
+  | { name: string; label: string; section: string; type: "text" | "number" | "numberOrFalse" | "select" | "boolean" | "masked"; description: string; keyPath?: string; options?: { label: string; value: string | boolean | number | null | undefined }[] }
   | { name: string; label: string; section: string; type: "json"; description: string; keyPath?: string };
 
 export const settingsFields: FieldDef[] = [
@@ -49,13 +50,12 @@ export const settingsFields: FieldDef[] = [
   { name: "superdaddy.agent", label: "Agent", section: "Acceptance Review", type: "text", description: "Agent name passed to opencode for acceptance review sessions. Default: superdaddy" },
   { name: "superdaddy.timeoutMs", label: "Timeout (ms)", section: "Acceptance Review", type: "number", description: "Per-turn timeout for acceptance review. Default: 1800000 (30 min)" },
   { name: "superdaddy.baseUrl", label: "Base URL", section: "Acceptance Review", type: "text", description: "API host for the acceptance review provider. Only used when the provider differs from the implementation provider. Default: https://chatgpt.com/backend-api/codex" },
-  { name: "superdaddy.headerTimeoutMs", label: "Header Timeout (ms)", section: "Acceptance Review", type: "number", description: "opencode's ProviderHeaderTimeout window. Set to false (in config.json) to disable the timer for diagnosis. Default: 3600000 (1h)" },
+  { name: "superdaddy.headerTimeoutMs", label: "Header Timeout (ms)", section: "Acceptance Review", type: "numberOrFalse", description: "opencode's ProviderHeaderTimeout window. Disable the timer only for diagnosis. Default: 3600000 (1h)" },
   { name: "superdaddy.apiKey", label: "API Key", section: "Acceptance Review", type: "masked", description: "Dummy key for a local proxy provider (e.g. claude-max-proxy). Left undefined for openai/codex which uses ChatGPT OAuth. Stored in config.json — masked here to avoid leaking secrets in the browser." },
   { name: "superdaddy.turnSteps", label: "Turn Steps", section: "Acceptance Review", type: "number", description: "Max steps per acceptance review turn; it must run every verification command, inspect the tree, and emit a verdict. Default: 40" },
   { name: "superdaddy.skillPath", label: "Skill Path", section: "Acceptance Review", type: "text", description: "Path to the Meridian skill (judgement rubric). Read fresh each convergence pass. Default: ~/.config/opencode/skills/meridian/SKILL.md" },
   { name: "superdaddy.packetSkillPath", label: "Packet Skill Path", section: "Acceptance Review", type: "text", description: "Path to the packet-authoring skill for follow-up packets (request_changes → repair). Read fresh each authoring turn. Default: ~/.config/opencode/skills/packet/SKILL.md" },
   { name: "superdaddy.diffCapBytes", label: "Diff Cap (bytes)", section: "Acceptance Review", type: "number", description: "Max diff bytes included inline for acceptance review. Default: 131072 (128KB)" },
-  { name: "superdaddy.transportRetries", label: "Transport Retries", section: "Acceptance Review", type: "number", description: "Immediate retries on transient transport drops (socket hang up, 5xx, reset) before returning an unreachable outcome. Fatal errors (auth/400) are never retried. Default: 2" },
 
   // ── Thresholds ──
   { name: "thresholds.rotationFraction", label: "Rotation Fraction", section: "Thresholds", type: "number", description: "Fraction of the implementation context window at which context is rotated (fresh session with summary). Default: 0.65" },
@@ -69,16 +69,13 @@ export const settingsFields: FieldDef[] = [
   { name: "thresholds.checkpointBounceLimit", label: "Checkpoint Bounce Limit", section: "Thresholds", type: "number", description: "Max planner check-in bounces per turn (prevents ask_planner loops). Default: 1" },
   { name: "thresholds.verificationTimeoutMs", label: "Verification Timeout (ms)", section: "Thresholds", type: "number", description: "Timeout for an acceptance verification pass. Default: 600000 (10 min)" },
   { name: "thresholds.maxPasses", label: "Max Passes", section: "Thresholds", type: "number", description: "Max convergence passes before a stalled campaign is forced to escalate to Max. Default: 3" },
-  { name: "thresholds.maxReviewerUnreachable", label: "Max Reviewer Unreachable", section: "Thresholds", type: "number", description: "Consecutive transport-dropped acceptance review attempts before parking as 'Codex durably down'. Distinct from maxPasses (which counts real verdicts). Default: 3" },
   { name: "thresholds.promoteAtCap", label: "Promote At Cap", section: "Thresholds", type: "boolean", description: "When true, swap the implementation model to promoteTo at the rejection cap for one more set of retries. false disables the swap and implementation fails at the cap. Default: true" },
-  { name: "thresholds.maxStallRetries", label: "Max Stall Retries", section: "Thresholds", type: "number", description: "Automatic requeues after a stall before a wedged run escalates to Max. Default: 2" },
-  { name: "thresholds.maxCrashRetries", label: "Max Crash Retries", section: "Thresholds", type: "number", description: "Automatic requeues (front of line) after a crash before escalating to Max. Transient crashes retry; deterministic crashes park. Default: 2" },
   { name: "thresholds.maxReorientRetries", label: "Max Reorient Retries", section: "Thresholds", type: "number", description: "Max consecutive hallucination reorients before the driver stops rotating and parks for Max. 0 disables reorient. Default: 2" },
   { name: "thresholds.maxRunMs", label: "Max Run (ms)", section: "Thresholds", type: "number", description: "Wall-clock backstop per attempt — catches livelock that the per-turn ladder can't (productive-looking turns that never converge). Default: 21600000 (6h)" },
   { name: "thresholds.contextTokensFloor", label: "Context Tokens Floor", section: "Thresholds", type: "number", description: "Minimum tokens for a turn to not be treated as a dead landing (model received essentially no prompt). First turn is exempt. Default: 128" },
 
   // ── Misc ──
-  { name: "idleTimeoutMs", label: "Idle Timeout (ms)", section: "Misc", type: "number", description: "Inactivity timer for sendMessage — destroys the request after this many ms of silence (no data chunks). Set to false in config.json to disable. Default: 120000 (2 min)" },
+  { name: "idleTimeoutMs", label: "Idle Timeout (ms)", section: "Misc", type: "numberOrFalse", description: "Inactivity timer for sendMessage — destroys the request after this many ms of silence (no data chunks). Default: 120000 (2 min)" },
 
   // ── Concurrency ──
   { name: "concurrency.maxWorkers", label: "Max Workers", section: "Concurrency", type: "number", description: "Maximum parallel runs. 1 = sequential (one run at a time). Default: 1" },

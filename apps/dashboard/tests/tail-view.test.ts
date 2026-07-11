@@ -2,13 +2,14 @@ import { test, expect } from "vitest";
 import { computed, defineComponent, h, nextTick, ref, type Ref } from "vue";
 import { mount } from "@vue/test-utils";
 
-import type { StatusDto } from "../app/pages/index/ports/lathe-status";
+import type { LatheStatusSnapshot } from "../app/pages/index/ports/lathe-status";
 import type { TailSnapshotDto } from "@lathe/contract";
 import { tailStateFromSnapshot } from "@lathe/tail-state";
-import { provideLatheStatus } from "../app/pages/index/ports/lathe-status";
-import { provideLatheTail } from "../app/pages/index/ports/lathe-tail";
-import { provideLatheActions } from "../app/pages/index/ports/lathe-actions";
+import * as statusPort from "../app/pages/index/ports/lathe-status";
+import * as tailPort from "../app/pages/index/ports/lathe-tail";
+import * as actionsPort from "../app/pages/index/ports/lathe-actions";
 import TailView from "../app/pages/index/components/TailView.vue";
+import TailPane from "../app/pages/index/components/TailPane.vue";
 
 const makeSnapshot = (runId: string): TailSnapshotDto => ({
   runId,
@@ -26,12 +27,13 @@ const makeSnapshot = (runId: string): TailSnapshotDto => ({
   turn: 0,
   rotations: 0,
   panes: { baby: [], daddy: [], super: [] },
+  acceptanceReviewLines: [],
   driverCommands: [],
   journal: [],
   lastSeq: 0,
 });
 
-const makeStatus = (activeRunIds: string[]): StatusDto => ({
+const makeStatus = (activeRunIds: string[]): LatheStatusSnapshot => ({
   activeRuns: activeRunIds.map((runId) => ({ runId, outcomes: "1/1 done", gateLatched: null, recentEvents: [] })),
   queued: [],
   parked: [],
@@ -42,49 +44,49 @@ const makeStatus = (activeRunIds: string[]): StatusDto => ({
 });
 
 const mountTailView = (
-  statusRef: Ref<StatusDto | null>,
+  statusRef: Ref<LatheStatusSnapshot | null>,
   tailRef: Ref<ReturnType<typeof tailStateFromSnapshot>>,
   stopMock: { callCount: number; lastRunId: string | null },
   tailLoading = ref(false),
 ) => {
   const Harness = defineComponent({
     setup() {
-      provideLatheStatus({
-        status: statusRef,
-        isLoading: ref(false),
-        errorMessage: ref(null),
-        isDaemonReachable: computed(() => true),
-        isLive: ref(false),
-        refresh: async () => undefined,
-        requeue: async () => undefined,
+      statusPort["provideLatheStatus"]({
+          status: statusRef,
+          isLoading: ref(false),
+          errorMessage: ref(null),
+          isDaemonReachable: computed(() => true),
+          isLive: ref(false),
+          refresh: async () => undefined,
+          requeue: async () => undefined,
       });
-      provideLatheTail({
-        state: tailRef,
-        isLoading: tailLoading,
-        isLive: ref(true),
-        errorMessage: ref(null),
-        now: ref(Date.parse("2026-07-01T18:00:00.000Z")),
-        selectedRunId: ref(null),
-        refresh: async () => undefined,
-        selectRun: () => {},
+      tailPort["provideLatheTail"]({
+          state: tailRef,
+          isLoading: tailLoading,
+          isLive: ref(true),
+          errorMessage: ref(null),
+          now: ref(Date.parse("2026-07-01T18:00:00.000Z")),
+          selectedRunId: ref(null),
+          refresh: async () => undefined,
+          selectRun: () => {},
       });
-      provideLatheActions({
-        stopLoading: ref(false),
-        answerLoading: ref(false),
-        acceptLoading: ref(false),
-        rejectLoading: ref(false),
-        enqueueContentLoading: ref(false),
-        lastError: ref(null),
-        isLoading: computed(() => false),
-        stop: async (runId: string) => {
-          stopMock.callCount += 1;
-          stopMock.lastRunId = runId;
-          return true;
-        },
-        answer: async () => true,
-        accept: async () => true,
-        reject: async () => true,
-        enqueueContent: async () => true,
+      actionsPort["provideLatheActions"]({
+          stopLoading: ref(false),
+          answerLoading: ref(false),
+          acceptLoading: ref(false),
+          rejectLoading: ref(false),
+          enqueueContentLoading: ref(false),
+          lastError: ref(null),
+          isLoading: computed(() => false),
+          stop: async (runId: string) => {
+            stopMock.callCount += 1;
+            stopMock.lastRunId = runId;
+            return true;
+          },
+          answer: async () => true,
+          accept: async () => true,
+          reject: async () => true,
+          enqueueContent: async () => true,
       });
       return () => h(TailView);
     },
@@ -103,7 +105,10 @@ const mountTailView = (
           props: { modelValue: String, items: Array },
           template: '<div class="u-select" />',
         },
-        TailPane: { template: '<div class="tail-pane" />' },
+        TailPane: {
+          props: { pane: Object },
+          template: '<div class="tail-pane">{{ pane.lines.map((line) => line.text).join("\\n") }}</div>',
+        },
       },
     },
   });
@@ -129,6 +134,21 @@ test("TailView: Stop button hidden when tailed run is not in activeRuns", () => 
 
   const wrapper = mountTailView(statusRef, tailRef, stopMock);
   expect(stopButtons(wrapper).length).toBe(0);
+  wrapper.unmount();
+});
+
+test("TailView: Acceptance Review renders durable semantic state", () => {
+  const statusRef = ref(makeStatus(["tail-run"]));
+  const reviewSnapshot = makeSnapshot("tail-run");
+  reviewSnapshot.panes.super = [{
+    text: "acceptance review: reviewer unreachable (3/3); parked for Max",
+    style: "tool",
+  }];
+  const tailRef = ref(tailStateFromSnapshot(reviewSnapshot));
+  const wrapper = mountTailView(statusRef, tailRef, { callCount: 0, lastRunId: null });
+
+  const acceptancePane = wrapper.findAllComponents(TailPane)[2];
+  expect(acceptancePane?.props("pane").lines[0]?.text).toContain("reviewer unreachable");
   wrapper.unmount();
 });
 

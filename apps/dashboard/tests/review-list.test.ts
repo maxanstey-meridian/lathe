@@ -44,7 +44,6 @@ const mountReviewList = () => mount(ReviewList, {
 test.each([
   ["ready_for_review", true, true],
   ["blocked", false, false],
-  ["interrupted", false, false],
   ["failed", false, false],
   ["stopped", false, false],
   ["accepted", false, false],

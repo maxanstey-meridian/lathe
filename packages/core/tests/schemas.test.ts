@@ -1,25 +1,13 @@
 import assert from "node:assert";
 import { test } from "node:test";
-import {
-  PacketFrontmatter,
-  OutcomeDef,
-  VerificationCommand,
-  RunMeta,
-  OutcomeEntry,
-  OutcomeLedger,
-  OutcomeStatus,
-  RunStatus,
-  BlockedReason,
-  PlannerResponse,
-  QuestionType,
-  PlannerStatus,
-  Finding,
-  SuperReview,
-  JournalEvent,
-  SubmitReport,
-  FileClassification,
-  ReportFile,
-} from "../src/domain/index.ts";
+import { PacketFrontmatter, OutcomeDef, VerificationCommand } from "../src/domain/packet.ts";
+import { RunMeta, RunStatus, BlockedReason } from "../src/domain/run.ts";
+import { OutcomeEntry, OutcomeLedger, OutcomeStatus } from "../src/domain/outcomes.ts";
+import { PlannerResponse, QuestionType, PlannerStatus } from "../src/domain/review.ts";
+import { Finding, SuperReview } from "../src/domain/convergence.ts";
+import { JournalEvent } from "../src/domain/journal.ts";
+import { SubmitReport, FileClassification, ReportFile } from "../src/domain/report.ts";
+import { AcceptanceOperation, RunStartupOperation } from "../src/domain/operations.ts";
 
 // ---- Packet ----
 
@@ -98,15 +86,7 @@ test("run-state: OutcomeEntry uses defaults", () => {
 });
 
 test("run-state: RunStatus accepts all variant", () => {
-  for (const s of [
-    "queued",
-    "running",
-    "interrupted",
-    "ready_for_review",
-    "blocked",
-    "failed",
-    "accepted",
-  ]) {
+  for (const s of ["queued", "running", "ready_for_review", "blocked", "failed", "accepted"]) {
     assert.strictEqual(RunStatus.parse(s), s);
   }
 });
@@ -240,6 +220,18 @@ test("journal: JournalEvent parses final_review with FinalReviewVerdict", () => 
   assert.strictEqual(result.verdict, "accept");
 });
 
+test("journal: JournalEvent parses durable super-review lifecycle state", () => {
+  const result = JournalEvent.parse({
+    event: "super_review_status",
+    pass: 2,
+    status: "failed",
+    detail: "connection dropped",
+    at: "2026-01-01T00:00:00Z",
+  });
+  assert(result.event === "super_review_status");
+  assert.strictEqual(result.status, "failed");
+});
+
 // ---- Report ----
 
 test("report: SubmitReport round-trips", () => {
@@ -277,6 +269,103 @@ test("report: FileClassification accepts all variants", () => {
   for (const c of ["expected", "acceptable-but-not-predeclared", "suspicious", "forbidden"]) {
     assert.strictEqual(FileClassification.parse(c), c);
   }
+});
+
+const acceptanceOperation = () => ({
+  campaignId: "campaign",
+  phase: "prepared" as const,
+  tipRunId: "tip",
+  acceptedInto: "meridian/tip",
+  expectedTipSha: "head",
+  members: [
+    {
+      runId: "first",
+      revision: 1,
+      status: "ready_for_review" as const,
+      repo: "/repo",
+      branch: "meridian/first",
+      worktree: "/runs/first",
+      base: "main",
+      pass: 1,
+    },
+    {
+      runId: "tip",
+      revision: 1,
+      status: "ready_for_review" as const,
+      repo: "/repo",
+      branch: "meridian/tip",
+      worktree: "/runs/tip",
+      base: "meridian/first",
+      pass: 2,
+    },
+  ],
+  cleanedSandboxes: [],
+  cleanedBranches: [],
+  updatedAt: "2026-01-01T00:00:00Z",
+});
+
+test("acceptance operation requires unique members", () => {
+  const value = acceptanceOperation();
+  value.members[1] = { ...value.members[1]!, runId: "first" };
+  assert.throws(() => AcceptanceOperation.parse(value), /unique run ids/);
+});
+
+test("acceptance operation requires the tip exactly once", () => {
+  const value = acceptanceOperation();
+  value.tipRunId = "missing";
+  assert.throws(() => AcceptanceOperation.parse(value), /present exactly once/);
+});
+
+test("acceptance operation requires one repository", () => {
+  const value = acceptanceOperation();
+  value.members[1] = { ...value.members[1]!, repo: "/other" };
+  assert.throws(() => AcceptanceOperation.parse(value), /one repository/);
+});
+
+test("run startup operation requires session ids once their phases create them", () => {
+  assert.throws(() =>
+    RunStartupOperation.parse({
+      runId: "run",
+      attempt: 1,
+      phase: "planner_session_created",
+      updatedAt: "now",
+    }),
+  );
+  assert.throws(() =>
+    RunStartupOperation.parse({
+      runId: "run",
+      attempt: 1,
+      phase: "executor_session_created",
+      plannerSessionId: "planner",
+      updatedAt: "now",
+    }),
+  );
+  assert.doesNotThrow(() =>
+    RunStartupOperation.parse({
+      runId: "run",
+      attempt: 1,
+      phase: "active",
+      plannerSessionId: "planner",
+      executorSessionId: "executor",
+      updatedAt: "now",
+    }),
+  );
+});
+
+test("acceptance cleanup progress is a unique known member subset and never cleans the tip branch", () => {
+  assert.throws(
+    () =>
+      AcceptanceOperation.parse({ ...acceptanceOperation(), cleanedSandboxes: ["first", "first"] }),
+    /unique/,
+  );
+  assert.throws(
+    () => AcceptanceOperation.parse({ ...acceptanceOperation(), cleanedSandboxes: ["unknown"] }),
+    /members/,
+  );
+  assert.throws(
+    () => AcceptanceOperation.parse({ ...acceptanceOperation(), cleanedBranches: ["tip"] }),
+    /tip branch/,
+  );
 });
 
 test("report: ReportFile action accepts all variants", () => {

@@ -107,7 +107,7 @@ verification:
 body
 `;
 
-// Tip whose campaign converged but `lathe accept` has NOT run yet: its branch
+// Tip whose campaign converged but `lathe prepare` has NOT run yet: its branch
 // still lives only in the clone sandbox, so promotion must fetch it.
 const tipRunMeta = makeMeta({
   runId: "20260101-000000-tip",
@@ -115,7 +115,7 @@ const tipRunMeta = makeMeta({
   worktree: "/tmp/worktree-tip",
 });
 
-// Tip already accepted: accept merged it into `acceptedInto` (here, "main") and
+// Tip already prepared: preparation fetched it into `acceptedInto` (here, "main") and
 // destroyed the clone + the meridian/<tip> branch. Promotion must base off
 // `acceptedInto` and skip the fetch — the canonical repo already has the work.
 const tipRunMetaAccepted = makeMeta({

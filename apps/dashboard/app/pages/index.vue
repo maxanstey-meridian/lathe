@@ -99,7 +99,7 @@ onMounted(() => {
 
     <UModal
       :open="showUpload"
-      title="Upload Packet"
+      title="Import Plan"
       :persist="false"
       @update:open="(val: boolean) => { if (!val) showUpload = false; }"
     >

@@ -1316,34 +1316,21 @@ export const createSupervisor = (
     },
 
     rejectRun(runId: string, reason: string): void {
-      // Queued runs are represented by run meta with status = "queued".
-      if (store.listQueue().some((q) => q.runId === runId)) {
-        store.archiveQueue(runId);
-        return;
-      }
-
       const meta = store.readMetaIfExists(runId);
       if (!meta) {
         throw new RunNotFoundError(runId);
       }
 
-      if (meta.status === "queued") {
-        // Queued runs: archive the queue entry.
-        store.archiveQueue(runId);
-        return;
-      }
-
-      // Irreversible terminal states: accepted/stopped/failed cannot be
-      // rewritten to blocked — the work is merged/gone or already failed.
-      if (meta.status === "accepted" || meta.status === "stopped" || meta.status === "failed") {
+      if (meta.status !== "ready_for_review") {
         throw new TerminalRunError(runId, meta.status);
       }
 
-      // Running/ready_for_review/blocked runs: mark as blocked with reason.
+      // Review rejection is a resumable request for changes, not cancellation
+      // and not a fabricated Human Operator decision.
       store.writeMeta({
         ...meta,
         status: "blocked" as const,
-        blockedReason: "human_decision" as const,
+        blockedReason: "stop_condition" as const,
         blockedQuestion: reason,
         updatedAt: clock.nowIso(),
       });
@@ -1355,7 +1342,7 @@ export const createSupervisor = (
         throw new RunNotFoundError(runId);
       }
       if (meta.status !== "stopped") {
-        throw new TerminalRunError(runId, meta.status);
+        throw new RunNotAnswerableError(`run ${runId} cannot be retried from ${meta.status}`);
       }
       const updated: RunMeta = { ...meta, status: "queued" as const, updatedAt: clock.nowIso() };
       store.writeMeta(updated);

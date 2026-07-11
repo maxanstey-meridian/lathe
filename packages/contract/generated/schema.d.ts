@@ -845,7 +845,7 @@ export interface components {
         /** @enum {string} */
         FindingSeverityDto: "P0" | "P1" | "P2" | "P3";
         /** @enum {string} */
-        RunStatus: "queued" | "running" | "paused" | "converged" | "accepted" | "stopped" | "failed";
+        RunStatus: "queued" | "running" | "interrupted" | "ready_for_review" | "blocked" | "accepted" | "stopped" | "failed";
         /** @enum {string} */
         TailRunStatus: "queued" | "running" | "interrupted" | "ready_for_review" | "blocked" | "failed" | "accepted" | "stopped";
         /** @enum {string} */
@@ -1302,7 +1302,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description run is terminal */
+            /** @description run is not reviewable */
             409: {
                 headers: {
                     [name: string]: unknown;

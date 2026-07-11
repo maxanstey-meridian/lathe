@@ -7,11 +7,11 @@ import { client } from "@lathe/contract";
 type MutationResult<T> = { data?: T; error?: unknown; response: Response };
 
 export const mapError = (err: unknown): string => {
-  if (typeof err === "string") return err;
+  if (typeof err === "string" && err.trim()) return err;
   if (err && typeof err === "object" && "message" in err && typeof (err as { message: unknown }).message === "string") {
-    return (err as { message: string }).message;
+    return (err as { message: string }).message || "The action could not be completed.";
   }
-  return String(err);
+  return "The action could not be completed.";
 };
 
 const performMutation = async <T>(

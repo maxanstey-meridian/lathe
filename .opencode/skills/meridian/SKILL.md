@@ -98,17 +98,20 @@ Avoid using a global mediator as the primary design shape:
 
 The goal is responsibility honesty: write-side consistency and read-side projection stay separate, named, and locally changeable.
 
-## Planner-mediated execution
+## Responsibility-separated execution
 
 When executing a handoff that includes a `## Planner escalation` section:
 
-- The small executor model is a bounded implementer. It does not make architectural, product, or business decisions.
-- The planner model is an escalation authority for scoped questions the executor cannot resolve from the handoff or bounded repo inspection alone.
-- `ask_planner` is for scoped, specific questions — not broad implementation guidance or general "what next?" queries.
-- Planner statuses are binding. The executor must not ignore or reinterpret them.
-- `human_required` means hard stop. The executor must stop and report.
-- `stop` means hard stop. The executor must stop and report.
-- The executor must not continue by making assumptions after a hard stop status.
+- The Executor is a bounded implementer. It does not make architectural, product, business, acceptance, or merge decisions.
+- The Planner is the escalation authority for scoped implementation or architecture questions the Executor cannot resolve from the handoff or bounded repo inspection alone.
+- The Implementation Reviewer is distinct from the Planner even when one runtime session performs both responsibilities: it audits the completed implementation against outcomes, sanity, and test quality after mechanical verification.
+- The Acceptance Reviewer independently judges the cumulative work item, decides whether it converges or needs repair/escalation, and authors the permanent commit message. The driver applies that message; preparing for merge remains a separate Human Operator action and is not merging.
+- The Human Operator owns product, UX, business, security, permission, tenancy, data-retention, billing, legal, compliance, and migration-policy decisions, plus final inspection and merge.
+- `meridian-bridge_ask_planner` is for scoped, specific questions to the Planner, not broad implementation guidance or general "what next?" queries.
+- Planner statuses are binding. The Executor must not ignore or reinterpret them.
+- `human_required` means hard stop for the Human Operator. The Executor must stop and report.
+- `stop` means hard stop. The Executor must stop and report.
+- The Executor must not continue by making assumptions after a hard-stop status.
 
 ## Context Discipline
 

@@ -49,6 +49,25 @@ const makeMeta = (overrides?: Partial<RunMeta>) => ({
   ...overrides,
 });
 
+const acceptedCampaign = (meta: ReturnType<typeof makeMeta>) => ({
+  campaignId: meta.campaignId ?? meta.runId,
+  originalRunId: meta.runId,
+  originalIntent: "test",
+  status: "converged" as const,
+  maxPasses: 3,
+  passes: [
+    {
+      runId: meta.runId,
+      attempt: meta.attempt,
+      pass: meta.pass,
+      verdict: "accept" as const,
+      groundedBlockers: 0,
+      atIso: meta.updatedAt,
+    },
+  ],
+  updatedAt: meta.updatedAt,
+});
+
 const makeStore = (meta?: ReturnType<typeof makeMeta>): TestStore => {
   let lastMeta: ReturnType<typeof makeMeta> | undefined;
   const campaignStore = new Map<string, Array<Record<string, unknown>>>();
@@ -105,7 +124,7 @@ const makeStore = (meta?: ReturnType<typeof makeMeta>): TestStore => {
     listActiveConvergences: () => [],
     addActiveConvergence: () => {},
     removeActiveConvergence: () => {},
-    readCampaign: () => undefined,
+    readCampaign: () => (meta ? acceptedCampaign(meta) : undefined),
     writeCampaign: () => {},
     listCampaigns: () => [],
     listRunsByCampaign: (campaignId: string) =>
@@ -292,7 +311,7 @@ describe("acceptRun — refusal", () => {
       listActiveConvergences: () => [],
       addActiveConvergence: () => {},
       removeActiveConvergence: () => {},
-      readCampaign: () => undefined,
+      readCampaign: () => acceptedCampaign(meta),
       writeCampaign: () => {},
       listCampaigns: () => [],
       listRunsByCampaign: () => [],
@@ -379,7 +398,7 @@ describe("acceptRun — refusal", () => {
       listActiveConvergences: () => [],
       addActiveConvergence: () => {},
       removeActiveConvergence: () => {},
-      readCampaign: () => undefined,
+      readCampaign: () => acceptedCampaign(meta),
       writeCampaign: () => {},
       listCampaigns: () => [],
       listRunsByCampaign: (campaignId: string) =>

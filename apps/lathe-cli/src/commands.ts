@@ -185,14 +185,14 @@ export const cmdChain = (env: CliEnv, dir: string): Promise<number> => {
 
 export const cmdStop = (env: CliEnv, runId: string): Promise<number> => {
   if (!runId) {
-    env.err("usage: lathe stop <runId>");
+    env.err("usage: lathe cancel <runId>");
     return Promise.resolve(1);
   }
 
   return runDaemon<PathJsonResponse<"/runs/{runId}/stop", "post", 201>>(
     env,
     (client) => client.POST("/runs/{runId}/stop", { params: { path: { runId } } }),
-    (data) => env.log(`stopped: ${data.runId} (${data.status})`),
+    (data) => env.log(`cancelled: ${data.runId} (${data.status})`),
     (status) => {
       if (status === 404) {
         env.err(`run ${runId} not found`);
@@ -204,8 +204,9 @@ export const cmdStop = (env: CliEnv, runId: string): Promise<number> => {
 };
 
 export const cmdAnswer = (env: CliEnv, runId: string, answer: string): Promise<number> => {
-  if (!runId || !answer) {
-    env.err("usage: lathe answer <runId> <decision>");
+  const decision = answer.trim();
+  if (!runId || !decision) {
+    env.err("usage: lathe resolve <runId> <decision>");
     return Promise.resolve(1);
   }
 
@@ -214,9 +215,9 @@ export const cmdAnswer = (env: CliEnv, runId: string, answer: string): Promise<n
     (client) =>
       client.POST("/runs/{runId}/answer", {
         params: { path: { runId } },
-        body: { answer },
+        body: { answer: decision },
       }),
-    (data) => env.log(`answered: ${data.runId} (${data.status})`),
+    (data) => env.log(`resolved: ${data.runId} (${data.status})`),
     (status, detail) => {
       if (status === 404) {
         env.err(`run ${runId} not found`);
@@ -233,25 +234,24 @@ export const cmdAnswer = (env: CliEnv, runId: string, answer: string): Promise<n
 
 export const cmdAccept = (env: CliEnv, runId: string): Promise<number> => {
   if (!runId) {
-    env.err("usage: lathe accept <runId>");
+    env.err("usage: lathe prepare <runId>");
     return Promise.resolve(1);
   }
 
   return runDaemon<PathJsonResponse<"/runs/{runId}/accept", "post", 201>>(
     env,
     (client) => client.POST("/runs/{runId}/accept", { params: { path: { runId } } }),
-    (data) => env.log(`accepted: ${data.runId} (${data.status})`),
+    (data) => env.log(`prepared for merge: ${data.runId} (${data.status})`),
     (status, detail, error) => {
       if (status === 409) {
         const e = error as { code?: string };
         if (e.code === "accept_refused") {
-          env.err(`${runId} was refused — do not accept`);
+          env.err(`${runId} cannot be prepared for merge — acceptance review must pass first`);
           return true;
         }
-        // Daemon 409 body: "<runId> is not a chain tip — accept <tip> first".
-        const match = detail.match(/accept (.+) first/);
+        const match = detail.match(/prepare (.+) first/);
         const chainTip = match ? match[1] : "a chain tip";
-        env.err(`${runId} is not a chain tip — accept ${chainTip} first`);
+        env.err(`${runId} is not a chain tip — prepare ${chainTip} first`);
         return true;
       }
       return false;
@@ -260,8 +260,9 @@ export const cmdAccept = (env: CliEnv, runId: string): Promise<number> => {
 };
 
 export const cmdReject = (env: CliEnv, runId: string, reason: string): Promise<number> => {
-  if (!runId) {
-    env.err("usage: lathe reject <runId> [reason]");
+  const requiredChanges = reason.trim();
+  if (!runId || !requiredChanges) {
+    env.err("usage: lathe request-changes <runId> <required changes>");
     return Promise.resolve(1);
   }
 
@@ -270,9 +271,9 @@ export const cmdReject = (env: CliEnv, runId: string, reason: string): Promise<n
     (client) =>
       client.POST("/runs/{runId}/reject", {
         params: { path: { runId } },
-        body: { reason: reason || "rejected" },
+        body: { reason: requiredChanges },
       }),
-    (data) => env.log(`rejected: ${data.runId} (${data.status})`),
+    (data) => env.log(`changes requested: ${data.runId} (${data.status})`),
     (status) => {
       if (status === 404) {
         env.err(`run ${runId} not found`);
@@ -436,15 +437,15 @@ const renderReviewDto = (review: ReviewDto): string => {
     lines.push(`${icon} ${run.runId}  [${run.status}]  ${run.outcomes}  branch ${run.branch}`);
     if (run.status === "blocked") {
       lines.push(`   needs: ${run.blockedQuestion ?? "(no question recorded)"}`);
-      lines.push(`   answer with: lathe answer ${run.runId} "<your decision>"`);
+      lines.push(`   resolve with: lathe resolve ${run.runId} "<your decision>"`);
     }
     if (run.status === "failed") {
-      lines.push(`   retry with: lathe answer ${run.runId} "<context for the retry>"`);
+      lines.push(`   retry with context: lathe resolve ${run.runId} "<context for the retry>"`);
     }
     if (run.status === "ready_for_review") {
       lines.push(`   diff:   git -C ${run.repo} diff ${run.base}...${run.branch}`);
       lines.push(
-        `   accept: lathe accept ${run.runId}   (fetches campaign tip branch; you merge manually)`,
+        `   prepare: lathe prepare ${run.runId}   (fetches the reviewed campaign tip; you merge manually)`,
       );
     }
   }
@@ -859,15 +860,15 @@ export const cmdPlan = (env: CliEnv, args: string[]): Promise<number> => {
 // `serve` and `tail` are handled by index.ts (they don't return an exit code).
 // ---------------------------------------------------------------------------
 
-export const usage = `lathe — sequential overnight executor of human-written specs
+export const usage = `lathe — supervised executor of human-written work packets
 
   lathe serve                  boot the daemon (always-on run engine + HTTP API)
   lathe enqueue <packet.md>    add a packet to the queue (via daemon)
   lathe chain add <dir>        stage a chain of packets (via daemon)
-  lathe stop <runId>           stop a run (via daemon)
-  lathe answer <runId> <decision>  answer a parked or failed run, requeue it (via daemon)
-  lathe accept <runId>         accept a ready_for_review run (via daemon, chain-tip guarded)
-  lathe reject <runId> [reason]  reject a run (via daemon)
+  lathe cancel <runId>         cancel queued or running work (via daemon)
+  lathe resolve <runId> <decision>  resolve a run that needs input and resume it
+  lathe prepare <runId>        prepare acceptance-reviewed work for manual merge
+  lathe request-changes <runId> <changes>  return review-ready work for repair
   lathe status                 what is running / queued / parked + campaign convergence
   lathe review                 morning triage: terminal statuses, outcomes, questions
   lathe queue [add|drop]       list the queue / add or drop a packet (via daemon)
@@ -891,14 +892,19 @@ export const runCommand = async (env: CliEnv, command: string, args: string[]): 
         return 1;
       }
       return cmdChain(env, args[1] ?? "");
+    case "cancel":
     case "stop":
       return cmdStop(env, args[0] ?? "");
+    case "resolve":
     case "answer":
       return cmdAnswer(env, args[0] ?? "", args.slice(1).join(" "));
+    case "prepare":
     case "accept":
       return cmdAccept(env, args[0] ?? "");
-    case "reject":
+    case "request-changes":
       return cmdReject(env, args[0] ?? "", args.slice(1).join(" "));
+    case "reject":
+      return cmdReject(env, args[0] ?? "", args.slice(1).join(" ") || "rejected");
     case "status":
       return cmdStatus(env);
     case "review":

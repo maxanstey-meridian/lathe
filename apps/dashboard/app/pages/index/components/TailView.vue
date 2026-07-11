@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref, type CSSProperties } from "vue";
 
 import { isTerminalTailStatus } from "@lathe/tail-state";
 
+import { runStatusLabel } from "../logic/formatters";
 import { formatTailDuration } from "../logic/tail-presentation";
 import { injectLatheActions } from "../ports/lathe-actions";
 import { injectLatheStatus } from "../ports/lathe-status";
@@ -255,7 +256,7 @@ const isTerminal = computed(() => {
           <span v-if="stats">turn {{ stats.turn || 1 }}</span>
           <span v-if="stats">out {{ stats.outcomesDone }}/{{ stats.outcomesTotal }}</span>
           <span v-if="stats?.gateReason" class="text-red-400">gate {{ stats.gateReason }}</span>
-          <span v-if="isTerminal" class="text-amber-400">[{{ stats?.status }}]</span>
+          <span v-if="isTerminal" class="text-amber-400">[{{ stats ? runStatusLabel(stats.status) : "" }}]</span>
         </div>
 
         <div class="ml-auto flex items-center gap-2">
@@ -287,23 +288,23 @@ const isTerminal = computed(() => {
 
       <template v-if="snapshot && stats">
         <div ref="tailGrid" class="tail-grid grid min-h-0 flex-1 gap-px bg-slate-800" :style="tailGridStyle">
-          <TailPane title="baby" :model="babyModel" :pane="tail.state.value.panes.baby" accent="green" :now="tail.now.value" />
+          <TailPane title="Implementation" :model="babyModel" :pane="tail.state.value.panes.baby" accent="green" :now="tail.now.value" />
           <button
             class="tail-grid__splitter hidden cursor-col-resize bg-slate-800 transition-colors hover:bg-cyan-500/70 active:bg-cyan-400 lg:block"
             type="button"
-            aria-label="Resize baby and daddy panes"
+            aria-label="Resize Implementation and Planner panes"
             title="Drag to resize panes"
             @pointerdown="startPaneDrag(0, $event)"
           />
-          <TailPane title="daddy" :model="snapshot.models.daddy" :pane="tail.state.value.panes.daddy" accent="magenta" :now="tail.now.value" />
+          <TailPane title="Planner" :model="snapshot.models.daddy" :pane="tail.state.value.panes.daddy" accent="magenta" :now="tail.now.value" />
           <button
             class="tail-grid__splitter hidden cursor-col-resize bg-slate-800 transition-colors hover:bg-cyan-500/70 active:bg-cyan-400 lg:block"
             type="button"
-            aria-label="Resize daddy and super-daddy panes"
+            aria-label="Resize Planner and Acceptance Review panes"
             title="Drag to resize panes"
             @pointerdown="startPaneDrag(1, $event)"
           />
-          <TailPane title="super-daddy" :model="snapshot.models.super" :pane="tail.state.value.panes.super" accent="blue" :now="tail.now.value" />
+          <TailPane title="Acceptance Review" :model="snapshot.models.super" :pane="tail.state.value.panes.super" accent="blue" :now="tail.now.value" />
         </div>
 
         <button

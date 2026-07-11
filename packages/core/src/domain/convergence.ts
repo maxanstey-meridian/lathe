@@ -143,7 +143,7 @@ export const decideConvergence = (
     if (promote.alreadyPromoted) {
       return {
         action: "escalate",
-        reason: `hard cap reached (${pass}/${maxPasses}) after a promoted pass on Daddy's model and the reviewer still will not converge — escalating to Max`,
+        reason: `hard cap reached (${pass}/${maxPasses}) after a stronger Executor pass and Acceptance Review still found blockers — Human Operator review required`,
       };
     }
     return {
@@ -202,7 +202,7 @@ export const parseSuperReview = (raw: string): SuperReview => {
     },
     commit_message: null,
     notes: "super-review response was not valid JSON; failing closed to escalate",
-    human_decision_needed: "Super-daddy returned an unparseable verdict — review the run manually.",
+    human_decision_needed: "The Acceptance Reviewer returned an unparseable verdict; inspect the run manually.",
   };
 };
 
@@ -338,8 +338,7 @@ export const renderNits = (runId: string, primary: SuperReview): string | undefi
   const lines = [
     `# Notes — ${runId}`,
     "",
-    "Findings from super-daddy's review that the loop is not auto-fixing — here for",
-    "your call, not the loop's.",
+    "Non-blocking findings from Acceptance Review for the Human Operator's inspection.",
     "",
   ];
   for (const finding of nits) {

@@ -506,7 +506,7 @@
             }
           },
           "409": {
-            "description": "run is terminal",
+            "description": "run is not reviewable",
             "content": {
               "application/json": {
                 "schema": {
@@ -3106,8 +3106,9 @@
         "enum": [
           "queued",
           "running",
-          "paused",
-          "converged",
+          "interrupted",
+          "ready_for_review",
+          "blocked",
           "accepted",
           "stopped",
           "failed"

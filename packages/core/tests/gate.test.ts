@@ -618,11 +618,11 @@ test("checkpointNudgeNotice: past interval → NOTICE string", () => {
   const notice = checkpointNudgeNotice(state, now);
   assert.ok(notice?.includes("LATHE GATE NOTICE"));
   assert.ok(notice?.includes("~30 min"));
-  assert.ok(notice?.includes("You are NOT blocked"));
-  assert.ok(notice?.includes("ask_planner"));
-  assert.ok(notice?.includes("call ask_planner now"));
+  assert.ok(notice?.includes("This notice is non-blocking"));
+  assert.ok(!notice?.includes("BLOCKED"));
+  assert.ok(notice?.includes("meridian-bridge_ask_planner"));
   assert.ok(notice?.includes("Prose is not a routed question"));
-  assert.ok(!notice?.includes("Daddy's eyes"));
+  assert.ok(!notice?.includes("BLOCKED"));
 });
 
 test("checkpointNudgeNotice: uses default 20 min if checkpointNudgeMs not set", () => {
@@ -712,28 +712,30 @@ test("denyMessage: starts with LATHE GATE BLOCKED", () => {
   assert.ok(msg.startsWith("LATHE GATE BLOCKED"));
   assert.ok(msg.includes("ask_planner"));
   assert.ok(msg.includes("proceed or proceed_with_constraints"));
-  assert.ok(msg.includes("Reads stay available for gathering evidence"));
+  assert.ok(msg.includes("Reads remain available for gathering evidence"));
 });
 
-test("denyMessage: reconciliation block asks only for Daddy-owned reconciliation", () => {
+test("denyMessage: reconciliation block states data and decision ownership", () => {
   const msg = denyMessage("reconciliation required: no valid checkpoint from the previous session");
   assert.ok(msg.includes('questionType "reconciliation"'));
-  assert.ok(msg.includes("Baby is only triggering Daddy-owned reconciliation"));
+  assert.ok(msg.includes("Executor only triggers reconciliation"));
+  assert.ok(msg.includes("driver supplies durable evidence"));
+  assert.ok(msg.includes("Planner owns the decision"));
   assert.ok(!msg.includes("what you were about to change"));
 });
 
 test("QUESTION_MESSAGE: interactive questions disabled", () => {
   assert.ok(QUESTION_MESSAGE.startsWith("LATHE GATE BLOCKED"));
   assert.ok(QUESTION_MESSAGE.includes("interactive questions are disabled"));
-  assert.ok(QUESTION_MESSAGE.includes("Max is not present"));
-  assert.ok(QUESTION_MESSAGE.includes("ask_planner"));
-  assert.ok(QUESTION_MESSAGE.includes('submit_report with status "blocked"'));
+  assert.ok(QUESTION_MESSAGE.includes("Human Operator"));
+  assert.ok(QUESTION_MESSAGE.includes("meridian-bridge_ask_planner"));
+  assert.ok(QUESTION_MESSAGE.includes('meridian-bridge_submit_report with status "blocked"'));
 });
 
 test("SUBAGENT_MESSAGE: subagents blocked", () => {
   assert.ok(SUBAGENT_MESSAGE.startsWith("LATHE GATE BLOCKED"));
   assert.ok(SUBAGENT_MESSAGE.includes("exploration subagents are disabled"));
-  assert.ok(SUBAGENT_MESSAGE.includes("ask_planner"));
+  assert.ok(SUBAGENT_MESSAGE.includes("meridian-bridge_ask_planner"));
   assert.ok(SUBAGENT_MESSAGE.includes("bounded inspection"));
 });
 

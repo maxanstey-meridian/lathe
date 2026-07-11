@@ -250,6 +250,7 @@ test("mapError extracts message from error objects", async () => {
   assert.equal(mapError("plain string"), "plain string");
   assert.equal(mapError({ message: "obj message" }), "obj message");
   assert.equal(mapError(new Error("err obj")), "err obj");
-  assert.equal(mapError(null), "null");
-  assert.equal(mapError(undefined), "undefined");
+  assert.equal(mapError(null), "The action could not be completed.");
+  assert.equal(mapError(undefined), "The action could not be completed.");
+  assert.equal(mapError(""), "The action could not be completed.");
 });

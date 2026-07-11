@@ -151,6 +151,9 @@ test("SettingsView: hydrates repos, round-trips promote-to, and masks API keys",
   assert.equal(settingsState.load.mock.calls.length, 1);
   assert.equal(wrapper.text().includes("Edit in /tmp/lathe/config.json"), true);
   assert.equal(wrapper.findAll("input[disabled][type='text']").length, 2);
+  assert.equal(wrapper.text().includes("Implementation"), true);
+  assert.equal(wrapper.text().includes("Planner"), true);
+  assert.equal(wrapper.text().includes("Acceptance Review"), true);
 
   const reposTextarea = wrapper.get("textarea");
   assert.equal((reposTextarea.element as HTMLTextAreaElement).value.includes("team/repo"), true);

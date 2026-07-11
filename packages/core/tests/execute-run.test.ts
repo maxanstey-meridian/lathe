@@ -1084,12 +1084,12 @@ test("makeExecuteRun: resume without checkpoint but prior accepted reconciliatio
     const gate = store.readGateState(RUN_ID);
     equal(gate.phase.phase, "first-edit-latched", "gate re-latched for first-edit consult");
     // Seed must be Q8b (resume, not reconcile).
-    ok(firstSeed.includes("resuming a run after a session rotation"), "Q8b resume seed");
+    ok(firstSeed.includes("resuming after a session rotation"), "Q8b resume seed");
     ok(!firstSeed.includes("RECONCILIATION"), "not the Q8 reconciliation seed");
     // Seed must include the full prior reconciliation outcome.
     ok(firstSeed.includes("reconstructed state"), "Q8b seed includes recon question");
     ok(firstSeed.includes("continue from outcome 2"), "Q8b seed includes recon approach");
-    ok(firstSeed.includes("looks good"), "Q8b seed includes Daddy's verdict");
+    ok(firstSeed.includes("looks good"), "Q8b seed includes Planner verdict");
     await cleanTemp(tmp);
   })();
 });

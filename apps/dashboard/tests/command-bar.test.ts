@@ -66,3 +66,10 @@ test("CommandBar: hides active run section when no active runs", () => {
   expect(wrapper.text()).not.toContain("active");
   wrapper.unmount();
 });
+
+test("CommandBar: describes plan persistence as an import", () => {
+  const wrapper = mountCommandBar(ref(makeStatus([])));
+  expect(wrapper.text()).toContain("Import Plan");
+  expect(wrapper.text()).not.toContain("Upload Packet");
+  wrapper.unmount();
+});

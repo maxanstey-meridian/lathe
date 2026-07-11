@@ -47,20 +47,20 @@ Lathe's lifecycle is owned by domain/application use cases and persisted state. 
 - Run statuses are `queued`, `running`, `interrupted`, `ready_for_review`, `blocked`, `failed`, `accepted`, and `stopped`.
 - A run branch is `meridian/<runId>`.
 - A run sandbox is a self-rooted local clone, not a git worktree.
-- Baby works inside the sandbox clone.
-- The driver owns commits; Baby's direct git mutation is constrained by the gate/bridge.
+- The Executor works inside the sandbox clone.
+- The driver owns commits; the Executor's direct git mutation is constrained by the gate/bridge.
 - Terminal or parked runs are WIP-committed when appropriate.
-- `ready_for_review` means Baby finished and convergence may review it. It does not mean the work has been merged.
-- `accepted` means guarded accept merged the run branch and recorded where it landed.
+- `ready_for_review` means the Executor finished and review/convergence may proceed. It does not mean the work has been fetched or merged.
+- `accepted` means the campaign tip was fetched into the source repo and recorded as ready for the Human Operator. It does not mean Lathe merged it.
 
 ## Sandbox And Git Invariants
 
 - Sandboxes use real `.git` directories so tools root inside the run clone, not the source repo.
 - Clone branches live in the sandbox until fetched into the source repo.
-- Accept fetches the run branch from the clone when needed, merges it into the target branch, deletes the run branch, removes the sandbox, and records `acceptedInto`.
-- Source repo must be clean and checked out to the target branch before accept.
-- Do not invent or assume the accept target. It is explicit or defaults to the run meta `base`.
-- After accept, a child must base from `acceptedInto` because the sandbox and nominal run branch may be gone.
+- The Acceptance Reviewer reviews all work after `compare_commit` and authors the permanent commit message. The driver replaces the throwaway WIP message, and `lathe prepare` later fetches the reviewed tip. `accepted` therefore means reviewed work was fetched for the Human Operator, not merged.
+- `lathe prepare` is fetch-only: it force-fetches the campaign tip branch into the source repo, removes campaign sandboxes, deletes intermediate branches best-effort, and records `acceptedInto` as the fetched tip branch. `lathe accept` remains a compatibility alias.
+- Accept does not merge, run a safety gate, require a clean source working tree, or modify the source working tree. The Human Operator owns final inspection and merge.
+- After accept, a child may base from the fetched `acceptedInto` branch because the sandbox and intermediate run branches may be gone.
 
 ## Campaign Invariants
 
@@ -74,13 +74,13 @@ Lathe's lifecycle is owned by domain/application use cases and persisted state. 
 ## Convergence Invariants
 
 - Convergence is separate from accept.
-- Super-daddy reviews a finished run after driver verification.
-- Clean path is: Baby submits `ready_for_review`, verification is green, super-daddy verdict is `accept`, campaign becomes `converged`, run remains `ready_for_review`, then accept later merges it.
+- The Acceptance Reviewer reviews a finished run after driver verification and after the Implementation Reviewer has accepted the run.
+- Clean path is: the Executor submits `ready_for_review`, verification is green, the Implementation Reviewer accepts the delivered run, the Acceptance Reviewer accepts the cumulative campaign diff and authors its permanent commit message, the driver applies that message, the campaign becomes `converged`, the run remains `ready_for_review`, then the Human Operator uses `lathe prepare` to fetch the tip and may merge it manually.
 - `accept` verdict plus red verification escalates instead of converging.
 - `request_changes` authors a follow-up packet when below the cap and findings exist.
 - At the cap, Lathe may spend one promoted repair pass on the stronger model before escalating.
-- `escalate` or human decision need parks the campaign/run for Max.
-- Super-daddy transport failure is not a verdict and must not be recorded as a campaign pass.
+- `escalate` or a human decision need parks the campaign/run for the Human Operator.
+- Acceptance Reviewer transport failure is not a verdict and must not be recorded as a campaign pass.
 
 ## Staged Chain Invariants
 
@@ -88,21 +88,23 @@ Lathe's lifecycle is owned by domain/application use cases and persisted state. 
 - Staged packets may omit `base`; promotion stamps it.
 - A child without `parent_run_id` promotes immediately.
 - A child with a parent waits for the parent campaign to converge.
-- If the parent campaign needs Max, the child is held.
+- If the parent campaign needs the Human Operator, the child is held.
 - If a parent campaign is marked converged but has no accepted pass, hold rather than inventing a base.
 - If the parent tip is not yet accepted, fetch/base from the tip run's sandbox branch.
 - If the parent tip is already accepted, base from `acceptedInto` and do not fetch from the deleted sandbox.
 
-## Bridge And Agent Role Invariants
+## Bridge And Responsibility Invariants
 
-- Baby executes the work in the sandbox.
-- Daddy is the planner/reviewer session for the run.
-- Super-daddy is the convergence reviewer and follow-up packet author.
-- Max is the human escalation point.
-- The bridge exposes tools like `ask_planner`, `update_outcomes`, `write_checkpoint`, `submit_report`, `get_decisions`, `write_handoff`, and `verify_handoff`.
+- The Executor implements the packet in the sandbox and reports evidence; it does not own architecture, acceptance, or git lifecycle decisions.
+- The Planner answers scoped implementation and architecture questions and gates the first-edit approach.
+- The Implementation Reviewer uses the same runtime session/configuration as the Planner but has a distinct responsibility: after mechanical verification, it checks that each outcome is delivered and the run is sane.
+- The Acceptance Reviewer independently reviews the cumulative work item after `compare_commit`, decides convergence, authors the permanent commit message, and may author a follow-up packet. The driver owns the corresponding git mutation.
+- The Human Operator supplies product/policy decisions, handles escalations, chooses whether to fetch an accepted tip, inspects it, and owns the manual merge.
+- Legacy runtime/config names map `baby` to Executor, `daddy` to the shared Planner/Implementation Reviewer session, `superdaddy` to Acceptance Reviewer, and `Max` to Human Operator. Preserve those names only where required by the current wire format, config schema, state path, branch prefix, or MCP namespace.
+- The bridge exposes `meridian-bridge_ask_planner`, `meridian-bridge_update_outcomes`, `meridian-bridge_write_checkpoint`, `meridian-bridge_submit_report`, `meridian-bridge_get_decisions`, `meridian-bridge_write_handoff`, and `meridian-bridge_verify_handoff`.
 - Bridge tool calls record typed intents; the turn loop evaluates those intents.
-- `submit_report` is the only Baby path to a terminal run status.
-- Accepted Daddy decisions can clear the gate synchronously.
+- `meridian-bridge_submit_report` is the only Executor path to a terminal run status.
+- Accepted Planner decisions can clear the gate synchronously.
 
 ## Daemon/API Invariants
 
@@ -110,19 +112,19 @@ Lathe's lifecycle is owned by domain/application use cases and persisted state. 
 - HTTP handlers delegate to `Supervisor`.
 - `Supervisor` delegates to existing use cases such as admission, staged promotion, run driver, and accept.
 - SSE/event streaming is an observation surface over journals/events, not the state machine.
-- All CLI commands (`enqueue`, `answer`, `accept`, `abort`, `status`, `review`, `queue`, `tail`, `get`) go through the daemon over HTTP. The daemon is the single owner of run state. The exception is `lathe db`, which reads `lathe.db` directly (read-only, daemon-independent) for debugging.
+- CLI commands `enqueue`, `chain add`, `cancel`, `resolve`, `prepare`, `request-changes`, `status`, `review`, `queue`, `plan`, `get`, and `tail` go through the daemon over HTTP. Legacy names `stop`, `answer`, `accept`, and `reject` remain compatibility aliases. The daemon is the single owner of run state. The exception is `lathe db`, which reads `lathe.db` directly (read-only, daemon-independent) for debugging.
 - `lathe serve` starts the daemon with host/port config, single-instance lock, Hono request listener, and graceful shutdown.
-- Max's interactive shell defines `lathe()` in `~/.zshrc` as `tsx /Users/max/Sites/lathe/apps/lathe-cli/src/index.ts "$@"`. Non-interactive agent shells do not source that function; use `pnpm exec tsx apps/lathe-cli/src/index.ts <args>` from the Lathe repo root.
+- The Human Operator's interactive shell defines `lathe()` in `~/.zshrc` as `tsx /Users/max/Sites/lathe/apps/lathe-cli/src/index.ts "$@"`. Non-interactive agent shells do not source that function; use `pnpm exec tsx apps/lathe-cli/src/index.ts <args>` from the Lathe repo root.
 
 ### Re-running convergence manually
 
 - `lathe converge <runId>` is not a CLI command.
-- To re-run super-daddy convergence, invoke the use case directly from the Lathe repo root:
+- To re-run Acceptance Reviewer convergence, invoke the use case directly from the Lathe repo root:
   ```
   pnpm --filter @lathe/core exec tsx -e "import {createConvergeRun} from './src/application/use-cases/converge-run.ts'; ..."
   ```
   or write a small script against the `Store` port. Inspect `converge-run.ts` for the exact entry signature.
-- This is needed when super-daddy failed to author a follow-up packet (e.g. `stampFollowupLineage` parsing error) and parked the run for human_decision. Re-converging gives it another attempt at authoring valid frontmatter.
+- This is needed when the Acceptance Reviewer failed to author a follow-up packet (e.g. `stampFollowupLineage` parsing error) and parked the run for `human_decision`. Re-converging gives it another attempt at authoring valid frontmatter.
 
 ## Store Invariants
 
@@ -158,7 +160,7 @@ Lathe's lifecycle is owned by domain/application use cases and persisted state. 
 
 - Do not infer active base from the current checkout branch.
 - Do not infer campaign convergence from run status alone.
-- Do not infer accept/merge from `ready_for_review`.
+- Do not infer fetch or merge from `ready_for_review`, and do not infer merge from `accepted`.
 - Do not infer child packet readiness from the presence of a staged file.
 - Do not infer daemon behavior from packet intent; inspect the branch.
 - Do not manually move staged packets into queue unless reproducing `promoteStaged` semantics.

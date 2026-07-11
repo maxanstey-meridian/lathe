@@ -68,7 +68,7 @@ export const projectJournalEvent = (e: JournalEvent, ctx: ProjectionContext): La
       return { kind: "verdict", runId, reviewer: "superdaddy", verdict: e.verdict, at };
 
     case "parked":
-      return { kind: "run.state", runId, status: "paused", at };
+      return { kind: "run.state", runId, status: "blocked", at };
 
     case "committed":
       return { kind: "log", runId, line: `committed ${e.sha.slice(0, 8)}: ${e.message}`, at };

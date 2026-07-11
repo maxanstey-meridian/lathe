@@ -220,7 +220,7 @@ test("cmdAnswer: success posts the answer and reports the requeued run", async (
   ok(h.paths.includes("/runs/blocked-run/answer"), "hit POST /runs/{runId}/answer");
   equal(body?.answer, "go ahead");
   ok(
-    h.logs.some((l) => l.includes("answered: blocked-run (queued)")),
+    h.logs.some((l) => l.includes("resolved: blocked-run (queued)")),
     h.logs.join("|"),
   );
 });
@@ -244,13 +244,13 @@ test("cmdAccept: a 409 names the chain tip to accept first", async () => {
   const h = harness(() =>
     jsonResponse(409, {
       code: "chain_tip_required",
-      message: "parent is not a chain tip — accept the-tip first",
+      message: "parent is not a chain tip — prepare the-tip first",
     }),
   );
   const code = await cmdAccept(h.env, "parent");
   equal(code, 1);
   ok(
-    h.errs.some((e) => e.includes("accept the-tip first")),
+    h.errs.some((e) => e.includes("prepare the-tip first")),
     h.errs.join("|"),
   );
 });
@@ -265,7 +265,7 @@ test("cmdAccept: a 409 with code accept_refused reports refusal", async () => {
   const code = await cmdAccept(h.env, "parent");
   equal(code, 1);
   ok(
-    h.errs.some((e) => e.includes("refused — do not accept")),
+    h.errs.some((e) => e.includes("acceptance review must pass first")),
     h.errs.join("|"),
   );
 });
@@ -275,19 +275,27 @@ test("cmdAccept: success reports the accepted run", async () => {
   const code = await cmdAccept(h.env, "tip");
   equal(code, 0);
   ok(
-    h.logs.some((l) => l.includes("accepted: tip")),
+    h.logs.some((l) => l.includes("prepared for merge: tip")),
     h.logs.join("|"),
   );
 });
 
-test("cmdReject: success reports the rejected run", async () => {
-  const h = harness(() => jsonResponse(201, summary("r", "paused")));
+test("cmdReject: success reports requested changes", async () => {
+  const h = harness(() => jsonResponse(201, summary("r", "blocked")));
   const code = await cmdReject(h.env, "r", "wrong scope");
   equal(code, 0);
   ok(
-    h.logs.some((l) => l.includes("rejected: r")),
+    h.logs.some((l) => l.includes("changes requested: r")),
     h.logs.join("|"),
   );
+});
+
+test("cmdReject: required changes must not be empty", async () => {
+  const h = harness(() => jsonResponse(201, summary("r", "blocked")));
+  const code = await cmdReject(h.env, "r", "   ");
+  equal(code, 1);
+  equal(h.paths.length, 0);
+  ok(h.errs.some((e) => e.includes("usage: lathe request-changes")), h.errs.join("|"));
 });
 
 test("mutating commands fail loud when the daemon is down", async () => {
@@ -437,7 +445,7 @@ test("runCommand: --help prints usage and exits 0", async () => {
   const h = harness(() => jsonResponse(200, { models: {}, thresholds: {} }));
   const code = await runCommand(h.env, "--help", []);
   equal(code, 0);
-  ok(h.logs.some((line) => line.includes("lathe — sequential overnight executor")), h.logs.join("|"));
+  ok(h.logs.some((line) => line.includes("lathe — supervised executor")), h.logs.join("|"));
 });
 
 // ---------------------------------------------------------------------------
@@ -514,6 +522,50 @@ test("answer: dispatch joins the decision words and routes through the daemon", 
   equal(code, 0);
   ok(h.paths.includes("/runs/r/answer"), "answer hit POST /runs/{runId}/answer");
   equal(body?.answer, "go ahead");
+});
+
+test("resolve: rejects a whitespace-only decision without contacting the daemon", async () => {
+  const h = harness(() => jsonResponse(201, summary("r", "queued")));
+
+  equal(await runCommand(h.env, "resolve", ["r", "   "]), 1);
+  equal(h.paths.length, 0);
+  ok(h.errs.some((line) => line.includes("usage: lathe resolve")), h.errs.join("|"));
+});
+
+test("reject: preserves the legacy optional reason", async () => {
+  let body: { reason?: string } | undefined;
+  const h = harness(async (req) => {
+    body = await req.json() as { reason?: string };
+    return jsonResponse(201, summary("r", "blocked"));
+  });
+
+  equal(await runCommand(h.env, "reject", ["r"]), 0);
+  deepEqual(body, { reason: "rejected" });
+});
+
+test("canonical lifecycle commands dispatch to their compatibility endpoints", async () => {
+  const requests: Array<{ path: string; body?: unknown }> = [];
+  const h = harness(async (req) => {
+    requests.push({
+      path: new URL(req.url).pathname,
+      body: req.headers.get("content-type")?.includes("application/json") ? await req.json() : undefined,
+    });
+    return jsonResponse(201, summary("r", "blocked"));
+  });
+
+  equal(await runCommand(h.env, "cancel", ["r"]), 0);
+  equal(await runCommand(h.env, "resolve", ["r", "go", "ahead"]), 0);
+  equal(await runCommand(h.env, "prepare", ["r"]), 0);
+  equal(await runCommand(h.env, "request-changes", ["r", "fix", "scope"]), 0);
+
+  deepEqual(requests.map((request) => request.path), [
+    "/runs/r/stop",
+    "/runs/r/answer",
+    "/runs/r/accept",
+    "/runs/r/reject",
+  ]);
+  deepEqual(requests[1]?.body, { answer: "go ahead" });
+  deepEqual(requests[3]?.body, { reason: "fix scope" });
 });
 
 test("tail: TTY follow opens the Ink tail UI from a daemon snapshot for an explicit run", async () => {

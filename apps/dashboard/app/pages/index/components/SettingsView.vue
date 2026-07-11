@@ -349,7 +349,7 @@ watch(
                 </div>
               </div>
 
-              <div v-if="section === 'Baby'" class="flex items-center justify-between gap-4 rounded-lg border border-slate-800 bg-slate-950/30 px-4 py-3">
+              <div v-if="section === 'Implementation'" class="flex items-center justify-between gap-4 rounded-lg border border-slate-800 bg-slate-950/30 px-4 py-3">
                 <label class="flex items-center gap-2 text-sm text-slate-300">
                   <input
                     aria-label="Enable promote-to"

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { campaignStatusLabel } from "../logic/formatters";
 import { injectLatheStatus } from "../ports/lathe-status";
 import { campaignStatusIcon, truncate } from "../logic/formatters";
 
@@ -19,7 +20,7 @@ const status = injectLatheStatus();
           >
             <span class="text-sm">{{ campaignStatusIcon(campaign.status) }}</span>
             <span class="font-mono text-xs text-slate-400">{{ campaign.campaignId }}</span>
-            <UBadge variant="soft" size="xs">{{ campaign.status }}</UBadge>
+            <UBadge variant="soft" size="xs">{{ campaignStatusLabel(campaign.status) }}</UBadge>
             <div v-if="campaign.originalIntent" class="ml-auto max-w-md truncate text-xs text-slate-600">
               {{ truncate(campaign.originalIntent, 80) }}
             </div>

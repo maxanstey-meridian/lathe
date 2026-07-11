@@ -17,9 +17,9 @@ import type { RunDetailDto, RunStatus, RunSummaryDto } from "@lathe/contract";
 const DOMAIN_TO_WIRE: Record<RunMeta["status"], RunStatus> = {
   queued: "queued",
   running: "running",
-  interrupted: "paused",
-  ready_for_review: "converged",
-  blocked: "paused",
+  interrupted: "interrupted",
+  ready_for_review: "ready_for_review",
+  blocked: "blocked",
   failed: "failed",
   accepted: "accepted",
   stopped: "stopped",
@@ -29,9 +29,8 @@ const DOMAIN_TO_WIRE: Record<RunMeta["status"], RunStatus> = {
  * Map domain status → wire RunStatus. Exhaustive — every domain state
  * has a wire case, no fallthrough default.
  *
- * Note: both `interrupted` and `blocked` map to `"paused"` (recoverable
- * state). Multiple domain states share one wire value; the wire union
- * has no unreachable values.
+ * Wire states preserve the durable domain state. Presentation layers derive
+ * action-oriented labels without inventing lifecycle transitions.
  */
 export const mapStatus = (domain: RunMeta["status"]): RunStatus =>
   DOMAIN_TO_WIRE[domain];

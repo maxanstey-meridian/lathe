@@ -11,7 +11,7 @@ import { type RunMeta } from "./run.js";
 const RUN_ID_RE = /^\d{8}-\d{6}-[a-z0-9-]+$/;
 
 // A run's branch, derived the same way executeRun derives them — the
-// converged tip lives only in its own self-rooted clone until accept merges it.
+// converged tip lives only in its own self-rooted clone until preparation fetches it.
 const branchOf = (runId: string): string => `meridian/${runId}`;
 
 // Relaxed schema for staged child frontmatter: base is optional (stamped at
@@ -62,7 +62,7 @@ export const parseStaged = (raw: string, fileName: string): StageParse => {
 };
 
 // The converged tip of a campaign is the run whose pass `accept`ed — the branch
-// `lathe accept` would merge. A super-daddy repair pass can be the tip, so a
+// `lathe prepare` would fetch. An Acceptance Reviewer repair pass can be the tip, so a
 // child bases off the LATEST accepted pass, not necessarily parent_run_id itself.
 export const convergedTip = (campaign: Campaign): string | undefined =>
   [...campaign.passes].reverse().find((p) => p.verdict === "accept")?.runId;

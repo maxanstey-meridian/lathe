@@ -135,7 +135,7 @@ test("decideConvergence: AT the cap but ALREADY promoted → escalate (no double
   const blocked = review("request_changes", [finding("x", "P0", "command_fail")]);
   const d = decideConvergence(blocked, true, 3, 3, promote(true));
   assert.equal(d.action, "escalate");
-  assert.ok(d.reason.includes("promoted pass"));
+  assert.ok(d.reason.includes("stronger Executor pass"));
 });
 
 test("decideConvergence: AT the cap, promote enabled but NO findings → escalate (nothing to author)", () => {

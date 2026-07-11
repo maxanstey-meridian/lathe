@@ -194,7 +194,10 @@ export const createApp = (
       },
 
       answerRun: async ({ params, body }) => {
-        const answer = body.answer;
+        const answer = body.answer.trim();
+        if (!answer) {
+          throw rivetHttpError(400, { code: "invalid_answer", message: "decision must not be empty" });
+        }
         try {
           supervisor.answerRun(params.runId, answer);
         } catch (err) {
@@ -225,7 +228,7 @@ export const createApp = (
           if (err instanceof NonChainTipError) {
             throw rivetHttpError(409, {
               code: "chain_tip_required",
-              message: `${params.runId} is not a chain tip — accept ${err.chainTip} first`,
+              message: `${params.runId} is not a chain tip — prepare ${err.chainTip} first`,
             });
           }
           throw err;
@@ -240,12 +243,12 @@ export const createApp = (
         }
         throw rivetHttpError(409, {
           code: "accept_refused",
-          message: `accept ${params.runId} refused`,
+          message: `cannot prepare ${params.runId} for merge: acceptance review has not passed or the campaign is not ready`,
         });
       },
 
       rejectRun: async ({ params, body }) => {
-        const reason = body.reason ?? "rejected";
+        const reason = body.reason ?? "Changes requested";
         try {
           supervisor.rejectRun(params.runId, reason);
         } catch (err) {
@@ -253,13 +256,13 @@ export const createApp = (
             throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
           }
           if (err instanceof TerminalRunError) {
-            throw rivetHttpError(409, { code: "terminal", message: err.message });
+            throw rivetHttpError(409, { code: "not_reviewable", message: err.message });
           }
           throw err;
         }
         const meta = supervisor.getRun(params.runId);
         if (!meta) {
-          return mutationSummary(params.runId, "paused");
+          return mutationSummary(params.runId, "blocked");
         }
         const ctx = buildDtoCtx(supervisor, meta);
         return runToSummary(meta, ctx);
@@ -273,8 +276,8 @@ export const createApp = (
           if (err instanceof RunNotFoundError) {
             throw rivetHttpError(404, { code: "not_found", message: `run ${params.runId} not found` });
           }
-          if (err instanceof TerminalRunError) {
-            throw rivetHttpError(409, { code: "terminal", message: err.message });
+          if (err instanceof RunNotAnswerableError) {
+            throw rivetHttpError(409, { code: "not_answerable", message: err.message });
           }
           throw err;
         }
@@ -644,7 +647,7 @@ const buildDtoCtx = (sup: Supervisor, meta: RunMeta): RunDtoCtx => ({
   outcomes: sup.outcomes(meta.runId),
 });
 
-const mutationSummary = (runId: string, status: "stopped" | "paused"): RunSummaryDto => ({
+const mutationSummary = (runId: string, status: RunSummaryDto["status"]): RunSummaryDto => ({
   runId,
   campaignId: "",
   packet: runId,

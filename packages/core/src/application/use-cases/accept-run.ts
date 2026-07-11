@@ -31,23 +31,9 @@ export const acceptRun = (runId: string, ports: AcceptPorts): number => {
     return 1;
   }
 
-  // 1b. Warn (not block) if convergence never produced an accept verdict for
-  // this run — the work is mergeable but was not reviewed by super-daddy, or
-  // super-daddy was unreachable.
-  const convergence = store.readConvergence(runId);
-  const converged = convergence.some(
-    (e) => e.kind === "reviewed" && e.primary.verdict === "accept",
-  );
-  if (!converged) {
-    const hasUnreachable = convergence.some((e) => e.kind === "unreachable");
-    console.warn(
-      `warning: ${runId} has no convergence accept verdict` +
-        (hasUnreachable ? " (super-daddy was unreachable)" : " (never reviewed)"),
-    );
-  }
-
   // 2. Campaign resolution.
   const campaignId = meta.campaignId ?? runId;
+  const campaign = store.readCampaign(campaignId);
   const allRuns = meta.campaignId ? store.listRunsByCampaign(campaignId) : [meta];
 
   // Defensive: ensure the accepting run is in the campaign list.
@@ -66,6 +52,13 @@ export const acceptRun = (runId: string, ports: AcceptPorts): number => {
 
   // Resolve tip: the run with the highest pass.
   const tip = allRuns.reduce((a, b) => ((b.pass ?? 1) > (a.pass ?? 1) ? b : a));
+  const acceptedPass = campaign?.passes.some(
+    (pass) => pass.runId === tip.runId && pass.attempt === tip.attempt && pass.verdict === "accept",
+  );
+  if (campaign?.status !== "converged" || !acceptedPass) {
+    console.error(`campaign ${campaignId} has not passed acceptance review`);
+    return 1;
+  }
   if (runId !== tip.runId) {
     console.log(`resolving ${runId} to campaign tip ${tip.runId}`);
   }

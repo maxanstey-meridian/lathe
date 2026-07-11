@@ -5,6 +5,7 @@
   "description": "Lathe — sequential overnight executor of human-written specs.",
   "type": "module",
   "scripts": {
+    "analyze": "npx gitnexus analyze",
     "build": "pnpm -r --reporter=append-only build",
     "typecheck": "pnpm -r --reporter=append-only typecheck",
     "check": "pnpm -r --reporter=append-only lint && pnpm -r --reporter=append-only typecheck",

@@ -230,7 +230,7 @@ test("gate-plugin: memory latch does not leak across sessionID", async () => {
       threw = true;
       strictEqual(
         (e as Error).message,
-        'LATHE GATE BLOCKED: interactive questions are disabled — Max is not present during a run. Route it: implementation/architecture/procedure/scope questions go to ask_planner; decisions only Max can make go into submit_report with status "blocked" and the exact question.',
+        'LATHE GATE BLOCKED: interactive questions are disabled. Route implementation, architecture, procedure, and scope questions to meridian-bridge_ask_planner. Route decisions owned by the Human Operator through meridian-bridge_submit_report with status "blocked" and the exact question.',
       );
     }
     ok(threw, "sess-a question should throw");

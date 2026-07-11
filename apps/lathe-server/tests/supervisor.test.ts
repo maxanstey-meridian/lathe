@@ -489,9 +489,9 @@ body
 });
 
 // ---------------------------------------------------------------------------
-// rejectRun — queued run — archives via queue check
+// rejectRun — review action only
 
-test("rejectRun archives a queued run (admitted)", async () => {
+test("rejectRun refuses queued work; cancellation owns that transition", async () => {
   await withSupervisor(async (supervisor, paths) => {
     const runId = "20260101-000100-reject-queued";
     const store = createStore(paths);
@@ -499,9 +499,36 @@ test("rejectRun archives a queued run (admitted)", async () => {
 
     ok(store.listQueue().some(q => q.runId === runId), "run should be in the queue");
 
-    supervisor.rejectRun(runId, "not needed");
+    throws(() => supervisor.rejectRun(runId, "not needed"), TerminalRunError);
+    equal(store.listQueue().some(q => q.runId === runId), true);
+  });
+});
 
-    equal(store.listQueue().some(q => q.runId === runId), false);
+test("rejectRun preserves an operator-blocked run and its question", async () => {
+  await withSupervisor(async (supervisor, paths) => {
+    const runId = "20260101-000101-reject-blocked";
+    const store = createStore(paths);
+    const meta = {
+      runId,
+      status: "blocked" as const,
+      attempt: 1,
+      repo: "/tmp/test",
+      base: "main",
+      branch: `meridian/${runId}`,
+      worktree: "/tmp/worktree",
+      stallRetries: 0,
+      reorientRetries: 0,
+      reviewerUnreachable: 0,
+      blockedReason: "human_decision" as const,
+      blockedQuestion: "Which policy applies?",
+      updatedAt: systemClock.nowIso(),
+      queuedAt: systemClock.nowIso(),
+    } satisfies RunMeta;
+    store.writeMeta(meta);
+    const before = store.readMeta(runId);
+
+    throws(() => supervisor.rejectRun(runId, "change the implementation"), TerminalRunError);
+    deepStrictEqual(store.readMeta(runId), before);
   });
 });
 

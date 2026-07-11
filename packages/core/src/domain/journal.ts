@@ -212,7 +212,7 @@ export const renderJournalEvent = (e: JournalEvent): string => {
     case "final_review":
       return `${t} 🔍 final review [${e.verdict}]${e.findings.length ? `\n   ${e.findings.join("\n   ")}` : ""}`;
     case "super_review":
-      return `${t} 🛡 super-daddy review pass ${e.pass} [${e.verdict}]${e.findings.length ? `\n   ${e.findings.join("\n   ")}` : ""}`;
+      return `${t} acceptance review pass ${e.pass} [${e.verdict}]${e.findings.length ? `\n   ${e.findings.join("\n   ")}` : ""}`;
     case "ladder_step":
       return `${t} ⚠ no-progress ladder: ${e.count}`;
     case "parked":
@@ -224,7 +224,7 @@ export const renderJournalEvent = (e: JournalEvent): string => {
     case "stall_recovery":
       return `${t} ${e.action === "requeue" ? "↻" : "🅿"} stall ${e.action} (auto-retry ${e.stallRetries})`;
     case "reorient":
-      return `${t} 🧭 reorient #${e.attempt} (Baby derailed) → fix: ${e.fix.slice(0, 120)}`;
+      return `${t} executor context restarted #${e.attempt} → next action: ${e.fix.slice(0, 120)}`;
     case "model_promoted":
       return `${t} ⬆ model promoted: ${e.from} → ${e.to}`;
     case "authoring_attempt":

@@ -1,10 +1,10 @@
 # lathe
 
-Lathe is my local harness for running packet-designed implementation work through opencode overnight, with a planner, executor, reviewer, queue, journal, and live tail UI.
+Lathe is my local harness for running packet-designed implementation work through opencode overnight, with an Executor, Planner, Implementation Reviewer, Acceptance Reviewer, Human Operator, queue, journal, and live tail UI.
 
-Lathe isn't just another opencode wrapper that pipes a prompt to a model and commits whatever comes back. Lathe splits the job: a small, fast local model, currently Qwen3.6-A3B, does the typing; a more powerful model, currently GPT 5.4 Mini, does the judgment. The planner scopes the work up front, the reviewer audits the approach during the run, and an expensive model (GPT, Claude, GLM) reviews the whole feature before anything lands.
+Lathe isn't just another opencode wrapper that pipes a prompt to a model and commits whatever comes back. Lathe splits the job: a small, fast local model, currently Qwen3.6-A3B, acts as Executor; a more powerful model, currently GPT 5.4 Mini, acts as Planner and Implementation Reviewer. The Planner answers scoped implementation questions, the Implementation Reviewer audits the completed run, and an expensive model (GPT, Claude, GLM) acts as Acceptance Reviewer over the cumulative work item before the Human Operator decides whether to merge it.
 
-That reviewer loop is where the value is. It says the things a 3B-active model will not reliably say about its own output: this test encodes the wrong behaviour, this seam is not earned, this extraction is a pattern that appeared exactly once. The model writes the code; Lathe supplies the taste.
+That reviewer loop is where the value is. It says the things a 3B-active model will not reliably say about its own output: this test encodes the wrong behaviour, this seam is not earned, this extraction is a pattern that appeared exactly once. The Executor writes the code; the review responsibilities supply the judgment.
 
 ## Status
 
@@ -40,9 +40,9 @@ Create or edit:
 The defaults live in `packages/core/src/config/schemas.ts`. The main knobs are:
 
 - `opencode`: binary and port settings
-- `baby`: executor provider, model, base URL, agent, turn budget, and promotion target
-- `daddy`: planner/reviewer provider, model, agent, and timeout
-- `superdaddy`: final convergence reviewer provider, model, agent, timeout, and review skill paths
+- `baby`: legacy config key for the Executor provider, model, base URL, agent, turn budget, and promotion target
+- `daddy`: legacy config key shared by the Planner and Implementation Reviewer provider, model, agent, and timeout
+- `superdaddy`: legacy config key for the Acceptance Reviewer provider, model, agent, timeout, and review skill paths
 - `thresholds`: rotation, checkpoint, verification, promotion, stall, and convergence limits
 - `concurrency.maxWorkers`: how many queue workers the daemon runs in parallel; defaults to `1`
 - `daemon`: HTTP/SSE host and port for the CLI and dashboard
@@ -78,6 +78,8 @@ verification:
 
 Write the implementation instructions here.
 ```
+
+`compare_commit` is the fixed cumulative review baseline for the work item. It may equal `base` for a standalone packet, but it does not advance with later campaign passes. `expected_surface` declares the files or globs expected to change for classification, reconciliation, repair-packet selection, and autofix argument scoping; it is not an edit fence.
 
 Useful optional fields include `suspicious_surface`, `constraints`, and `autofix_commands`.
 
@@ -118,27 +120,29 @@ lathe queue
 lathe status
 lathe review
 lathe get <runId>
-lathe answer <runId> <text>
-lathe accept <runId>
-lathe reject <runId> [reason]
-lathe abort <runId>
+lathe resolve <runId> <decision>
+lathe prepare <runId>
+lathe request-changes <runId> <required-changes>
+lathe cancel <runId>
 lathe chain add <dir>
 lathe db <command> [args]      # read-only SQLite inspector (defaults to active run)
 ```
 
-`lathe accept <runId>` is campaign-aware. It resolves to the campaign tip, fetches that tip branch into the source repo, removes all campaign sandboxes, deletes intermediate branches best-effort, and marks the campaign accepted. It does not merge and it does not run a safety gate; the fetched branch is ready for the user to inspect and merge manually.
+`lathe prepare <runId>` prepares reviewed work for merge. It requires a successful Acceptance Review, resolves to the campaign tip, fetches that branch into the source repo, removes all campaign sandboxes, deletes intermediate branches best-effort, then marks every campaign run `accepted` and records the fetched tip branch in `acceptedInto`. It does not merge or modify the source working tree. `lathe accept` remains a compatibility alias. The Human Operator owns inspection and the manual merge.
+
+The daemon API intentionally exposes the durable run statuses `interrupted`, `ready_for_review`, and `blocked`. This replaces the former lossy wire projections `paused` and `converged` and is a breaking contract change for exhaustive API consumers.
 
 ## How It Works
 
-Lathe keeps durable state under the configured state root, admits packets into a SQLite-backed queue, and runs up to `concurrency.maxWorkers` packets at a time. Daddy plans and reviews. Baby executes each run in its sandbox clone. Super-daddy performs the convergence review before acceptance.
+Lathe keeps durable state under the configured state root, admits packets into a SQLite-backed queue, and runs up to `concurrency.maxWorkers` packets at a time. The Executor implements each run in its sandbox clone. The Planner answers scoped questions, the Implementation Reviewer checks the completed run, and the Acceptance Reviewer reviews cumulative campaign correctness and authors the permanent commit message. The driver applies that message; the Human Operator decides whether to run `lathe prepare`, inspect the fetched branch, and merge it.
 
-The daemon owns run state. Active execution state is multi-run (`activeRuns` in the API/status/dashboard rather than a single active run), and each active Baby session is keyed by run id. The MCP bridge requires every tool call to include an explicit `runId`, so planner questions, checkpoints, outcome updates, handoffs, and reports route to the correct active run.
+The daemon owns run state. Active execution state is multi-run (`activeRuns` in the API/status/dashboard rather than a single active run), and each active Executor session is keyed by run id. The MCP bridge requires every tool call to include an explicit `runId`, so planner questions, checkpoints, outcome updates, handoffs, and reports route to the correct active run.
 
 Queue claiming is atomic. Each worker skips repos that already have an active run or active convergence, so parallelism only happens across different repos.
 
-Each run is turn-based. The driver watches tool use, context budget, progress, checkpoint cadence, verification, and report quality. It can rotate sessions, nudge for planner check-ins, promote Baby to a stronger model for a final retry, or park a run for human input.
+Each run is turn-based. The driver watches tool use, context budget, progress, checkpoint cadence, verification, and report quality. It can rotate sessions, nudge for Planner check-ins, promote the Executor to a stronger model for a final retry, or park a run for Human Operator input.
 
-`lathe tail` renders the live journal and opencode streams for the selected run. In a TTY it shows Baby, Daddy, and Super-daddy panes; outside a TTY it prints a plain journal view.
+`lathe tail` renders the live journal and opencode streams for the selected run. In a TTY it shows panes for the Executor, the shared Planner/Implementation Reviewer session, and the Acceptance Reviewer; outside a TTY it prints a plain journal view.
 
 ## Development
 

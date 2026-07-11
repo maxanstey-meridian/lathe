@@ -26,7 +26,7 @@ export const PacketFrontmatter = z.object({
   base: z.string().min(1),
   // Cumulative review base for the whole work item. Everything changed after
   // this commit is fair game for super-daddy correctness/integration review.
-  // For a single packet this is the same as base's parent; for a chained
+  // For a single packet this is normally the pre-work `base` tip; for a chained
   // campaign it stays fixed at the original work-item base while `base`
   // advances to each packet's execution tip.
   compare_commit: z.string().min(1),

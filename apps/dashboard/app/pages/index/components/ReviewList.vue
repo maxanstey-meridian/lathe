@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { ref } from "vue";
+
 import { injectLatheActions } from "../ports/lathe-actions";
-import { runStatusColor, truncate } from "../logic/formatters";
+import { runStatusColor, runStatusLabel, truncate } from "../logic/formatters";
 import { injectReviewData } from "../ports/review-data";
 import { removeReviewRunAfterSuccess } from "../logic/action-results";
 
@@ -18,7 +20,10 @@ const cancelReject = (runId: string): void => {
 };
 
 const handleReject = async (run: { runId: string }): Promise<void> => {
-  const reason = rejectReasons.value[run.runId] ?? "rejected";
+  const reason = rejectReasons.value[run.runId]?.trim() ?? "";
+  if (!reason) {
+    return;
+  }
   await removeReviewRunAfterSuccess(
     run.runId,
     (runId) => actions.reject(runId, reason),
@@ -44,9 +49,9 @@ const handleAccept = async (run: { runId: string }): Promise<void> => {
           <thead class="border-b border-slate-800 bg-slate-900 text-xs uppercase text-slate-500">
             <tr>
               <th class="px-3 py-2 text-left font-medium">Run</th>
-              <th class="px-3 py-2 text-left font-medium">Status</th>
-              <th class="px-3 py-2 text-left font-medium">Outcomes</th>
-              <th class="px-3 py-2 text-right font-medium">Actions</th>
+              <th class="px-3 py-2 text-left font-medium">Next Step</th>
+              <th class="px-3 py-2 text-left font-medium">Reported Outcomes</th>
+              <th class="px-3 py-2 text-right font-medium">Decision</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-800">
@@ -55,13 +60,14 @@ const handleAccept = async (run: { runId: string }): Promise<void> => {
                 <td class="px-3 py-2.5 font-mono text-xs">{{ run.runId }}</td>
                 <td class="px-3 py-2.5">
                   <UBadge :color="runStatusColor(run.status as 'ready_for_review' | 'blocked')" variant="soft" size="xs">
-                    {{ run.status }}
+                    {{ runStatusLabel(run.status) }}
                   </UBadge>
                 </td>
                 <td class="max-w-md px-3 py-2.5 text-xs text-slate-500">{{ truncate(run.outcomes, 120) }}</td>
                 <td class="px-3 py-2.5">
                   <div class="flex items-center justify-end gap-2">
                     <UButton
+                      v-if="run.status === 'ready_for_review'"
                       size="xs"
                       color="success"
                       variant="soft"
@@ -69,10 +75,10 @@ const handleAccept = async (run: { runId: string }): Promise<void> => {
                       :disabled="actions.acceptLoading.value"
                       @click="handleAccept(run)"
                     >
-                      Accept
+                      Prepare for Merge
                     </UButton>
                     <UButton
-                      v-if="rejectReasons[run.runId] === undefined"
+                      v-if="run.status === 'ready_for_review' && rejectReasons[run.runId] === undefined"
                       size="xs"
                       color="error"
                       variant="soft"
@@ -80,7 +86,7 @@ const handleAccept = async (run: { runId: string }): Promise<void> => {
                       :disabled="actions.rejectLoading.value"
                       @click="openReject(run)"
                     >
-                      Reject
+                      Request Changes
                     </UButton>
                   </div>
                 </td>
@@ -92,7 +98,7 @@ const handleAccept = async (run: { runId: string }): Promise<void> => {
                       v-model="rejectReasons[run.runId]"
                       :rows="1"
                       size="xs"
-                      placeholder="Reason..."
+                      placeholder="Required changes..."
                       class="flex-1"
                     />
                     <UButton
@@ -100,10 +106,10 @@ const handleAccept = async (run: { runId: string }): Promise<void> => {
                       color="error"
                       variant="soft"
                       :loading="actions.rejectLoading.value"
-                      :disabled="actions.rejectLoading.value"
+                      :disabled="actions.rejectLoading.value || !rejectReasons[run.runId]?.trim()"
                       @click="handleReject(run)"
                     >
-                      Confirm
+                      Submit Changes
                     </UButton>
                     <UButton
                       size="xs"

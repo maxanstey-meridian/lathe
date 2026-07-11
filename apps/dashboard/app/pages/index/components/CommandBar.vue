@@ -113,7 +113,7 @@ const reviewCount = computed(() => status.status.value?.review.readyForReview ??
         variant="soft"
         @click="$emit('upload')"
       >
-        Upload Packet
+        Import Plan
       </UButton>
     </div>
   </header>

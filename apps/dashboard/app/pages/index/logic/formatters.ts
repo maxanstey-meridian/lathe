@@ -23,15 +23,14 @@ export function timeAgo(iso: string): string {
   return "just now";
 }
 
-export function runStatusColor(status: RunStatus | "ready_for_review" | "blocked"): "error" | "primary" | "secondary" | "success" | "info" | "warning" | "neutral" {
+export function runStatusColor(status: RunStatus): "error" | "primary" | "secondary" | "success" | "info" | "warning" | "neutral" {
   switch (status) {
     case "queued":
       return "info";
     case "running":
       return "primary";
-    case "paused":
-      return "warning";
-    case "converged":
+    case "interrupted":
+    case "ready_for_review":
       return "warning";
     case "accepted":
       return "success";
@@ -39,12 +38,46 @@ export function runStatusColor(status: RunStatus | "ready_for_review" | "blocked
       return "error";
     case "failed":
       return "error";
-    case "ready_for_review":
-      return "warning";
     case "blocked":
       return "error";
     default:
       return "neutral";
+  }
+}
+
+export function runStatusLabel(status: string): string {
+  switch (status) {
+    case "queued":
+      return "Awaiting start";
+    case "running":
+      return "Implementation in progress";
+    case "interrupted":
+      return "Interrupted";
+    case "accepted":
+      return "Prepared for merge";
+    case "stopped":
+      return "Cancelled";
+    case "failed":
+      return "Needs attention";
+    case "ready_for_review":
+      return "Awaiting acceptance review";
+    case "blocked":
+      return "Needs input";
+    default:
+      return status.replaceAll("_", " ");
+  }
+}
+
+export function campaignStatusLabel(status: string): string {
+  switch (status) {
+    case "open":
+      return "Repair sequence in progress";
+    case "converged":
+      return "Review passed";
+    case "needs_max":
+      return "Needs operator decision";
+    default:
+      return status.replaceAll("_", " ");
   }
 }
 

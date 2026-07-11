@@ -22,9 +22,10 @@ import type { Contract, Endpoint } from "rivet-ts";
 export type RunStatus =
   | "queued"
   | "running"
-  | "paused"
-  | "converged" // super-daddy passed; awaiting accept/reject
-  | "accepted" // merged to base, branch deleted
+  | "interrupted"
+  | "ready_for_review"
+  | "blocked"
+  | "accepted" // reviewed branch fetched into the source repo; manual merge remains
   | "stopped"
   | "failed";
 
@@ -747,9 +748,10 @@ export interface LatheContract extends Contract<"LatheContract"> {
     ];
   }>;
 
-  // DESTRUCTIVE: merges the run branch to base and deletes it. Legal ONLY when
-  // the run isChainTip — the supervisor returns 409 on a mid-chain link
-  // ([[lathe-force-accept-tipbranch-bug]] is what mid-chain accept breaks).
+  // Prepare for merge: fetches the reviewed campaign-tip branch into the source
+  // repository and removes campaign sandboxes. It never merges or mutates the
+  // source working tree. Legal only after acceptance review passes and only for
+  // the chain tip.
   acceptRun: Endpoint<{
     method: "POST";
     route: "/runs/{runId}/accept";
@@ -769,7 +771,7 @@ export interface LatheContract extends Contract<"LatheContract"> {
     response: RunSummaryDto;
     errors: [
       { status: 404; response: ErrorResponse; description: "run not found" },
-      { status: 409; response: ErrorResponse; description: "run is terminal" },
+      { status: 409; response: ErrorResponse; description: "run is not reviewable" },
     ];
   }>;
 

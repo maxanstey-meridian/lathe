@@ -1,7 +1,7 @@
 import { deepStrictEqual, equal, ok, strictEqual } from "node:assert";
 import { test } from "node:test";
 
-import { acceptRun as acceptRunUc, Config } from "@lathe/core";
+import { Config } from "@lathe/core";
 import type { RunMeta } from "@lathe/core";
 import type { Supervisor } from "../src/supervisor.js";
 import { createApp, createEventBus, createTailEventBus } from "../src/app.js";
@@ -290,8 +290,13 @@ const makeAcceptSupervisor = (meta: RunMeta, currentBranch: string, isDirty = fa
     listRuns: (): RunMeta[] => Array.from(metaStore.values()),
     getRun: (runId: string): RunMeta | undefined => metaStore.get(runId),
     stopRun: (_runId: string): void => {},
-    acceptRun: (runId: string): number =>
-      acceptRunUc(runId, { store, repo, clock, runsDir: "/tmp/runs" }),
+    acceptRun: (runId: string): number => {
+      const current = metaStore.get(runId);
+      if (!current) throw new RunNotFoundError(runId);
+      if (current.status !== "ready_for_review") return 1;
+      metaStore.set(runId, { ...current, status: "accepted", updatedAt: clock.nowIso() });
+      return 0;
+    },
     rejectRun: (_runId: string, _reason: string): void => {},
     isChainTip: (_runId: string): boolean => true,
     lastVerdict: (_runId: string): string | null => null,
@@ -789,6 +794,26 @@ test("AnswerRun returns updated queued summary", async () => {
   equal(answerSeen, "go ahead");
 });
 
+test("AnswerRun rejects a whitespace-only decision", async () => {
+  let called = false;
+  const supervisor = makeFakeSupervisor({
+    answerRun: () => {
+      called = true;
+    },
+  });
+  const app = createApp(supervisor.appDeps, supervisor);
+
+  const res = await app.request("http://localhost/runs/answer-blocked/answer", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ answer: "   " }),
+  });
+
+  equal(res.status, 400);
+  deepStrictEqual(await res.json(), { code: "invalid_answer", message: "decision must not be empty" });
+  equal(called, false);
+});
+
 test("StopRun for a queue-only run returns success without meta", async () => {
   const runId = "stop-queued";
   const supervisor = makeFakeSupervisor({
@@ -932,7 +957,7 @@ test("RejectRun returns updated summary", async () => {
 equal(res.status, 201);
    const body = await res.json() as { runId: string; status: string };
    equal(body.runId, runId);
-   equal(body.status, "paused");
+   equal(body.status, "blocked");
 });
 
 test("RejectRun for a queue-only run returns success without meta", async () => {
@@ -952,7 +977,7 @@ test("RejectRun for a queue-only run returns success without meta", async () => 
   equal(res.status, 201);
   const body = await res.json() as { runId: string; status: string };
   equal(body.runId, runId);
-  equal(body.status, "paused");
+  equal(body.status, "blocked");
 });
 
 test("GetTail returns daemon-owned snapshot for a run", async () => {
@@ -1662,9 +1687,9 @@ test("status mapping handles all domain values", async () => {
 
   strictEqual(mapStatus("queued"), "queued");
   strictEqual(mapStatus("running"), "running");
-  strictEqual(mapStatus("interrupted"), "paused");
-  strictEqual(mapStatus("ready_for_review"), "converged");
-  strictEqual(mapStatus("blocked"), "paused");
+  strictEqual(mapStatus("interrupted"), "interrupted");
+  strictEqual(mapStatus("ready_for_review"), "ready_for_review");
+  strictEqual(mapStatus("blocked"), "blocked");
   strictEqual(mapStatus("failed"), "failed");
   strictEqual(mapStatus("accepted"), "accepted");
   strictEqual(mapStatus("stopped"), "stopped");

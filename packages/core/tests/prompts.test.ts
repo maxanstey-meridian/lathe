@@ -117,7 +117,9 @@ describe("prompts — Q-table renderers", () => {
       const prompt = q1InitialSeed(minPacket(), minLedger());
       match(prompt, /meridian-bridge_ask_planner/);
       match(prompt, /## Outcome ledger/);
-      match(prompt, /Daddy is available repeatedly/);
+      match(prompt, /Planner remains available/);
+      match(prompt, /You own bounded inspection/);
+      match(prompt, /Human Operator alone owns/);
       match(prompt, /exact prior instruction/);
     });
 
@@ -186,7 +188,7 @@ describe("prompts — Q-table renderers", () => {
   describe("q3Continue", () => {
     it("names all legal exits", () => {
       const prompt = q3Continue();
-      match(prompt, /continue with the next step/);
+      match(prompt, /continue implementation/);
       match(prompt, /meridian-bridge_ask_planner/);
       match(prompt, /meridian-bridge_submit_report/);
     });
@@ -227,7 +229,7 @@ describe("prompts — Q-table renderers", () => {
   describe("q8ReconciliationSeed", () => {
     it("says no valid checkpoint and requires reconciliation", () => {
       const prompt = q8ReconciliationSeed(minPacket(), minLedger(), minReview(), minDecisions());
-      match(prompt, /No valid checkpoint/);
+      match(prompt, /without a valid checkpoint/);
       match(prompt, /TRIGGER reconciliation/);
       match(prompt, /questionType "reconciliation"/);
       match(prompt, /Do not inspect, compare, reconstruct, or prove/);
@@ -240,18 +242,20 @@ describe("prompts — Q-table renderers", () => {
       const prompt = qReorientSeed(minPacket(), minLedger(), minReview(), minDecisions(), p);
       match(prompt, new RegExp(p.answer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
       match(prompt, new RegExp(p.safe_next_action.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-      match(prompt, /DERAILED/);
+      match(prompt, /derailed/);
     });
   });
 
   describe("softCheckpointNudge", () => {
-    it("includes minutes and says NOT blocked", () => {
+    it("includes minutes and labels the reminder as a non-blocking notice", () => {
       const prompt = softCheckpointNudge(25);
       match(prompt, /~25 min/);
-      match(prompt, /NOT blocked/);
+      match(prompt, /LATHE GATE NOTICE/);
+      match(prompt, /notice is non-blocking/);
+      doesNotMatch(prompt, /BLOCKED/);
       match(prompt, /call meridian-bridge_ask_planner now/);
       match(prompt, /Prose is not a routed question/);
-      doesNotMatch(prompt, /Daddy's eyes/);
+      doesNotMatch(prompt, /BLOCKED/);
     });
   });
 
@@ -291,7 +295,7 @@ describe("prompts — Q-table renderers", () => {
       const prompt = qPlannerDecision(p as PlannerResponse);
       match(prompt, /revise_slice/);
       match(prompt, /narrows or expands/);
-      match(prompt, /owner files/);
+      match(prompt, /owner file/);
     });
 
     it("includes promote_run directive when applicable", () => {
@@ -306,7 +310,7 @@ describe("prompts — Q-table renderers", () => {
       const prompt = qPlannerDecision(p as PlannerResponse);
       match(prompt, /promote_run/);
       match(prompt, /restarting you on the promotion model/);
-      match(prompt, /stuck in tool\/harness mechanics/);
+      match(prompt, /Planner judged the task valid/);
     });
   });
 
@@ -337,14 +341,14 @@ describe("prompts — Q-table renderers", () => {
       );
       match(prompt, /## Review obligation lifecycle/);
       match(prompt, /## Contradiction handling/);
-      match(prompt, /Repeating the prior answer without reconciling/);
+      match(prompt, /do not repeat the instruction without explaining/);
       match(prompt, /## Escalation discriminator/);
       match(prompt, /promote_run: the plan is clear/);
       match(prompt, /## Approach audit/);
       match(prompt, /## Requirement sanity audit/);
-      match(prompt, /has Baby only produced a nicer-looking shape/);
+      match(prompt, /Executor's approach/);
       match(prompt, /## Packet feasibility audit/);
-      match(prompt, /must expand, must split, or needs Max/);
+      match(prompt, /must expand, split, or require the Human Operator/);
       match(prompt, /Current slice:/);
     });
 
@@ -369,19 +373,18 @@ describe("prompts — Q-table renderers", () => {
         "other",
         "Nuxt harness repair",
         "Should I keep trying the same mock?",
-        "I retried the same vi.mock path after Daddy told me to inspect .nuxt aliases.",
-        ["same failing command twice", "Daddy instruction not applied"],
+        "I retried the same vi.mock path after the Planner told me to inspect .nuxt aliases.",
+        ["same failing command twice", "Planner instruction not applied"],
         minReview(),
       );
 
       match(prompt, /promote_run — task is valid/);
-      match(prompt, /repeated the same failed tactic/);
-      match(prompt, /failed to apply a concrete Daddy instruction/);
-      match(prompt, /Use once per run/);
-      match(prompt, /Never use for missing product\/security\/data\/legal decisions/);
+      match(prompt, /current Executor repeated a failed tactic/);
+      match(prompt, /failed to apply a Planner instruction/);
+      match(prompt, /Never use this for Human Operator-owned decisions/);
     });
 
-    it("does not let Daddy stop just because verification output is missing", () => {
+    it("does not let the Planner stop just because verification output is missing", () => {
       const prompt = renderPlannerQuestion(
         "other",
         "typecheck-and-fix",
@@ -391,13 +394,13 @@ describe("prompts — Q-table renderers", () => {
         minReview(),
       );
 
-      match(prompt, /Do NOT use stop merely because command output is missing/);
-      match(prompt, /run the exact command, capture the output/);
+      match(prompt, /Do not use stop merely because command output is missing/);
+      match(prompt, /run the exact command and capture output/);
       match(prompt, /missing command output is not enough/);
-      match(prompt, /do not answer stop just because you cannot infer output/);
+      match(prompt, /missing command output is not enough/);
     });
 
-    it("makes reconciliation Daddy-owned from driver evidence", () => {
+    it("makes reconciliation Planner-owned from driver evidence", () => {
       const prompt = renderPlannerQuestion(
         "reconciliation",
         "reconciliation",
@@ -406,7 +409,7 @@ describe("prompts — Q-table renderers", () => {
         ["current fingerprint: abc"],
         minReview(),
       );
-      match(prompt, /Baby did not reconstruct the state/);
+      match(prompt, /Executor only triggered this request/);
       match(prompt, /driver supplied durable state and git evidence/);
       doesNotMatch(prompt, /executor has reconstructed state/i);
     });
@@ -426,6 +429,8 @@ describe("prompts — Q-table renderers", () => {
       const prompt = renderSuperReview(input);
       match(prompt, /YOU MUST EXECUTE — read-only review is not enough/);
       match(prompt, /RUN the verification commands below yourself/);
+      match(prompt, /Acceptance Reviewer, independent from the Executor and Planner/);
+      match(prompt, /independently own acceptance verification/);
     });
 
     it("contains the <<<RUBRIC ... RUBRIC block", () => {
@@ -468,7 +473,7 @@ describe("prompts — Q-table renderers", () => {
       // The reviewer inspects the worktree directly — no diff slice is injected.
       doesNotMatch(prompt, /## Reviewable diff/);
       match(prompt, /full read-only access to this worktree/);
-      match(prompt, /has Baby only produced a nicer-looking shape/);
+      match(prompt, /has the Executor only produced a nicer-looking shape/);
       match(prompt, /leaves\s+downstream work with a coherent model to build on/);
     });
 

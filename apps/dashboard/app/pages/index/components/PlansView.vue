@@ -24,7 +24,9 @@ const handleSave = async (): Promise<void> => {
 const handleQueue = async (): Promise<void> => {
   queueLoading.value = true;
   try {
-    await plans.savePlan();
+    if (!(await plans.savePlan())) {
+      return;
+    }
     await plans.queuePlan();
   } finally {
     queueLoading.value = false;

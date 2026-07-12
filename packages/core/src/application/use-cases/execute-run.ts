@@ -44,6 +44,7 @@ import {
   journal,
   buildHandoffInject,
   type RunPorts,
+  type SharedRunPorts,
   type RunChannel,
   type Seed,
   type TurnLoopResult,
@@ -210,12 +211,12 @@ const replaceStaleDaddySession = async (
 };
 
 export const makeExecuteRun =
-  <Ref>(ports: RunPorts, bridge: BridgeBinding<Ref>): ExecuteRunCallback<Ref> =>
+  <Ref>(sharedPorts: SharedRunPorts, bridge: BridgeBinding<Ref>): ExecuteRunCallback<Ref> =>
   async (runId, runMeta, ref, _clock, signal, lease): Promise<void> => {
     // Runtime config is the daemon startup snapshot; persisted settings take
     // effect after the explicit restart reported by PUT /settings.
-    const config = ports.configSource.get();
-    const { store, repo, executor, planner, clock } = ports;
+    const config = sharedPorts.configSource.get();
+    const { store, repo, executor, clock } = sharedPorts;
     const { repo: repoPath, worktree, base, branch } = runMeta as RunMetaPaths;
     if (!lease) {
       throw new Error(`executeRun requires repository lease ownership for ${runId}`);
@@ -243,6 +244,8 @@ export const makeExecuteRun =
       return;
     }
     const packet = shape.packet;
+    const planner = sharedPorts.createPlanner();
+    const ports: RunPorts = { ...sharedPorts, planner };
 
     const isResume = startDecision.mode === "resume";
     const attempt = priorMeta?.attempt ?? 1;

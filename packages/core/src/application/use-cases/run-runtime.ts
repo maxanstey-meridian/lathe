@@ -48,6 +48,12 @@ export type RunPorts = {
   driverOutput: DriverOutput;
 };
 
+// Long-lived adapters are shared by the daemon, but Planner carries one run's
+// Daddy session identity and must be constructed at the execution boundary.
+export type SharedRunPorts = Omit<RunPorts, "planner"> & {
+  createPlanner: () => Planner;
+};
+
 // ---------------------------------------------------------------------------
 // RunChannel — the per-turn bridge channel, as the loop SEES it.
 //

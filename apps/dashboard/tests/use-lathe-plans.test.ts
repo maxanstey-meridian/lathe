@@ -147,14 +147,10 @@ test("useLathePlans: delete plan removes from list and clears selection", async 
   assert.equal(composable.selectedPlan.value, null);
 });
 
-test("useLathePlans: addTag / removeTag updates editedTags and auto-saves", async () => {
+test("useLathePlans: addTag / removeTag update local edits without racing background saves", async () => {
   const responses = new Map<string, Response[]>([
     ["GET /plans", [fakeResponse([planDto({ planId: "p1" })])]],
     ["GET /plans/p1", [fakeResponse(planDetail({ planId: "p1", tags: [] }))]],
-    ["PUT /plans/p1", [
-      fakeResponse(planDto({ planId: "p1", tags: ["bug"] })),
-      fakeResponse(planDto({ planId: "p1", tags: [] })),
-    ]],
   ]);
   const composable = useLathePlans(makeSequencedClient(responses));
   await composable.refresh();
@@ -163,11 +159,28 @@ test("useLathePlans: addTag / removeTag updates editedTags and auto-saves", asyn
   composable.tagInput.value = "bug";
   composable.addTag();
   assert.deepEqual(composable.editedTags.value, ["bug"]);
-  await new Promise((r) => setTimeout(r, 0));
-  assert.ok(!composable.isDirty.value);
+  assert.ok(composable.isDirty.value);
 
   composable.removeTag("bug");
   assert.deepEqual(composable.editedTags.value, []);
+  assert.ok(composable.isDirty.value);
+});
+
+test("useLathePlans: save failure surfaces the API error and preserves dirty state", async () => {
+  const responses = new Map<string, Response[]>([
+    ["GET /plans/p1", [fakeResponse(planDetail({ planId: "p1" }))]],
+    ["PUT /plans/p1", [fakeResponse({ code: "save_failed", message: "disk full" }, 500)]],
+  ]);
+  const composable = useLathePlans(makeSequencedClient(responses));
+  await composable.selectPlan("p1");
+  composable.editedContent.value = "# Changed";
+  composable.markDirty();
+
+  const ok = await composable.savePlan();
+
+  assert.equal(ok, false);
+  assert.equal(composable.errorMessage.value, "disk full");
+  assert.ok(composable.isDirty.value);
 });
 
 test("useLathePlans: selectPlan(null) clears all state", async () => {

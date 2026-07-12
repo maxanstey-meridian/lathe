@@ -21,7 +21,7 @@ import {
   type WaitForWorkCallback,
   type RunLoopSeams,
 } from "./application/use-cases/run-loop.js";
-import type { RunPorts, ConfigSource } from "./application/use-cases/run-runtime.js";
+import type { SharedRunPorts, ConfigSource } from "./application/use-cases/run-runtime.js";
 import type { Paths } from "./config/paths.js";
 import type { Config } from "./config/schemas.js";
 import {
@@ -144,7 +144,6 @@ export const runDriver = async (
   // answered from inline evidence. It's read-only by agent config (no
   // write/edit/patch/bash). Super-daddy is likewise scoped to the worktree per-call
   // via SuperReviewInput.
-  const planner = createPlanner(executor, modelOf(config.daddy), config.daddy.timeoutMs);
   const reviewer = createReviewer(
     executor,
     modelOf(config.superdaddy),
@@ -153,12 +152,12 @@ export const runDriver = async (
   const verify = createVerify();
   const caffeinate = createCaffeinate();
 
-  const ports: RunPorts = {
+  const ports: SharedRunPorts = {
     configSource,
     store,
     repo,
     executor,
-    planner,
+    createPlanner: () => createPlanner(executor, modelOf(config.daddy), config.daddy.timeoutMs),
     clock,
     verify,
     driverOutput,

@@ -5,6 +5,16 @@ import { computed, ref } from "vue";
 
 import { client } from "@lathe/contract";
 
+const errorMessageFrom = (error: unknown, fallback: string): string => {
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) {
+      return message;
+    }
+  }
+  return fallback;
+};
+
 const fuzzyMatch = (query: string, target: string): boolean => {
   if (!query) return true;
   const q = query.toLowerCase();
@@ -69,7 +79,11 @@ export const useLathePlans = (c: RivetClient = client): LathePlans => {
     errorMessage.value = null;
     try {
       const result = await c.GET("/plans");
-      plans.value = result.data ?? [];
+      if (!result.data) {
+        errorMessage.value = errorMessageFrom(result.error, "Unable to fetch plans.");
+        return;
+      }
+      plans.value = result.data;
     } catch {
       errorMessage.value = "Unable to fetch plans.";
     } finally {
@@ -90,10 +104,16 @@ export const useLathePlans = (c: RivetClient = client): LathePlans => {
     errorMessage.value = null;
     try {
       const result = await c.GET("/plans/{planId}", { params: { path: { planId } } });
-      selectedPlan.value = result.data ?? null;
+      if (!result.data) {
+        errorMessage.value = errorMessageFrom(result.error, "Unable to fetch plan.");
+        selectedPlan.value = null;
+        selectedPlanId.value = null;
+        return;
+      }
+      selectedPlan.value = result.data;
       selectedPlanId.value = planId;
-      editedContent.value = result.data?.raw ?? "";
-      editedTags.value = result.data?.tags ? [...result.data.tags] : [];
+      editedContent.value = result.data.raw;
+      editedTags.value = [...result.data.tags];
       dirty.value = false;
     } catch {
       errorMessage.value = "Unable to fetch plan.";
@@ -105,14 +125,17 @@ export const useLathePlans = (c: RivetClient = client): LathePlans => {
   };
 
   const savePlan = async (): Promise<boolean> => {
-    if (!selectedPlanId.value) {
+    const planId = selectedPlanId.value;
+    if (!planId) {
       return false;
     }
+    const content = editedContent.value;
+    const tags = [...editedTags.value];
     errorMessage.value = null;
     try {
       const result = await c.PUT("/plans/{planId}", {
-        params: { path: { planId: selectedPlanId.value } },
-        body: { content: editedContent.value, tags: editedTags.value },
+        params: { path: { planId } },
+        body: { content, tags },
       });
       if (result.data) {
         const updated = result.data;
@@ -120,9 +143,17 @@ export const useLathePlans = (c: RivetClient = client): LathePlans => {
         if (selectedPlan.value?.planId === updated.planId) {
           selectedPlan.value = { ...selectedPlan.value, ...updated };
         }
-        dirty.value = false;
-        return true;
+        const savedCurrentRevision =
+          selectedPlanId.value === planId &&
+          editedContent.value === content &&
+          editedTags.value.length === tags.length &&
+          editedTags.value.every((tag, index) => tag === tags[index]);
+        if (savedCurrentRevision) {
+          dirty.value = false;
+        }
+        return savedCurrentRevision;
       }
+      errorMessage.value = errorMessageFrom(result.error, "Unable to save plan.");
       return false;
     } catch (err) {
       errorMessage.value = err instanceof Error ? err.message : "Unable to save plan.";
@@ -148,9 +179,9 @@ export const useLathePlans = (c: RivetClient = client): LathePlans => {
         if (selectedPlan.value) {
           selectedPlan.value = { ...selectedPlan.value, queuedRunId: runId };
         }
-        dirty.value = false;
         return true;
       }
+      errorMessage.value = errorMessageFrom(result.error, "Unable to queue plan.");
       return false;
     } catch (err) {
       errorMessage.value = err instanceof Error ? err.message : "Unable to queue plan.";
@@ -175,6 +206,7 @@ export const useLathePlans = (c: RivetClient = client): LathePlans => {
         }
         return true;
       }
+      errorMessage.value = errorMessageFrom(result.error, "Unable to delete plan.");
       return false;
     } catch (err) {
       errorMessage.value = err instanceof Error ? err.message : "Unable to delete plan.";
@@ -188,14 +220,12 @@ export const useLathePlans = (c: RivetClient = client): LathePlans => {
       editedTags.value = [...editedTags.value, tag];
       tagInput.value = "";
       markDirty();
-      void savePlan();
     }
   };
 
   const removeTag = (tag: string): void => {
     editedTags.value = editedTags.value.filter((t) => t !== tag);
     markDirty();
-    void savePlan();
   };
 
   return {

@@ -12,7 +12,11 @@ import type { Store } from "../src/application/ports/store.js";
 import type { Verify } from "../src/application/ports/verify.js";
 import { makeExecuteRun, type BridgeBinding } from "../src/application/use-cases/execute-run.js";
 import { rotateSession } from "../src/application/use-cases/rotation.js";
-import type { RunPorts, RunChannel } from "../src/application/use-cases/run-runtime.js";
+import type {
+  RunPorts,
+  RunChannel,
+  SharedRunPorts,
+} from "../src/application/use-cases/run-runtime.js";
 import { createConfigSource } from "../src/application/use-cases/run-runtime.js";
 import { makePaths } from "../src/config/paths.js";
 import { Config } from "../src/config/schemas.js";
@@ -24,7 +28,7 @@ import { SqliteStoreAdapter } from "../src/infrastructure/sqlite-store.js";
 
 const RUN_ID = "20260101-000000-execrun";
 
-const makeTestExecuteRun = <Ref>(ports: RunPorts, bridge: BridgeBinding<Ref>) => {
+const makeTestExecuteRun = <Ref>(ports: SharedRunPorts, bridge: BridgeBinding<Ref>) => {
   const execute = makeExecuteRun(ports, bridge);
   return (...args: Parameters<typeof execute>): ReturnType<typeof execute> => {
     const lease =
@@ -155,13 +159,14 @@ const makePorts = (
   executor: Executor,
   planner: Planner,
   config = Config.parse({}),
-): RunPorts => ({
+): RunPorts & SharedRunPorts => ({
   driverOutput: { verification: () => {} },
   configSource: createConfigSource(config),
   store,
   repo,
   executor,
   planner,
+  createPlanner: () => planner,
   clock: fixedClock(),
   verify: {
     run: async () => [{ command: "echo ok", exitCode: 0, outputTail: "ok" }],
@@ -556,6 +561,80 @@ test("makeExecuteRun: fresh run → init state → terminal status in meta", () 
     equal(store.listActiveRuns().length, 0);
     await cleanTemp(tmp);
   })();
+});
+
+test("makeExecuteRun: concurrent runs receive isolated Planner instances", async () => {
+  const tmp = await mkdtempP(join(tmpdir(), "exec-planner-isolation-"));
+  const store = SqliteStoreAdapter.create(makePaths(tmp), fakeRepo(), fixedClock());
+  const runIds = ["20260101-000000-planner-a", "20260101-000001-planner-b"];
+  const repos = ["/tmp/planner-a", "/tmp/planner-b"];
+  const channels = new Map(runIds.map((runId) => [runId, emptyChannel()]));
+
+  for (const [index, runId] of runIds.entries()) {
+    store.admitQueue(
+      runId,
+      PACKET_RAW.replace("/tmp/test-repo", repos[index]!),
+    );
+  }
+  const claims = runIds.map(() => store.claimNextQueuedRun([])!);
+
+  const executor: Executor = {
+    createSession: async (name) => name,
+    sendMessage: async (sessionId) => {
+      const runId = sessionId.slice("baby:".length);
+      channels.get(runId)!.intents.push({
+        kind: "report-accepted",
+        status: "blocked",
+        blockedReason: "stop_condition",
+        blockedQuestion: "done",
+        summary: "done",
+      });
+      return { info: { id: `message:${runId}`, sessionID: sessionId, tokens: {} }, parts: [] };
+    },
+    listMessages: async () => [],
+    abortSession: async () => {},
+    deleteSession: async () => {},
+  };
+  let plannerCount = 0;
+  const sharedPorts: SharedRunPorts = {
+    ...makePorts(store, fakeRepo(), executor, fakePlanner()),
+    createPlanner: () => {
+      const plannerId = ++plannerCount;
+      return {
+        ...fakePlanner(),
+        handshake: async () => `daddy-${plannerId}`,
+      };
+    },
+  };
+  const executeRun = makeExecuteRun(sharedPorts, {
+    beginRun: (_ref, packet) => channels.get(packet.runId)!,
+    endRun: () => {},
+  });
+
+  await Promise.all(
+    runIds.map((runId, index) =>
+      executeRun(
+        runId,
+        {
+          repo: repos[index]!,
+          worktree: join(tmp, runId),
+          base: "main",
+          branch: `meridian/${runId}`,
+        },
+        {},
+        sharedPorts.clock,
+        undefined,
+        claims.find((claim) => claim.runId === runId)!.lease,
+      ),
+    ),
+  );
+
+  equal(plannerCount, 2);
+  deepEqual(
+    runIds.map((runId) => store.readMeta(runId).daddySessionId).sort(),
+    ["daddy-1", "daddy-2"],
+  );
+  await cleanTemp(tmp);
 });
 
 test("makeExecuteRun: persists started phases before creating planner and executor sessions", async () => {
